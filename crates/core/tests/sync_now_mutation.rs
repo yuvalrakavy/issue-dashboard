@@ -106,7 +106,11 @@ fn a_request_is_authored_by_sync_now_not_the_owner() {
 fn a_pull_request_in_a_set_can_be_requested() {
     let t = settled();
     let m = members_of(&t, "home", "rhaiscript/rhai");
-    let pr = m.pull_requests.first().expect("the fixture has a rhai pull request").clone();
+    let pr = m
+        .pull_requests
+        .first()
+        .expect("the fixture has a rhai pull request")
+        .clone();
     let r = ask_in(&t, "home", Some(&alias_of(&t, &pr)), at(15)).unwrap();
     assert_eq!(r.items, vec![pr]);
 }
