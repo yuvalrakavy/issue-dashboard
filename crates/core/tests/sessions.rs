@@ -1027,3 +1027,27 @@ fn a_closed_issue_with_its_fix_session_is_closed_not_in_progress() {
     assert_eq!(x["status"], "closed", "{x}");
     assert_eq!(shown(&d, &alias).len(), 1, "the session stays shown: {x}");
 }
+
+#[test]
+fn an_issue_names_the_tracked_pull_requests_whose_closes_list_it() {
+    let t = root();
+    let (_, d) = run(&t, None, 0);
+    // Recorded: rhai#1194 closes rhai#1193 and rhai#1189 closes rhai#1188; nothing else closes.
+    let closers = [
+        ("rhaiscript/rhai#1193", "rhaiscript/rhai#1194"),
+        ("rhaiscript/rhai#1188", "rhaiscript/rhai#1189"),
+    ];
+    for (issue, pr) in closers {
+        assert_eq!(by_alias(&d, issue)["closed_by"], json!([pr]), "{issue}");
+    }
+    let mut empty = 0;
+    for i in d["issues"].as_array().unwrap() {
+        if i["kind"] == "pull_request" {
+            assert!(i.get("closed_by").is_none(), "{i}");
+        } else if !closers.iter().any(|(a, _)| i["alias"] == *a) {
+            assert_eq!(i["closed_by"], json!([]), "{}", i["alias"]);
+            empty += 1;
+        }
+    }
+    assert!(empty > 0);
+}

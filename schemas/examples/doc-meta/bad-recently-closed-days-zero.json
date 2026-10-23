@@ -1,0 +1,44 @@
+{
+  "schema": 1,
+  "project": "home",
+  "name": "Example home automation",
+  "generation": "gen-42",
+  "sequence": 42,
+  "taken_at": "2026-10-23T08:00:00Z",
+  "summary": {
+    "p0_open": 1,
+    "waiting_on_you": 3,
+    "untriaged": 4,
+    "over_time_limit": 0,
+    "open": 31
+  },
+  "repos": [
+    {
+      "repo": "example-org/server",
+      "id": "R_kgDOAbCdEf",
+      "read_at": "2026-10-23T08:00:00Z",
+      "read": "incremental",
+      "error": null,
+      "stale": false,
+      "read_only": {
+        "value": false,
+        "why": null
+      }
+    },
+    {
+      "repo": "upstream-org/engine",
+      "read_at": "2026-10-22T08:00:00Z",
+      "read": "full",
+      "error": "rate limited",
+      "stale": true,
+      "read_only": {
+        "value": true,
+        "why": "declared"
+      }
+    }
+  ],
+  "dispatcher_seen_at": "2026-10-23T07:58:00Z",
+  "default_view": null,
+  "owner_id": "user_owner",
+  "recently_closed_days": 0
+}

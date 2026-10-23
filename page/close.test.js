@@ -132,3 +132,75 @@ test("Trends still counts a dismissed issue's close", () => {
   const t = D.trends([i], now, 4, {});
   assert.equal(t.weeks.reduce((n, w) => n + w.closed, 0), 1);
 });
+
+// Mutation gap tests (gate-mutation-recently-closed): each pins one predicate of dismissed() or
+// recentlyClosed() that the tests above leave free.
+
+test("dismissed binds to an open/closed item, to this item, to a dismiss_closed, and to what the page knows of an undo", () => {
+  const closedAt = "2026-10-22T08:00:00Z";
+  const i = issue({ state: "closed", closed_at: closedAt });
+  const d = D.decisionDoc(D.dismissFields(i), who, now, () => 0.5);
+  const stamp = "2026-10-23T08:00:00Z";
+  // Reopened: GitHub keeps the old closedAt, and the page still holds the dismiss of that close.
+  assert.equal(D.dismissed(issue({ state: "open", closed_at: closedAt }), [d], []), false, "an open item is not dismissed by a decision");
+  assert.equal(D.dismissed(issue({ state: "open", closed_at: closedAt, dismissed_at: stamp }), [], []), false, "nor by the tracker");
+  // Closed without a close instant: nothing to bind a dismissal to, not even the tracker's word.
+  assert.equal(D.dismissed(issue({ state: "closed", dismissed_at: stamp }), [], []), false);
+  // Another item's dismiss of the same instant.
+  const other = D.decisionDoc(D.dismissFields(issue({ id: "I_8", alias: "yuvalrakavy/Store#8", state: "closed", closed_at: closedAt })), who, now, () => 0.25);
+  assert.equal(D.dismissed(i, [other], []), false, "another item's dismiss");
+  // Some other decision that happens to carry the same item and closed_at.
+  const stray = { id: "D_stray", action: "set_priority", target: { item: "I_7" }, value: { closed_at: closedAt } };
+  assert.equal(D.dismissed(i, [stray], []), false, "only a dismiss_closed dismisses");
+  // A dismiss with no value at all (a malformed or older document) is not one, and does not throw.
+  const bare = { id: "D_bare", action: "dismiss_closed", target: { item: "I_7" } };
+  assert.equal(D.dismissed(i, [bare], []), false);
+  // Only an undo takes a dismiss back.
+  const notUndo = { id: "D_np", action: "set_priority", target: { decision: d.id, item: "I_7" } };
+  assert.equal(D.dismissed(i, [d, notUndo], []), true, "a decision that only names the dismiss does not undo it");
+});
+
+test("recentlyClosed keeps the window's edge, drops an open item whatever its stale close, and sorts by the close", () => {
+  const closed = (id, at, more) => issue(Object.assign({ id, alias: "yuvalrakavy/Store#" + id.slice(2), state: "closed", closed_at: at }, more));
+  const edge = new Date(now.getTime() - 7 * 86400000).toISOString();
+  assert.deepEqual(D.recentlyClosed([closed("I_1", edge)], [], [], now, 7).map((x) => x.issue.id), ["I_1"], "closed exactly `days` ago is inside");
+  // Reopened by someone: open again with the old closed_at, no dashboard close: not listed.
+  assert.equal(D.recentlyClosed([issue({ closed_at: "2026-10-22T08:00:00Z" })], [], [], now, 7).length, 0);
+  // The tracker's closed_at orders the list, not the instant the dashboard asked to close.
+  const c = (at) => ({ decision: "D_c", reason: "completed", at, result: "closed", undo_allowed: false });
+  const late = closed("I_2", "2026-10-22T08:00:00Z", { dashboard_close: c("2026-10-22T09:00:00Z") });
+  const mid = closed("I_3", "2026-10-22T08:30:00Z", { dashboard_close: c("2026-10-21T00:00:00Z") });
+  const r = D.recentlyClosed([late, mid], [], [], now, 7);
+  assert.deepEqual(r.map((x) => x.issue.id), ["I_3", "I_2"]);
+  assert.equal(r[1].at, "2026-10-22T08:00:00Z");
+  // Same instant: by alias, ascending.
+  const t = closed("I_5", "2026-10-22T08:00:00Z");
+  const u = closed("I_4", "2026-10-22T08:00:00Z");
+  assert.deepEqual(D.recentlyClosed([t, u], [], [], now, 7).map((x) => x.issue.id), ["I_4", "I_5"]);
+});
+
+test("recentlyClosed says why: the dashboard's reason first, then GitHub's, with each wording; prs default to none", () => {
+  const closed = (id, more) => issue(Object.assign({ id, alias: "yuvalrakavy/Store#" + id.slice(2), state: "closed", closed_at: "2026-10-22T08:00:00Z" }, more));
+  const dc = (reason) => ({ decision: "D_" + reason, reason, at: "2026-10-22T08:00:00Z", result: "closed", undo_allowed: false });
+  const why = (more) => D.recentlyClosed([closed("I_1", more)], [], [], now, 7)[0];
+  assert.equal(why({ state_reason: "completed" }).reason, "completed");
+  assert.equal(why({ state_reason: "not_planned" }).reason, "not planned");
+  assert.equal(why({ state_reason: "duplicate" }).reason, "a duplicate");
+  assert.equal(why({ state_reason: "reopened" }).reason, null, "a reason the page has no words for");
+  assert.equal(why({ dashboard_close: dc("duplicate"), state_reason: "completed" }).reason, "a duplicate", "the dashboard's own reason wins");
+  assert.equal(why({ dashboard_close: dc("not_planned") }).reason, "not planned", "the dashboard's reason when GitHub gave none");
+  assert.deepEqual(why({}).prs, []);
+});
+
+test("Dismiss is for a closed item with a close instant whose Reopen is neither open nor pending", () => {
+  const c = { decision: "D_c", reason: "completed", at: "2026-10-23T07:00:00Z", result: "closed", undo_allowed: false };
+  const one = (more, decisions) => D.recentlyClosed([issue(Object.assign({ dashboard_close: c }, more))], decisions || [], [], now, 7)[0];
+  // Open again after the dashboard's close, with the stale closed_at.
+  assert.equal(one({ state: "open", closed_at: c.at }).dismissible, false, "open: nothing to dismiss");
+  // The dashboard's close not yet read back: no closed_at to bind a dismiss to.
+  assert.equal(one({ state: "closed" }).dismissible, false);
+  // Undo no longer allowed, but a reopen is pending: Reopen, not Dismiss.
+  const undo = { id: "D_u", action: "undo", target: { decision: "D_c", item: "I_7" } };
+  assert.equal(one({ state: "closed", closed_at: c.at }, [undo]).dismissible, false);
+  assert.equal(one({ state: "closed", closed_at: c.at }).dismissible, true);
+});

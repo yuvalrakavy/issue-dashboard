@@ -1609,3 +1609,103 @@ recently_closed_days = 7
     let d = doc(&run_with(&t, &gh(), &no_pages(), 2));
     assert_eq!(d["meta"]["recently_closed_days"], 2);
 }
+
+#[test]
+fn every_branch_of_a_dismiss_refusal_says_its_own_reason_and_the_owner_check_comes_first() {
+    let ids = open_ids(STORE);
+    let t = fixture_root();
+    let g = gh_scenarios(vec![(ids[0].clone(), Sc::new().closed_minutes_ago(60, "CLOSED"))]);
+    let d = doc(&run_with(&t, &g, &no_pages(), 0));
+    let closed_at = issue(&d, &ids[0])["closed_at"].as_str().unwrap().to_string();
+    let d = doc(&run_with(
+        &t,
+        &g,
+        &pages(&[
+            // A stranger's dismiss that would also be refused for its item: the stranger is why.
+            dismiss("D_s_open", "user_stranger", &ids[1], &closed_at),
+            dismiss("D_unread", OWNER, "I_never_read", &closed_at),
+        ]),
+        10,
+    ));
+    let refused = |id: &str, part: &str| {
+        let a = ack(&d, id);
+        assert_eq!(a["result"], "refused", "{id}: {a}");
+        assert!(a["reason"].as_str().unwrap().contains(part), "{id}: {a}");
+    };
+    refused("D_s_open", "is not the project's owner_id");
+    refused("D_unread", "was never read");
+}
+
+#[test]
+fn a_close_with_no_close_time_cannot_be_dismissed_and_a_dismissal_lapses_when_the_time_is_lost() {
+    let ids = open_ids(STORE);
+    let t = fixture_root();
+    let cleared = |ids: &[String]| {
+        gh_scenarios(vec![
+            (ids[0].clone(), Sc::new().closed_minutes_ago(60, "CLOSED")),
+            (ids[1].clone(), Sc::new().closed().raw("closedAt", Value::Null)),
+        ])
+    };
+    let d = doc(&run_with(&t, &cleared(&ids), &no_pages(), 0));
+    assert_eq!(issue(&d, &ids[1])["state"], "closed");
+    assert_eq!(issue(&d, &ids[1])["closed_at"], Value::Null);
+    let closed_at = issue(&d, &ids[0])["closed_at"].as_str().unwrap().to_string();
+    let d = doc(&run_with(
+        &t,
+        &cleared(&ids),
+        &pages(&[
+            dismiss("D_unknown", OWNER, &ids[1], &closed_at),
+            dismiss("D_ok", OWNER, &ids[0], &closed_at),
+        ]),
+        10,
+    ));
+    let a = ack(&d, "D_unknown");
+    assert_eq!(a["result"], "refused", "{a}");
+    assert!(a["reason"].as_str().unwrap().contains("an unknown time"), "{a}");
+    assert!(issue(&d, &ids[0])["dismissed_at"].is_string());
+    assert_eq!(issue(&d, &ids[1])["dismissed_at"], Value::Null);
+    // The tracker later reports the same issue closed with no closedAt: nothing to bind to.
+    const DAY: i64 = 24 * 60;
+    let lost = gh_scenarios(vec![(
+        ids[0].clone(),
+        Sc::new()
+            .closed()
+            .raw("closedAt", Value::Null)
+            .raw("updatedAt", json!(at(DAY + 15).to_rfc3339())),
+    )]);
+    let d = full_with(&t, &lost, &no_pages(), DAY + 20);
+    assert_eq!(issue(&d, &ids[0])["state"], "closed");
+    assert_eq!(issue(&d, &ids[0])["closed_at"], Value::Null);
+    assert_eq!(issue(&d, &ids[0])["dismissed_at"], Value::Null);
+}
+
+#[test]
+fn the_later_dismissal_of_an_item_is_the_one_that_holds() {
+    let ids = open_ids(STORE);
+    let t = fixture_root();
+    const DAY: i64 = 24 * 60;
+    let first = gh_scenarios(vec![(ids[0].clone(), Sc::new().closed_minutes_ago(60, "CLOSED"))]);
+    let d = doc(&run_with(&t, &first, &no_pages(), 0));
+    let a = issue(&d, &ids[0])["closed_at"].as_str().unwrap().to_string();
+    run_with(&t, &first, &pages(&[dismiss("D_a", OWNER, &ids[0], &a)]), 10);
+    // Reopened, then closed again later (a second close): dismissed too.
+    let reopened = gh_scenarios(vec![(
+        ids[0].clone(),
+        Sc::new()
+            .closed_minutes_ago(60, "OPEN")
+            .raw("updatedAt", json!(at(DAY + 15).to_rfc3339())),
+    )]);
+    full_with(&t, &reopened, &no_pages(), DAY + 20);
+    let again = gh_scenarios(vec![(
+        ids[0].clone(),
+        Sc::new()
+            .closed_minutes_ago(-(2 * DAY + 25), "CLOSED")
+            .raw("updatedAt", json!(at(2 * DAY + 25).to_rfc3339())),
+    )]);
+    let d = full_with(&t, &again, &no_pages(), 2 * DAY + 30);
+    let b = issue(&d, &ids[0])["closed_at"].as_str().unwrap().to_string();
+    assert_ne!(a, b);
+    let d = full_with(&t, &again, &pages(&[dismiss("D_b", OWNER, &ids[0], &b)]), 2 * DAY + 40);
+    assert_eq!(ack(&d, "D_b")["result"], "applied", "{}", ack(&d, "D_b"));
+    assert!(issue(&d, &ids[0])["dismissed_at"].is_string(), "{}", issue(&d, &ids[0]));
+}
