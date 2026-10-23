@@ -23,3 +23,17 @@ next. An issue the project does not track is refused.
 
 From the page, "Sync now" in the status strip and "Refresh" in an item's `⋯` menu and Details
 ask the same; the page cannot wake the task, so the next scheduled run serves them.
+
+## The dispatcher
+
+Launch…, Launch batch… and Recommend closures… on the page post a launch to whatever Claude
+session watches the page. That session is the dispatcher (`skills/issue-dashboard-dispatcher`):
+start it on the strongest model at high effort, in auto mode, ask it to follow that skill, and
+paste the dashboard's link in your message so it can arm its watch. It reserves a slot, builds
+the brief and starts the session; when the app will not let it start one from a page comment,
+it shows the session as a card in its own transcript for you to start.
+
+Recommend closures runs a read-only session over the issues in view. It judges each repo's
+issues by the repo's own campaign skill (`campaign_skill` in the registry, a path in the
+repo's `local_path` checkout), or by `docs/closing-recommendations.md` when the repo has none,
+and its recommendations reach the Inbox after the next sync.
