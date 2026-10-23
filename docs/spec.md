@@ -283,7 +283,7 @@ Every write to GitHub goes through **plan, then apply**:
 
 How plans carry preconditions, how approval binds to a plan's content, how a crash midway is
 reconciled, and exactly when undo is allowed: 10.9. **All of 1.7 is phase 2** (10.0): in
-phase 1 the tracker writes nothing to GitHub.
+phase 1 the tracker writes nothing to GitHub but the owner's closes from the page (10.10).
 
 ### 1.8 Issue identity and links
 
@@ -715,6 +715,14 @@ repeated in the level lists.
   workspace (editable, with the reason they were suggested), "Preview brief", and Launch.
   After launch the row shows the launch state (`requested`, `queued`, `started`, `landed`).
   When no dispatcher is listening, Launch is disabled with that reason (5.4).
+- **Every issue can be closed** (10.0's exception): "Close…" in each issue card's and row's
+  `⋯` menu and as a button in Details, except on a read-only repo and on pull requests. It
+  opens a sheet: the reason (completed, not planned, duplicate of #N, which requires the
+  number), a comment prefilled per reason and editable, and Close; on a public repo the sheet
+  says the comment is published in the owner's name. The card then shows "Closing · applied on
+  the next sync" with Undo until the ack. Undo of a close already applied reopens the issue,
+  offered only while it is still closed by that close and nobody has commented since; the
+  Inbox lists the last 7 days' dashboard closes for that.
 - **Rows show the level and idle time; the score is in `explain`.** Scores only compare
   within a level (6.1), so they are not shown as a column beside the level.
 - **Phone width:** queue rows become cards with one action; nothing scrolls sideways;
@@ -852,6 +860,10 @@ the kind:
 anything that closes an issue or posts a comment is visible to others and harder to undo, so
 it comes back once more as a plan. "Apply all labels at or above a confidence" acts only on
 label and priority suggestions, never on closes.
+
+**Closing by hand is not a suggestion.** The owner's own "Close…" (5.2a) is the decision and
+its approval at once: the sheet already shows the reason and the exact comment, so the cycle
+applies it without a further plan. The plans above remain for closes the tracker proposes.
 
 ---
 
@@ -1044,7 +1056,7 @@ event; chapter 10):
 4. `issue-dashboard brief --launch <id>` returns the brief (7.5); start the session with the
    routed model and effort and the token in its title.
 5. `issue-dashboard launch-started --token … --session …`, and reply in the thread with a
-   link to the session. In phase 1 the tracker writes nothing to GitHub; the launched session
+   link to the session. In phase 1 the tracker writes nothing to GitHub but closes (10.10); the launched session
    follows its repo's own process, including any in-progress label (10.0). In phase 2 the
    write engine can take over the label, under the repo's write policy (10.9).
 6. When the app continues the dispatcher because the session ended its turn for good,
@@ -1233,9 +1245,14 @@ second.
 
 | Phase | Toward GitHub | What it contains |
 |---|---|---|
-| **1** | **read-only: the tracker writes nothing to GitHub** | the ledger, the cycle, the snapshot, the dashboard, triage suggestions, priorities and overrides kept in the tracker, views, forks, launches and reservations, briefs, outcomes, `explain` |
+| **1** | **read-only, but for one write: the owner's close of an issue from the page (10.10)** | the ledger, the cycle, the snapshot, the dashboard, triage suggestions, priorities and overrides kept in the tracker, views, forks, launches and reservations, briefs, outcomes, `explain` |
 | **2** | the write engine (10.9): labels and priority write-back, label sync, plans, undo | built test-first against a scratch repository, so its timing questions are answered by running code and its review is a review of code |
 | **3** | closes, comments and reviews in the maintainer's name | the open-source writes of chapter 4 |
+
+**The one exception: closing an issue** (owner, 2026-10-23: "I need to be able to close an
+issue from the dashboard"). Phase 1 closes, and reopens on Undo, an issue the owner closed on
+the page: a deterministic CLI step with no model, under 10.9's intent-then-result rule (10.10,
+*Closing from the page*). Nothing else is written to GitHub in phase 1.
 
 In phase 1 a launched session still works on its issue the way it does today, under its
 repo's own process (the in-progress label, its commits, its pull request); the tracker
@@ -1704,6 +1721,35 @@ them rather than refusing.
   (abandoned), each generation's documents before its marker. A younger generation newer than
   the active one may be another run's and is kept. Access rule: everyone who can open the page
   reads, only the owner writes (`[{path: "", read: "view", write: "owner"}]`).
+- *Closing from the page (slice 3, 10.0's exception).* A `close` decision carries
+  `value.close = {reason: completed | not_planned | duplicate, duplicate_of, comment}`. The cycle
+  gains a write step between ingest and observe, so the same cycle's read and outbox already
+  show the result. The step holds the root lock across each operation's intent, GitHub call
+  and result (10.9), each a committed transaction of its own, and takes the repo and number
+  from the item's latest observation, never from the page's alias. Event kinds:
+  `write_intended` (subject the decision; the operation, repo, number, reason, comment),
+  `write_applied` (`closed`, `already_closed`, `reopened`), `write_failed` (stage
+  `precondition` or `apply`, and why). Preconditions, refused as `write_failed` without an
+  intent: the item is an observed issue (not a pull request) in one of the project's repos, and
+  the repo is not read-only (declared, or the viewer's permission below write). Then a fresh
+  read (`gh issue view`): already closed records `already_closed` and posts no comment;
+  otherwise `gh issue close <n> -R <repo> --reason completed|"not planned"|duplicate`
+  (`--duplicate-of N` for a duplicate) with `--comment`. A failure is recorded and not retried:
+  the ack says refused with GitHub's error, and the owner can press Close again. **A crash** leaves
+  an intent with no result; the next cycle's step reconciles it first from a fresh read: closed
+  at or after the intent's time is `closed` (reconciled); still open with a comment of the
+  intended text posted after the intent is a close re-sent without the comment; otherwise the
+  close is applied as new. **Undo.** A close's effect is dated at its intent, so an undo recorded
+  before the intent cancels it (nothing is written) and one recorded after reverses it: a
+  reopen, applied only if a fresh read shows the issue still closed at the close's recorded
+  `closed_at` with no comment since, and only for a `closed` result (an `already_closed` one was
+  someone else's close, so its undo is refused). Each issue document carries `dashboard_close`
+  (the decision, its reason and time, and `undo_allowed` from the latest observation), and
+  `meta.repos[]` carries `visibility` for the public-repo notice. **Residuals:** a person's
+  comment or reopen landing between the fresh read and the write is not seen (GitHub has no
+  conditional close); a crash after `gh` posted the comment and before it closed is caught by
+  the comment-text match, but a person posting the same text in that window would make it
+  skip the comment. The per-run cap of 1.7 does not apply: each close is one explicit decision.
 - **Open (for the owner):** "new" is approximated as open, with no comment by an inside author
   and no labels; a closed or merged pull request still gets a pull-request status (e.g.
   `needs-review`); `commits`, `rank` and `score` are empty; the `flow` and history snapshot files

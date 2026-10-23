@@ -1,0 +1,19 @@
+{
+  "seq": 60,
+  "time": "2026-10-23T08:00:00.000Z",
+  "kind": "write_intended",
+  "subject": "D_close_7f3a",
+  "pred": 50,
+  "distinct": {
+    "op": "reopen"
+  },
+  "identity": "7078df4ee0d8cd2b54574e1bdf47bc7192625e16e791919517edd3121c20fdfe",
+  "data": {
+    "project": "home",
+    "op": "reopen",
+    "item": "I_kwDOissueA",
+    "repo": "yuvalrakavy/Store",
+    "number": 184,
+    "closed_at": "2026-10-23T08:00:02Z"
+  }
+}

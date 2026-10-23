@@ -39,6 +39,15 @@
     },
     {
       "$ref": "event-outbox.schema.json"
+    },
+    {
+      "$ref": "event-write-intended.schema.json"
+    },
+    {
+      "$ref": "event-write-applied.schema.json"
+    },
+    {
+      "$ref": "event-write-failed.schema.json"
     }
   ]
 }

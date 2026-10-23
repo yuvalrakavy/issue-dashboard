@@ -1,0 +1,18 @@
+{
+  "seq": 51,
+  "time": "2026-10-23T08:00:00.000Z",
+  "kind": "write_applied",
+  "subject": "D_close_7f3a",
+  "pred": 0,
+  "distinct": {
+    "op": "close"
+  },
+  "identity": "cfc8c350b4db4cf46e859b51e12c006536be3c080d1f21084e6d735050eac533",
+  "data": {
+    "project": "home",
+    "op": "close",
+    "result": "merged",
+    "closed_at": null,
+    "reconciled": false
+  }
+}

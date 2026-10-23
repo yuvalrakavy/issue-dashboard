@@ -305,7 +305,10 @@
             "outcome",
             "exported",
             "membership",
-            "outbox"
+            "outbox",
+            "write_intended",
+            "write_applied",
+            "write_failed"
           ]
         },
         "subject": {

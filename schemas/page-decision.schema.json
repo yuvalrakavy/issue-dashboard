@@ -44,7 +44,8 @@
         "undo",
         "cancel_launch",
         "release_reservation",
-        "settle_orphan"
+        "settle_orphan",
+        "close"
       ]
     },
     "target": {
@@ -99,6 +100,44 @@
         },
         "routing": {
           "$ref": "common.schema.json#/$defs/routing"
+        },
+        "close": {
+          "description": "A close (10.10): the reason, the issue a duplicate duplicates, and the comment posted with it (empty: none).",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "reason",
+            "comment"
+          ],
+          "properties": {
+            "reason": {
+              "enum": [
+                "completed",
+                "not_planned",
+                "duplicate"
+              ]
+            },
+            "duplicate_of": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "comment": {
+              "type": "string",
+              "maxLength": 65536
+            }
+          },
+          "if": {
+            "properties": {
+              "reason": {
+                "const": "duplicate"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "duplicate_of"
+            ]
+          }
         }
       }
     },
@@ -260,6 +299,33 @@
           "target": {
             "required": [
               "suggestion"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "close"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "value"
+        ],
+        "properties": {
+          "target": {
+            "required": [
+              "item",
+              "alias"
+            ]
+          },
+          "value": {
+            "required": [
+              "close"
             ]
           }
         }

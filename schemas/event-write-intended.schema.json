@@ -1,0 +1,96 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yuvalrakavy/issue-dashboard/schemas/event-write-intended.schema.json",
+  "title": "Ledger event: write_intended",
+  "description": "A GitHub write is about to be made (10.9, 10.10): recorded and committed under the root lock before the call, so a crash leaves an intent the next cycle reconciles from a fresh read. The repo and number are the item's latest observation's.",
+  "allOf": [
+    {
+      "$ref": "common.schema.json#/$defs/eventEnvelope"
+    }
+  ],
+  "properties": {
+    "kind": {
+      "const": "write_intended"
+    },
+    "subject": {
+      "description": "The close decision the write carries out.",
+      "$ref": "common.schema.json#/$defs/docId"
+    },
+    "distinct": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "op"
+      ],
+      "properties": {
+        "op": {
+          "$ref": "#/$defs/op"
+        }
+      }
+    },
+    "data": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "project",
+        "op",
+        "item",
+        "repo",
+        "number"
+      ],
+      "properties": {
+        "project": {
+          "$ref": "common.schema.json#/$defs/projectName"
+        },
+        "op": {
+          "$ref": "#/$defs/op"
+        },
+        "item": {
+          "$ref": "common.schema.json#/$defs/nodeId"
+        },
+        "repo": {
+          "$ref": "common.schema.json#/$defs/repoName"
+        },
+        "number": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "reason": {
+          "enum": [
+            "completed",
+            "not_planned",
+            "duplicate"
+          ]
+        },
+        "duplicate_of": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "comment": {
+          "description": "The comment posted with the close; empty or absent: none.",
+          "type": "string"
+        },
+        "closed_at": {
+          "description": "A reopen's: the closed_at of the close it reverses.",
+          "anyOf": [
+            {
+              "$ref": "common.schema.json#/$defs/timestamp"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    }
+  },
+  "$defs": {
+    "op": {
+      "description": "close: the decision's close; reopen: its undo (10.10).",
+      "enum": [
+        "close",
+        "reopen"
+      ]
+    }
+  }
+}

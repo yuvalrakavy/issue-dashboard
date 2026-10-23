@@ -71,6 +71,10 @@ pub enum Failpoint {
     AfterCommit,
     /// Events are appended to the backup and fsynced; the export cursor is not advanced.
     AfterAppend,
+    /// A close's or reopen's intent is committed; GitHub has not been called (10.10).
+    AfterWriteIntent,
+    /// GitHub accepted the write; its result is not recorded yet.
+    AfterWriteCall,
 }
 
 impl Failpoint {
@@ -78,6 +82,8 @@ impl Failpoint {
         match s {
             "after-commit" => Some(Failpoint::AfterCommit),
             "after-append" => Some(Failpoint::AfterAppend),
+            "after-write-intent" => Some(Failpoint::AfterWriteIntent),
+            "after-write-call" => Some(Failpoint::AfterWriteCall),
             _ => None,
         }
     }
@@ -86,6 +92,8 @@ impl Failpoint {
         match self {
             Failpoint::AfterCommit => "after-commit",
             Failpoint::AfterAppend => "after-append",
+            Failpoint::AfterWriteIntent => "after-write-intent",
+            Failpoint::AfterWriteCall => "after-write-call",
         }
     }
 }

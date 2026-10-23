@@ -144,6 +144,21 @@
                 ]
               }
             }
+          },
+          "visibility": {
+            "description": "The repo's visibility as last read; a close's comment on a public repo is published (5.2a).",
+            "anyOf": [
+              {
+                "enum": [
+                  "public",
+                  "private",
+                  "internal"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         }
       }

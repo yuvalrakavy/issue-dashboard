@@ -380,6 +380,49 @@
           "type": "null"
         }
       ]
+    },
+    "dashboard_close": {
+      "description": "The close the owner made from the dashboard and that still stands (10.10); null when there is none. undo_allowed: Undo would reopen it (the issue is still closed by that close and nobody has commented since).",
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "decision",
+            "reason",
+            "at",
+            "result",
+            "undo_allowed"
+          ],
+          "properties": {
+            "decision": {
+              "$ref": "common.schema.json#/$defs/docId"
+            },
+            "reason": {
+              "enum": [
+                "completed",
+                "not_planned",
+                "duplicate"
+              ]
+            },
+            "at": {
+              "$ref": "common.schema.json#/$defs/timestamp"
+            },
+            "result": {
+              "enum": [
+                "closed",
+                "already_closed"
+              ]
+            },
+            "undo_allowed": {
+              "type": "boolean"
+            }
+          }
+        }
+      ]
     }
   }
 }
