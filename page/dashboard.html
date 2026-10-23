@@ -277,6 +277,8 @@ footer .wrap { padding-block: 0 32px; font-size: .82rem; color: var(--muted); di
 
   const groups = () => (S.meta && S.meta.groups) || {};
   const scoped = () => S.issues.filter((i) => D.inScope(D.repoOf(i.alias), S.scope, groups()));
+  // What the lists show: a dismissed closed item leaves them all, while Trends still counts it (5.8).
+  const shown = () => scoped().filter((i) => !D.dismissed(i, S.decisions, S.acks));
   const repoInfo = (repo) => ((S.meta && S.meta.repos) || []).find((r) => r.repo === repo);
 
   function urgentHidden() {
@@ -303,9 +305,20 @@ footer .wrap { padding-block: 0 32px; font-size: .82rem; color: var(--muted); di
       S.decisions = S.decisions.concat([doc]);
       S.openCard = null;
       toast(null);
+      render();
+      return doc;
     } catch (e) {
       toast("Not recorded: " + ((e && e.code) || "error") + (e && e.code === "quota_exceeded" ? " (the page's database is full)" : ""));
     }
+    render();
+    return null;
+  }
+
+  // Dismiss hides the item at once; the toast's Undo writes an undo of that very decision.
+  async function dismissClosed(i) {
+    const doc = await writeDecision(D.dismissFields(i));
+    if (!doc) return;
+    toast(i.alias + " dismissed.", { label: "Undo", run: () => writeDecision({ action: "undo", target: { decision: doc.id, item: i.id } }) });
     render();
   }
 
@@ -358,7 +371,8 @@ footer .wrap { padding-block: 0 32px; font-size: .82rem; color: var(--muted); di
   }
 
   let toastMsg = null;
-  function toast(m) { toastMsg = m; }
+  let toastAction = null;
+  function toast(m, action) { toastMsg = m; toastAction = (m && action) || null; }
 
   // --- rendering -----------------------------------------------------------------------
 
@@ -377,7 +391,9 @@ footer .wrap { padding-block: 0 32px; font-size: .82rem; color: var(--muted); di
           : "The tracker's owner id is " + owner.configured + ", not yours, so none of your actions here is accepted. ",
         "Set it in the tracker root's " + owner.file + ": ", line, " ", copyButton(owner.line, line)));
     }
-    if (toastMsg) kids.push(h("div", { class: "pending", role: "status" }, toastMsg, h("button", { class: "btn quiet", onclick: () => { toastMsg = null; render(); } }, "Dismiss")));
+    if (toastMsg) kids.push(h("div", { class: "pending", role: "status" }, toastMsg,
+      toastAction ? h("button", { class: "btn", onclick: () => { const a = toastAction; toast(null); a.run(); } }, toastAction.label) : null,
+      h("button", { class: "btn quiet", onclick: () => { toast(null); render(); } }, "Close")));
     if (S.load && S.load.status === "partial") kids.push(h("div", { class: "err" }, "Partial snapshot: " + (S.load.why || "a collection came back short") + ". Reload the page in a minute."));
     if (!S.load && !S.error) kids.push(h("div", { class: "note" }, "Loading the latest snapshot…"));
     else if (S.load && S.load.status === "empty") kids.push(h("div", { class: "note" }, "No snapshot yet: the sync job has not published one to this page."));
@@ -596,12 +612,12 @@ footer .wrap { padding-block: 0 32px; font-size: .82rem; color: var(--muted); di
 
   function renderInbox() {
     const states = D.launchStates(S.launches, S.statuses);
-    let cards = D.inbox(scoped());
+    let cards = D.inbox(shown());
     if (S.inboxFilter === "waiting") cards = cards.filter((c) => c.why !== "untriaged");
     if (S.inboxFilter === "untriaged") cards = cards.filter((c) => c.why === "untriaged");
     const pill = (k, label) => h("button", { class: "chip" + (S.inboxFilter === k ? " on" : ""), onclick: () => { S.inboxFilter = k; S.sel = 0; render(); } }, label);
     const head = h("div", { class: "pills" }, pill("all", "All"), pill("waiting", "Waiting on you"), pill("untriaged", "Untriaged"));
-    if (!cards.length) return h("div", { class: "list" }, head, h("div", { class: "note" }, S.inboxFilter === "untriaged" ? "Nothing untriaged." : "Nothing waiting on you."), recentClosesSection());
+    if (!cards.length) return h("div", { class: "list" }, head, h("div", { class: "note" }, S.inboxFilter === "untriaged" ? "Nothing untriaged." : "Nothing waiting on you."), recentlyClosedSection());
     return h("div", { class: "list" }, head, cards.map((c) => {
       const i = c.issue;
       const line = decisionLine(i);
@@ -617,29 +633,37 @@ footer .wrap { padding-block: 0 32px; font-size: .82rem; color: var(--muted); di
         line,
         pending ? null : picker(i),
         pending || (S.openCard && S.openCard.id === i.id) ? null : h("div", { class: "actions" }, main, moreMenu(i, ownerExtras(i))));
-    }), recentClosesSection());
+    }), recentlyClosedSection());
   }
 
-  // The last 7 days' closes from this page, where Undo of an applied close lives (5.2a).
-  function recentClosesSection() {
-    const list = D.recentCloses(scoped(), S.decisions, S.acks, new Date(), 7);
+  // Every issue closed in the last N days (5.8): a close from this page keeps its Reopen (5.2a);
+  // any other close can be dismissed, which hides it from every list.
+  function recentlyClosedSection() {
+    const days = (S.meta && S.meta.recently_closed_days) || 7;
+    const list = D.recentlyClosed(shown(), S.decisions, S.acks, new Date(), days);
     if (!list.length) return null;
-    return h("section", { class: "closes" }, h("h2", {}, "Closed from the dashboard · last 7 days"), list.map(({ issue: i, close: c, reopening }) => {
-      const how = c.result === "already_closed" ? "was already closed on GitHub" : "closed as " + (D.CLOSE_REASONS[c.reason] || c.reason);
-      let tail;
-      if (reopening) tail = h("div", { class: "pending", role: "status" }, "Reopening · applied on the next sync");
-      else if (S.owner && c.undo_allowed) tail = h("div", { class: "actions" }, h("button", { class: "btn", onclick: () => writeDecision({ action: "undo", target: { decision: c.decision, item: i.id } }) }, "Reopen"));
-      else if (S.owner) tail = h("div", { class: "sub muted" }, c.result === "already_closed" ? "Not offered: the dashboard did not close it." : "Reopen is no longer offered: the issue changed on GitHub since.");
+    return h("section", { class: "closes" }, h("h2", {}, "Recently closed · last " + days + " days"), list.map((x) => {
+      const i = x.issue;
+      const c = x.close;
+      const how = c
+        ? c.result === "already_closed" ? "was already closed on GitHub" : "closed from the dashboard as " + (D.CLOSE_REASONS[c.reason] || c.reason)
+        : x.reason ? "closed as " + x.reason : "closed";
+      const by = x.prs.length ? " · closed by " + x.prs.map((a) => (D.repoOf(a) === D.repoOf(i.alias) ? "#" + a.split("#")[1] : a)).join(", ") : "";
+      let tail = null;
+      if (x.reopening) tail = h("div", { class: "pending", role: "status" }, "Reopening · applied on the next sync");
+      else if (S.owner && c && c.undo_allowed) tail = h("div", { class: "actions" }, h("button", { class: "btn", onclick: () => writeDecision({ action: "undo", target: { decision: c.decision, item: i.id } }) }, "Reopen"));
+      else if (S.owner && x.dismissible) tail = h("div", { class: "actions" }, h("button", { class: "btn", onclick: () => dismissClosed(i) }, "Dismiss"));
       return h("article", { class: "card", "data-id": i.id },
         h("div", { class: "head" }, h("a", { class: "alias", href: ghUrl(i), target: "_blank", rel: "noopener" }, i.alias), h("span", { class: "title" }, i.title)),
-        h("div", { class: "meta" }, h("span", {}, fmtDay(c.at) + " " + fmtTime(c.at) + " · " + how)),
+        h("div", { class: "meta" }, h("span", {}, fmtDay(x.at) + " " + fmtTime(x.at) + " · " + how + by)),
+        sessionsBlock(i, false),
         tail);
     }));
   }
 
   function renderQueue() {
     const states = D.launchStates(S.launches, S.statuses);
-    const list = scoped();
+    const list = shown();
     const q = D.queue(list, D.inbox(list));
     const f = S.queueFilter;
     const text = S.text.toLowerCase();

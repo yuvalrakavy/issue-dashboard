@@ -136,6 +136,11 @@
       "type": "integer",
       "minimum": 1
     },
+    "recently_closed_days": {
+      "description": "How many days the page's Recently closed list looks back (5.8); 7 when unset.",
+      "type": "integer",
+      "minimum": 1
+    },
     "sync_task": {
       "description": "The id of the app's scheduled task that runs this project's sync job; sync-now prints it so the calling session can run the task now (7.2).",
       "type": "string",

@@ -15,6 +15,7 @@ use serde_json::json;
 use crate::docs::{Action, Decision, DecisionValue, Priority};
 use crate::event::{Event, Kind};
 use crate::ledger::{self, Dedupe, Recorded, Tx};
+use crate::root::{format_time, parse_time};
 use crate::{Error, Result};
 
 /// The `data` of a `decided` event. Its schema is `schemas/event-decided.schema.json`.
@@ -58,6 +59,8 @@ pub fn ingest(tx: &mut Tx<'_>, project: &str, owner_id: &str, doc: &Decision) ->
         ))
     } else if doc.author != owner_id {
         Some(format!("author {} is not the project's owner_id", doc.author))
+    } else if doc.action == Action::DismissClosed {
+        dismiss_refusal(tx.conn(), doc)?
     } else {
         None
     };
@@ -83,6 +86,32 @@ pub fn ingest(tx: &mut Tx<'_>, project: &str, owner_id: &str, doc: &Decision) ->
         serde_json::to_value(data)?,
         Dedupe::Latest,
     )
+}
+
+/// Why a `dismiss_closed` cannot take effect: its item is not closed, or not by the close it
+/// names (reopened and closed again since the page showed it).
+fn dismiss_refusal(conn: &Connection, doc: &Decision) -> Result<Option<String>> {
+    let Some(item) = doc.target.item.as_deref() else {
+        return Ok(Some("dismiss_closed names no item".into()));
+    };
+    let Some(asked) = doc.value.as_ref().and_then(|v| v.closed_at.as_deref()) else {
+        return Ok(Some("dismiss_closed names no close (value.closed_at)".into()));
+    };
+    let Some(seen) = ledger::latest(conn, item, Kind::Observed)? else {
+        return Ok(Some(format!("{item} was never read")));
+    };
+    let content = &seen.data["content"];
+    if content["state"] == "open" {
+        return Ok(Some(format!("{item} is open: only a closed item can be dismissed")));
+    }
+    let closed = content["closed_at"].as_str().map(parse_time).transpose()?;
+    if closed != Some(parse_time(asked)?) {
+        return Ok(Some(format!(
+            "{item} was closed at {}, not at {asked}: the close the page showed is gone",
+            closed.map_or("an unknown time".into(), format_time)
+        )));
+    }
+    Ok(None)
 }
 
 /// What became of one ingested decision.
@@ -263,6 +292,24 @@ pub fn overrides(conn: &Connection, project: &str) -> Result<BTreeMap<String, (D
                 out.remove(&item);
             }
             _ => {}
+        }
+    }
+    Ok(out)
+}
+
+/// The close each item's effective `dismiss_closed` dismissed, with when it was dismissed (the
+/// document's `created_at`); the later decision about one item wins.
+pub fn dismissals(conn: &Connection, project: &str) -> Result<BTreeMap<String, (String, String)>> {
+    let mut out = BTreeMap::new();
+    for d in effective(conn, project)? {
+        if d.action != Action::DismissClosed {
+            continue;
+        }
+        if let (Some(item), Some(closed)) = (
+            d.target.item.clone(),
+            d.value.as_ref().and_then(|v| v.closed_at.clone()),
+        ) {
+            out.insert(item, (closed, d.created_at.clone()));
         }
     }
     Ok(out)
