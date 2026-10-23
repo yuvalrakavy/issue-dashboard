@@ -90,7 +90,7 @@ fn changed(lib: &Replay, id: &str, new_title: &str, minutes: i64) -> Value {
 }
 
 #[test]
-fn a_full_read_does_not_ask_again_for_what_the_update_list_already_returned_and_ignores_a_vanished_member() {
+fn a_full_read_does_not_ask_again_for_what_the_update_list_already_returned_and_a_vanished_member_leaves() {
     let t = fixture_root();
     snap(&t, &gh(), "home", at(0));
     let ids = open_members(&t, "home", STORE);
@@ -123,8 +123,8 @@ fn a_full_read_does_not_ask_again_for_what_the_update_list_already_returned_and_
         Ok(v)
     });
     // The daily full read: the set is read again in full, but what the update list returned
-    // is not asked for by id, and a member GitHub cannot resolve is not a vanished item (it
-    // was never among those that left).
+    // is not asked for by id; a member the search still finds but GitHub cannot resolve by id
+    // leaves the set, and the full read confirms it gone.
     let r = snap(&t, &gh, "home", at(24 * 60));
     let store = report(&r, STORE);
     assert_eq!(store.mode.as_deref(), Some("full"), "{store:?}");
@@ -138,9 +138,48 @@ fn a_full_read_does_not_ask_again_for_what_the_update_list_already_returned_and_
         !asked.contains(&updated),
         "an item the update list returned is not read twice"
     );
-    assert_eq!(store.gone, 0, "{store:?}");
+    assert_eq!(store.gone, 1, "{store:?}");
     assert_eq!(title(&t, &updated), "updated while we looked");
-    assert!(members(&t, "home", STORE).contains(&vanishes));
+    assert!(!members(&t, "home", STORE).contains(&vanishes));
+}
+
+#[test]
+fn a_member_github_cannot_resolve_is_recorded_gone_once_across_full_reads() {
+    let t = fixture_root();
+    snap(&t, &gh(), "home", at(0));
+    let vanishes = open_members(&t, "home", STORE)[0].clone();
+    let gone = vanishes.clone();
+    let gh = gh_with(move |req: &Request, v| {
+        let mut v = v?;
+        if req.name == "nodes" {
+            let asked: Vec<String> = req.variables["ids"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|i| i.as_str().unwrap().to_string())
+                .collect();
+            let nodes = v["data"]["nodes"].as_array_mut().unwrap();
+            for (i, id) in asked.iter().enumerate() {
+                if *id == gone {
+                    nodes[i] = Value::Null;
+                }
+            }
+        }
+        Ok(v)
+    });
+    // The search keeps finding it: the next full read meets it as an entrant that does not
+    // resolve, which is no member and is not recorded gone a second time.
+    for (day, expect) in [(1, 1), (2, 0)] {
+        let r = snap(&t, &gh, "home", at(day * 24 * 60));
+        let store = report(&r, STORE);
+        assert_eq!(store.mode.as_deref(), Some("full"), "day {day}: {store:?}");
+        assert_eq!(store.gone, expect, "day {day}: {store:?}");
+    }
+    let events = t
+        .root
+        .read(|l| ledger::events_of(l.conn(), &vanishes, Kind::ItemGone))
+        .unwrap();
+    assert_eq!(events.len(), 1, "{events:?}");
 }
 
 #[test]

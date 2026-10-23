@@ -388,7 +388,8 @@ pub fn item(v: &Value) -> Result<Item> {
             "checks": head.and_then(|c| c.get("statusCheckRollup")).and_then(|s| s.get("state")),
             "closes": closes,
         });
-        if v.get("latestOpinionatedReviews").is_some() {
+        // A `null` (the field is there but GitHub did not answer it) is no list: keep the aggregate.
+        if v.get("latestOpinionatedReviews").is_some_and(|r| !r.is_null()) {
             content["pull_request"]["changes_requested_on"] = json!(
                 nodes(v, "latestOpinionatedReviews")
                     .filter(|r| r.get("state").and_then(Value::as_str) == Some("CHANGES_REQUESTED"))

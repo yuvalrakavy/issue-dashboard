@@ -154,6 +154,17 @@ impl Ledger {
             }
         }
         conn.execute_batch(FRESHNESS)?;
+        // A `reads` table from before `full_seq` (development ledgers of slice 2) is dropped and
+        // recreated: it is derived, so losing it costs one full read.
+        let has_full_seq = conn
+            .prepare("SELECT 1 FROM pragma_table_info('reads') WHERE name = 'full_seq'")?
+            .exists([])?;
+        let has_reads = conn
+            .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'reads'")?
+            .exists([])?;
+        if has_reads && !has_full_seq {
+            conn.execute_batch("DROP TABLE reads;")?;
+        }
         conn.execute_batch(READS)?;
         Ok(Ledger { conn })
     }

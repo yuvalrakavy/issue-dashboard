@@ -1620,7 +1620,9 @@ them rather than refusing.
   `freshness`): `watermarks` (per repo node: the start of the last complete read) and `reads`
   (per project and configured repo: node id, view hash, mode, attempt, last good and last full
   read with the ledger seq it was recorded at, error) and `rereads`. After `rebuild` they are
-  empty, so the next read of each repo is full.
+  empty, so the next read of each repo is full. A ledger whose `reads` table predates the
+  `full_seq` column has it dropped and recreated when the ledger opens: it is derived, so the
+  cost is one full read.
 - *Full reads:* the first read, a changed view or translation (hashed), a missing watermark,
   and once every 24 hours. A full read reads the whole set by node id and checks every item that
   was in the set at any time since the last full read and is not now (including items that left
@@ -1628,8 +1630,14 @@ them rather than refusing.
   last full read" is by ledger order: the sets from the one current at the full read's seq on,
   never a time compare (event times carry milliseconds, read times do not). An item that
   resolves elsewhere (transferred) is observed under its new alias, not gone. An item entering
-  the set that GitHub does not resolve is not a member (it enters when it resolves); a member
-  that does not resolve at a full read stays one until it leaves the set.
+  the set that GitHub does not resolve is not a member (it enters when it resolves). A member
+  the search still finds but GitHub does not resolve by id leaves the set at whichever read
+  meets it; a full read records it `item_gone`. A later read meets it as an entrant that does
+  not resolve, so it is recorded gone once.
+- *The read report:* `entered` counts only true entrants (in the set now, not in the previous
+  set, and resolved), on a full read as on an incremental one, though a full read reads every
+  member by id; `left` counts the previous members not in the set now; `gone` the `item_gone`
+  events this read recorded.
 - *Renames:* searches, `also` numbers and the since-lists use the repo's current
   `nameWithOwner` from the repo query, not the configured name, so a renamed repo keeps its
   items. Config keeps naming the repo by its old name until the owner edits it.
@@ -1661,8 +1669,8 @@ them rather than refusing.
   needs-decision, in-progress, blocked, ready. `waiting-on-author` needs the changes requested
   on the head commit ("since the last push"): the read takes each reviewer's latest
   change-requesting review commit (`latestOpinionatedReviews`, probed on rhaiscript/rhai#1194,
-  stored as `changes_requested_on`); an observation without it keeps GitHub's aggregate
-  `reviewDecision`. Only the latest 50 comments of an issue are read, so an issue with more is
+  stored as `changes_requested_on`); an observation without it, or where GitHub answered the
+  field `null`, keeps GitHub's aggregate `reviewDecision`. Only the latest 50 comments of an issue are read, so an issue with more is
   not "new" (an earlier inside comment may be unseen). Priority is override, then the project's
   priority, then the label. Closed items older than the history window are left out.
 - **Open (for the owner):** "new" is approximated as open, with no comment by an inside author
