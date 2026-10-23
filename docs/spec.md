@@ -758,7 +758,7 @@ field, never its id, and a page action on it still names the same item.
 | `forks`, `metrics` | tracker | chapter 3 and the metrics panel |
 | `decisions` | **page** | one per thing you did: accept, reject, edit, set priority, override, approve a plan |
 | `views` | **page** | saved views (5.6) |
-| `requests` | **page** | brief previews and on-demand triage (10.8) |
+| `requests` | **page** | brief previews, on-demand triage and sync requests (7.2, 10.8) |
 | `acks` | tracker | which page decisions each cycle consumed (10.6) |
 | `launches` | **page** | one per launch request; written once and never changed (a refused send is a second document, `not_sent`, naming the first; each launch thread is a thread record of its own) |
 | `launch_status` | tracker | each launch's current transition (10.7) |
@@ -1040,6 +1040,20 @@ the prepared ones (`ArtifactData` accepts a document from a local JSON file, so 
 never passes through the model). If a direct route turns up, the CLI writes the database
 itself and the sync job goes away; nothing else changes.
 
+**Sync now.** A sync request asks for a run sooner than the next tick, for the whole project
+or for one item (`owner/repo#N`). A session that has just closed, relabelled or landed a fix
+for an issue runs `issue-dashboard sync-now --project P --issue owner/repo#N`: it records the
+request in the ledger and prints the project's `sync_task`, the scheduled task's id, and the
+session then runs that task now through the app's scheduled-tasks "run now". A per-item
+request makes the next read of the item's repo read it by node id, whatever the watermark
+says, as it reads an entering item; a global request wakes an ordinary cycle. Requests
+coalesce: each waits until a good read of its repo starts after it, so ten requests before a
+run cost one read, a run already going when the request is made leaves it for the next run,
+and a failed read leaves it waiting. An item the project does not track is refused. The page
+writes the same request as a `requests` document of kind `sync` (5.3): "Sync now" in the
+status strip, "Refresh" in an item's `⋯` menu and Details. The page cannot wake the task, so
+in phase 1 the next scheduled run serves it (10.8).
+
 The snapshot never waits on a model; the dashboard is as fresh as the last sync, and shows
 that time (5.5). Suggestions only change when a triage session runs, and show their age.
 
@@ -1190,6 +1204,7 @@ database (7.2).
 | `check` | the config check (1.9) | nothing |
 | `cycle --pages <file>` | the cycle of 10.4: ingest the fetched page documents, observe, derive the outbox | the ledger; `outbox/` |
 | `snapshot [--full]` | the observe step alone (chapter 2), for testing and `doctor` | the ledger |
+| `sync-now [--issue <owner/repo#N>]` | a sync request (7.2): the next run reads the item by node id; prints the scheduled task to run now | the ledger |
 | `plan`, `apply <plan> [--yes]`, `undo <run>` | **phase 2** (10.9): the write engine | the ledger; GitHub |
 | `reserve`, `launch-started`, `launch-ended`, `release` | the launch reservation steps (10.7) | the ledger |
 | `brief --launch <id>` | the brief from its template (7.5) | nothing |
@@ -1490,7 +1505,8 @@ Releasing an unconfirmed reservation is also followed by a `reserve` for the nex
 
 | Work | Woken by |
 |---|---|
-| a cycle | the sync job, every `sync_interval` |
+| a cycle | the sync job, every `sync_interval`; sooner when a session that ran `sync-now` runs the sync task now (7.2) |
+| a page sync request (Sync now, Refresh) | the next scheduled run in phase 1, since the page cannot wake the task; once the dispatcher exists, it runs the sync task when it sees the request |
 | a brief preview | a `requests` document; the next cycle builds the brief (7.5) into the outbox |
 | a launch | the page's `sendToClaude` comment (5.4) |
 | the next queued launch | the app continuing the dispatcher when one of its sessions ends a turn; or a release |
@@ -1820,6 +1836,18 @@ them rather than refusing.
   it already closed. Left open (S1): a close by someone else inside the moment between the
   fresh read and `gh issue close` is recorded as ours, as is a close inside a crash's gap; the
   intent's time is the local clock, compared with GitHub's.
+- *Sync now (after slice 3).* A sync request is a `request` event whose document has
+  `kind: "sync"`: `sync-now` writes it with author `sync-now` and an id `sync-<hash>`; the page
+  writes it to `requests` like any request (owner only, ingested once). With `items` it is a
+  per-item request; without, a global one (an empty `items` is refused by the schema).
+  Nothing marks a request served: the read plan (`snapshot::plan`) adds to the by-id reads
+  every item of a request recorded after the project's last good read of the repo started
+  (`reads.good_at`), so serving needs no new state and a rebuild costs at most one extra
+  by-id read of each requested item. `sync-now --issue` resolves the alias against the
+  current members of the project's sets, case-insensitively and by the repo's current name,
+  and refuses anything else (exit 1, "not tracked by project P"); it never reads GitHub. The
+  task id comes from the project config's new optional `sync_task`; without it `task` is
+  null.
 - **Open (for the owner):** found by the gate and left for after landing: an upload abandoned
   for over an hour and resumed after a cleanup leaves documents no marker names, which no later
   cleanup finds; the page's own collections (`decisions`, `launches`, `views`) are read to

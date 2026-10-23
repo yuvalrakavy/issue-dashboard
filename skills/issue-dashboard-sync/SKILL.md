@@ -74,6 +74,11 @@ The next scheduled run starts fresh, and every step is safe to repeat.
    errors, the ingest counts and skipped documents, the sessions seen, gone and skipped, and
    the generations cleaned.
 
+**From any other session:** after you close, relabel or land a fix for an issue the
+dashboard tracks, run `BIN --root ROOT sync-now --project PROJECT --issue owner/repo#N`, then
+run the scheduled task whose id it prints (`task`) now with the app's scheduled-tasks "run
+now"; if a run is already going, the request waits for the next one.
+
 ## Never
 
 - Never edit or delete a page document (`decisions`, `launches`, `views`, `requests`), and

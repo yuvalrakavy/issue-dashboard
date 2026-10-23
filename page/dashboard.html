@@ -48,6 +48,7 @@ h1, h2, h3 { text-wrap: balance; margin: 0; }
 .chip.on { border-color: var(--accent); background: var(--accent-soft); }
 .fresh { font-size: .9rem; color: var(--muted); background: none; border: 0; padding: 0; text-align: left; cursor: pointer; min-height: 28px; }
 .fresh b { color: var(--warn); font-weight: 600; }
+.freshrow { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; }
 .repotimes { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 2px 16px; font-size: .86rem; }
 .hiddenline { font-size: .9rem; color: var(--warn); background: var(--warn-soft); border-radius: 6px; padding: 6px 10px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .tiles { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; }
@@ -165,7 +166,7 @@ footer .wrap { padding-block: 0 32px; font-size: .82rem; color: var(--muted); di
       <h1 id="name">Issue board</h1>
       <span id="scope"></span>
     </div>
-    <button class="fresh" id="fresh" aria-expanded="false">Loading the latest snapshot…</button>
+    <div class="freshrow"><button class="fresh" id="fresh" aria-expanded="false">Loading the latest snapshot…</button><button class="btn quiet" id="syncnow" hidden>Sync now</button></div>
     <div class="repotimes" id="repotimes" hidden></div>
     <div id="hidden"></div>
     <div class="tiles" id="tiles"></div>
@@ -325,6 +326,14 @@ footer .wrap { padding-block: 0 32px; font-size: .82rem; color: var(--muted); di
     catch (e) { toast("Not recorded: " + ((e && e.code) || "error")); }
   }
 
+  async function requestSync(i) {
+    if (!S.owner) return;
+    const doc = D.requestDoc(D.syncFields(i), who(), new Date());
+    try { await S.db.doc("requests/" + doc.id).set(doc); toast(D.syncNote(i, S.meta && S.meta.sync_interval_minutes)); }
+    catch (e) { toast("Not recorded: " + ((e && e.code) || "error")); }
+    render();
+  }
+
   async function saveView(name) {
     if (!S.owner || !S.scope) return;
     const doc = D.viewDoc(name, S.scope, who(), new Date());
@@ -402,6 +411,7 @@ footer .wrap { padding-block: 0 32px; font-size: .82rem; color: var(--muted); di
     }
 
     const fresh = $("fresh");
+    $("syncnow").hidden = !S.owner;
     if (S.meta) {
       const repos = S.meta.repos || [];
       const stale = repos.filter((r) => r.stale || r.error).map((r) => shortRepo(r.repo) + (r.error ? " error" : " stale"));
@@ -557,6 +567,7 @@ footer .wrap { padding-block: 0 32px; font-size: .82rem; color: var(--muted); di
       h("button", { onclick: () => { S.menu = null; S.openCard = { id: i.id, mode: "override" }; render(); } }, "Override priority…"),
       i.priority && i.priority.project ? h("button", { onclick: () => { S.menu = null; writeDecision({ action: "clear_priority", target: { item: i.id, alias: i.alias } }); } }, "Clear this project's priority") : null,
       i.priority && i.priority.override ? h("button", { onclick: () => { S.menu = null; writeDecision({ action: "clear_override", target: { item: i.id, alias: i.alias } }); } }, "Clear the override") : null,
+      h("button", { onclick: () => { S.menu = null; requestSync(i); } }, "Refresh"),
       h("button", { onclick: () => { S.menu = null; requestTriage(i); } }, "Request triage"),
       canClose(i) ? h("button", { onclick: () => { S.menu = null; openClose(i); } }, "Close…") : null,
     ].filter(Boolean);
@@ -772,7 +783,9 @@ footer .wrap { padding-block: 0 32px; font-size: .82rem; color: var(--muted); di
       h("div", { class: "body" }, i.body || "No description."),
       i.body_truncated ? h("div", { class: "sub muted" }, "The description is cut at 8000 characters; the rest is on GitHub.") : null,
       mine.length ? h("div", {}, h("div", { class: "muted" }, "Recent decisions"), h("ul", {}, mine.map((d) => h("li", {}, fmtDay(d.created_at) + " " + fmtTime(d.created_at) + ": " + describe(d))))) : null,
-      canClose(i) ? h("div", { class: "actions" }, h("button", { class: "btn", onclick: () => openClose(i) }, "Close…")) : null,
+      S.owner ? h("div", { class: "actions" },
+        h("button", { class: "btn", onclick: () => requestSync(i) }, "Refresh"),
+        canClose(i) ? h("button", { class: "btn", onclick: () => openClose(i) }, "Close…") : null) : null,
     );
   }
 
@@ -871,6 +884,7 @@ footer .wrap { padding-block: 0 32px; font-size: .82rem; color: var(--muted); di
     if (S.menu && !e.target.closest(".menu")) { S.menu = null; render(); }
   });
   for (const b of document.querySelectorAll(".tab")) b.addEventListener("click", () => go(b.dataset.tab, b.dataset.tab === "inbox" ? S.inboxFilter : S.queueFilter));
+  $("syncnow").addEventListener("click", () => requestSync(null));
   $("fresh").addEventListener("click", () => {
     const r = $("repotimes");
     r.hidden = !r.hidden;

@@ -202,7 +202,8 @@ pub struct RepoPlan {
     pub watermark: Option<DateTime<Utc>>,
     /// This project's latest recorded set in the repo.
     pub previous: BTreeSet<String>,
-    /// Members to read by node id whatever the since-lists say (see the module doc).
+    /// Members to read by node id whatever the since-lists say: those a read that another read
+    /// overtook left (see the module doc), and those a waiting sync request names (crate::sync).
     pub reread: BTreeSet<String>,
     /// Every item in this project's set at any time since its last full read of the repo: a
     /// full read checks each one that is no longer in the set, including those that left at an
@@ -225,6 +226,7 @@ pub struct Plan {
 /// Plans `project`'s reads from the ledger (a read; no lock is needed).
 pub fn plan(conn: &Connection, config: &ConfigSet, project: &str, now: DateTime<Utc>) -> Result<Plan> {
     let p = config.project(project)?;
+    let asked = crate::sync::item_requests(conn, project)?;
     let mut repos = Vec::new();
     for view in config.views(project)?.into_values() {
         let vh = view_hash(config, &view);
@@ -261,6 +263,17 @@ pub fn plan(conn: &Connection, config: &ConfigSet, project: &str, now: DateTime<
             }
             since_full = sets_since(conn, project, node, state.as_ref().and_then(|s| s.full_seq))?;
             reread = rereads(conn, project, node)?;
+            // An item request waits until a good read of the repo starts after it (crate::sync).
+            let good_at = state
+                .as_ref()
+                .and_then(|s| s.good_at.as_deref())
+                .map(parse_time)
+                .transpose()?;
+            for (at, items) in &asked {
+                if good_at.is_none_or(|g| *at > g) {
+                    reread.extend(items.iter().cloned());
+                }
+            }
             for id in &since_full {
                 if let Some(e) = ledger::latest(conn, id, Kind::Observed)?
                     && let Some(a) = e.data.get("alias").and_then(|a| a.as_str())

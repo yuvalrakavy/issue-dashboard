@@ -22,6 +22,7 @@ use issue_dashboard_core::publish::{self, Active};
 use issue_dashboard_core::read;
 use issue_dashboard_core::root::{Options, parse_time};
 use issue_dashboard_core::sessions::SessionList;
+use issue_dashboard_core::sync;
 use issue_dashboard_core::write::{GhIssues, IssueWriter};
 use issue_dashboard_core::{Error, Root};
 use serde_json::{Value, json};
@@ -111,6 +112,15 @@ enum Command {
         /// {"listed_at": "...", "limit": N, "sessions": [rows as list_sessions returns them]}.
         #[arg(long)]
         sessions: Option<PathBuf>,
+    },
+    /// Ask for a sync run now (7.2): record a sync request, global or for one item, and print
+    /// the project's scheduled sync task, for the calling session to run now.
+    SyncNow {
+        #[arg(long)]
+        project: String,
+        /// The item the next run reads in full, as owner/repo#N; it must be in the project's set.
+        #[arg(long)]
+        issue: Option<String>,
     },
     /// Only the read of GitHub (chapter 2): record what changed; no ingest, no outbox.
     Snapshot {
@@ -377,6 +387,7 @@ fn run(cli: Cli) -> anyhow::Result<Value> {
         Command::RecordOutcome(_) => "record-outcome",
         Command::Cycle { .. } => "cycle",
         Command::Snapshot { .. } => "snapshot",
+        Command::SyncNow { .. } => "sync-now",
         Command::Pages { .. } | Command::PublishPlan { .. } | Command::CleanupPlan { .. } => {
             unreachable!("run_sync answered")
         }
@@ -520,6 +531,12 @@ fn run(cli: Cli) -> anyhow::Result<Value> {
                 page_size()?,
             )?)?
         }
+        Command::SyncNow { project, issue } => serde_json::to_value(root.mutate_with_clock(now, |tx| {
+            // Read under the lock, as `reserve` does.
+            let config = ConfigSet::load(&dir)?;
+            config.record(tx)?;
+            sync::request(tx, &config, &project, issue.as_deref())
+        })?)?,
         Command::Snapshot { project } => {
             let gh = github()?;
             json!({"repos": cycle::snapshot(&root, gh.as_ref(), &project, &now, page_size()?)?})

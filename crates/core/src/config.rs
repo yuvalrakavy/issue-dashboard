@@ -215,6 +215,10 @@ pub struct Project {
     pub history_days: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sync_interval_minutes: Option<u32>,
+    /// The id of the app's scheduled task that runs this project's sync job, which `sync-now`
+    /// prints for the calling session to run now (7.2).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sync_task: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_writes_per_run: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
