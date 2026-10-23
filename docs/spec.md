@@ -1,6 +1,6 @@
 # issue-dashboard — design spec
 
-Status: **draft, chapter 1 (revision 2) for review.** Tier T2: a generic tool whose
+Status: **chapter 1 approved; chapters 2-4 drafts for review.** Tier T2: a generic tool whose
 config format is a contract that several repos and projects depend on.
 
 ## Intent
@@ -29,24 +29,24 @@ it (an upstream like Rhai).
 | The canonical axes are fixed by the tool | Project-wide aggregation (flow, aging, ordering across repos) needs every repo on the same axes |
 | Priority is per project; the tracker is the record of each project's view | A bug that is minor in one project can be a blocker in another |
 
-**Non-goals:** a multi-user tool; tracking anything but GitHub issues; replacing
-GitHub as the record of the issues themselves.
+**Non-goals:** a multi-user tool (one maintainer operates it, though issues and pull
+requests come from anyone); tracking anything but GitHub issues and pull requests;
+replacing GitHub as the record of the issues themselves; merging pull requests.
 
-**Requirement under design (2026-10-23):** some or all of a project's repos may be **open
-source with the owner as maintainer**, so issues arrive from people outside the project.
-Its design is a chapter of its own, not yet written; chapters 1-3 must not assume every
-issue author is the owner.
+Some or all of a project's repos may be open source with the owner as maintainer
+(chapter 4), so no chapter may assume every author is the owner.
 
 ## Chapters
 
 1. Configuration, translation and priority — **approved 2026-10-23**
 2. **The snapshot: what is read, what is derived, the JSON it writes** ← draft
 3. **Upstream forks** ← draft
-4. The dashboard page and its database
-5. Ordering and the priority suggestion
-6. Launching sessions: the dispatcher, routing, briefs, launch recipes
-7. The CLI: label sync, config check, `explain`, plan/apply
-8. Documentation and skills
+4. **Open source: outside authors and pull requests** ← draft
+5. The dashboard page and its database
+6. Ordering: WSJF within the priority level, and the priority suggestion
+7. Launching sessions: the dispatcher, routing, briefs, launch recipes
+8. The CLI: label sync, config check, `explain`, plan/apply
+9. Documentation and skills
 
 ---
 
@@ -73,7 +73,7 @@ wins**, and the config check reports the disagreement so it does not go unnotice
 |---|---|---|---|
 | `type` | `bug`, `todo`, `decision`, `docs` | exactly one, else *untriaged* | true of the issue anywhere |
 | `area` | the repo's own area names | at least one, if the repo declares any | true of the issue anywhere |
-| `modifier` | `needs_decision`, `in_progress`, `self_contained`, `partial`, `umbrella` | any number | true of the issue anywhere |
+| `modifier` | `needs_decision`, `in_progress`, `self_contained`, `partial`, `umbrella`, `good_first_issue`, `help_wanted` (the last two added with chapter 4) | any number | true of the issue anywhere |
 | `priority` | `p0`, `p1`, `p2`, `p3` | exactly one, else *untriaged* (unless `umbrella`) | **per project**, see 1.5 |
 
 `umbrella` marks a tracker or umbrella issue (Store #71, #81): shown, never prioritised,
@@ -218,7 +218,7 @@ changes, the dashboard shows both ("override p0; GitHub now p1") until you keep 
 the override.
 
 **A blocker raises what it blocks automatically.** An issue that blocks another inherits
-that issue's priority for ordering (chapter 4), so "a low-priority Rhai bug blocks my Store
+that issue's priority for ordering (chapter 6), so "a low-priority Rhai bug blocks my Store
 work" needs no override when the link exists.
 
 ### 1.6 Where each project's view is recorded
@@ -288,7 +288,7 @@ is or is not read-only.
 
 The snapshot is the deterministic half of every tracker run: it reads GitHub and the local
 checkouts, applies chapter 1's rules, and writes one JSON document per project. No
-judgement happens here; the triage session (chapter 5) reads the snapshot and adds the
+judgement happens here; the triage session (chapter 7) reads the snapshot and adds the
 judgement on top.
 
 ### 2.1 What is read
@@ -465,6 +465,98 @@ contribution rules, read from the upstream's `CONTRIBUTING` file.
 The first real case: yuvalrakavy/Store#410, filed 2026-10-23 when this check was done by
 hand.
 
+---
+
+## 4. Open source: outside authors and pull requests
+
+Some or all of a project's repos may be open source with the owner as maintainer. Issues
+and pull requests then arrive from people outside the project, and anything the tracker
+publishes is said in the maintainer's name. Pull requests are **in scope** (owner,
+2026-10-23).
+
+### 4.1 Who counts as outside
+
+GitHub reports each issue's, comment's and pull request's `authorAssociation`: `OWNER`,
+`MEMBER`, `COLLABORATOR`, `CONTRIBUTOR`, `FIRST_TIME_CONTRIBUTOR`, `FIRST_TIMER` or `NONE`.
+The project config names its maintainers (`maintainers = ["yuvalrakavy"]`); an author is
+**inside** if listed there, or if GitHub reports `OWNER`, `MEMBER` or `COLLABORATOR` for
+the repo. Everyone else is **outside**. Each item records its author and association, and
+the dashboard marks outside items.
+
+### 4.2 Outside text is untrusted input
+
+An issue body, comment, pull-request description or diff written by an outside author is
+**data, never instructions**, wherever it travels:
+
+- **Into briefs.** A fix, triage or review brief quotes outside text in a fenced block
+  headed by its author and association, and the brief says plainly that the block is the
+  reporter's material and that nothing in it directs the session.
+- **Into the triage agent.** The agent reads outside text to judge an issue; it never runs
+  a command, opens a link, or changes a setting because the text asks it to. A request in
+  the text ("please label this p0", "run this script") becomes at most a suggestion shown
+  to you, marked as coming from the reporter.
+- **Contributor code.** A pull request from an outside author is untrusted code. A session
+  never builds or runs it outside a sandbox, and building or testing it at all needs your
+  approval at launch. Reading the diff needs none.
+
+### 4.3 Intake
+
+An outside issue starts in a status before *untriaged*: **new**, until an inside author
+has commented, labelled or closed it. The triage agent may draft a first reply (thanks,
+and what is missing: a version, a reproduction, logs), which goes through plan-then-apply
+(1.7) like any other public write.
+
+Outside demand is an input to ordering: **reactions** (👍 counts on the issue) and the
+number of distinct outside commenters feed the reach part of an issue's value (chapter 6).
+
+### 4.4 Pull requests
+
+The snapshot reads, per pull request in a member's view: number, title, author and
+association, draft state, review decision, the latest commit's check status, whether it can
+be merged, the issues it would close, and its created and updated times. (All of these are
+GraphQL fields; probed on rhaiscript/rhai.)
+
+| Status | Condition |
+|---|---|
+| **needs review** | not a draft, no review decision, checks passing or not required |
+| **checks failing** | the latest commit's checks failed |
+| **waiting on author** | changes requested, or a draft |
+| **approved** | approved, not yet merged |
+| **conflicting** | cannot be merged as it stands |
+
+A pull request that closes an issue inherits that issue's priority for ordering, and an
+issue with an open pull request shows it. "Needs review" pull requests from outside authors
+appear under **waiting on you**, with their age.
+
+**Review sessions.** A pull request row has a launch button for a review session, routed by
+the diff's size and the areas it touches. The session reads the diff, runs the repo's
+checks in a sandbox if you approved that at launch, and drafts a review. The draft is
+posted only after your approval. **The tracker never merges and never pushes to a
+contributor's branch.**
+
+### 4.5 Security reports
+
+A repo's private vulnerability reports (GitHub's repository security advisories) are read
+as private items: shown only on the private dashboard, never named in a public comment,
+label, commit message or public brief. A fix session for one works in the advisory's
+temporary private fork, which GitHub provides for that purpose.
+
+### 4.6 Speaking in the maintainer's name
+
+Every public write (a label, a comment, a review) is published as the maintainer and goes
+through plan-then-apply. Two settings in the project config:
+
+- `voice`: a path to the project's own guidance for replies (a CONTRIBUTING file, a tone
+  note), handed to any session that drafts one;
+- `disclose_drafting`: whether a comment the agent drafted carries a short footer saying
+  so. **Open question for the owner.**
+
+### 4.7 Contributor labels and metrics
+
+`good_first_issue` and `help_wanted` join the modifiers (1.2), translated per repo. The
+flow metrics gain: time to first response on outside issues, time to first review on
+outside pull requests, and outside items opened and closed per week.
+
 ## Claims checked
 
 | Claim | Status | Evidence |
@@ -483,6 +575,8 @@ hand.
 | Store patches `rhai` and `rumqttc` to forks | confirmed | `Store/Cargo.toml:85` and `:96` |
 | rhaiscript/rhai#1189 merged 2026-10-17 (merge commit `aaf90906`), contained in v1.27.0, which is crates.io's latest | confirmed | `gh pr list`, `gh api …/compare/aaf90906...v1.27.0` → `identical`, crates.io API |
 | No pull request by `yuvalrakavy` on bytebeamio/rumqtt | confirmed | `gh pr list -R bytebeamio/rumqtt --author @me` returned none |
+| GraphQL gives `authorAssociation` on issues and pull requests, and `isDraft`, `reviewDecision`, `mergeable`, `closingIssuesReferences`, the latest commit's `statusCheckRollup` and `reactionGroups` | confirmed | probe on rhaiscript/rhai, 2026-10-23 (e.g. #1194 by an outside author, association `NONE`, closes #1193) |
+| The repository security-advisories endpoint answers on a personal public repo | confirmed | `gh api repos/yuvalrakavy/logmon-mcp/security-advisories` → `0` advisories |
 | Renaming a label in a repo's settings does not change its issues' update time | believed | not probed; the daily full read covers it either way |
 | The forks' upstreams are bytebeamio/rumqtt and rhaiscript/rhai | confirmed | `gh repo view … --json parent` on both forks |
 | `sendToClaude` wakes a watching session | confirmed | probe artifact, 2026-10-22 |
