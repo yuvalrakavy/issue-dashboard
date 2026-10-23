@@ -176,6 +176,21 @@ impl Root {
     ) -> Result<(R, T)> {
         let _lock = self.lock()?;
         let now = format_time(clock());
+        let (mut ledger, backup) = self.open_locked(&now)?;
+
+        let out = {
+            let mut tx = ledger.begin(&now)?;
+            let out = f(&mut tx)?;
+            tx.commit()?;
+            out
+        };
+        self.failpoint(Failpoint::AfterCommit)?;
+        backup.catch_up(&mut ledger, &now, &mut |at| self.failpoint(at))?;
+        Ok((then(self)?, out))
+    }
+
+    /// Opens the ledger once the lock is held and brings the backup up to date.
+    fn open_locked(&self, now: &str) -> Result<(Ledger, Backup)> {
         let backup = self.backup();
         // Never create an empty ledger beside a backup: that is a lost ledger, which rebuild
         // restores; opening one here would make every later command refuse until --force.
@@ -190,17 +205,26 @@ impl Root {
             return Err(crate::backup::behind(held, 0));
         }
         let mut ledger = Ledger::open(&self.ledger_path())?;
-        backup.catch_up(&mut ledger, &now, &mut |_| Ok(()))?;
+        backup.catch_up(&mut ledger, now, &mut |_| Ok(()))?;
+        Ok((ledger, backup))
+    }
 
-        let out = {
-            let mut tx = ledger.begin(&now)?;
-            let out = f(&mut tx)?;
-            tx.commit()?;
-            out
-        };
-        self.failpoint(Failpoint::AfterCommit)?;
-        backup.catch_up(&mut ledger, &now, &mut |at| self.failpoint(at))?;
-        Ok((then(self)?, out))
+    /// Holds the root lock across several transactions, for a step that calls GitHub between
+    /// them (10.9: a write's intent, the call and its result all under the lock). Each
+    /// [`Session::commit`] reads `clock`, commits and exports like a mutating command of its own.
+    pub fn session<T>(
+        &self,
+        clock: &dyn Fn() -> DateTime<Utc>,
+        f: impl FnOnce(&mut Session<'_>) -> Result<T>,
+    ) -> Result<T> {
+        let _lock = self.lock()?;
+        let (ledger, backup) = self.open_locked(&format_time(clock()))?;
+        f(&mut Session {
+            root: self,
+            ledger,
+            backup,
+            clock,
+        })
     }
 
     /// Opens the ledger for reading, without the lock. Refuses when there is no ledger yet,
@@ -354,6 +378,40 @@ impl Root {
             dropped_tail_lines: tail.cut_lines,
             moved_aside,
         })
+    }
+}
+
+/// The lock held across transactions: see [`Root::session`].
+pub struct Session<'a> {
+    root: &'a Root,
+    ledger: Ledger,
+    backup: Backup,
+    clock: &'a dyn Fn() -> DateTime<Utc>,
+}
+
+impl Session<'_> {
+    pub fn ledger(&self) -> &Ledger {
+        &self.ledger
+    }
+
+    /// One transaction: committed, then exported to the backup before this returns.
+    pub fn commit<T>(&mut self, f: impl FnOnce(&mut Tx<'_>) -> Result<T>) -> Result<T> {
+        let now = format_time((self.clock)());
+        let out = {
+            let mut tx = self.ledger.begin(&now)?;
+            let out = f(&mut tx)?;
+            tx.commit()?;
+            out
+        };
+        let root = self.root;
+        root.failpoint(Failpoint::AfterCommit)?;
+        self.backup.catch_up(&mut self.ledger, &now, &mut |at| root.failpoint(at))?;
+        Ok(out)
+    }
+
+    /// A simulated crash point between a session's steps, for tests.
+    pub fn failpoint(&self, at: Failpoint) -> Result<()> {
+        self.root.failpoint(at)
     }
 }
 

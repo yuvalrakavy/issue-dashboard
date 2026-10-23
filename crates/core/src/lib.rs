@@ -27,6 +27,7 @@ pub mod root;
 pub mod schema;
 pub mod snapshot;
 pub mod translate;
+pub mod write;
 
 pub use error::{Error, Result};
 pub use event::{Event, Kind};

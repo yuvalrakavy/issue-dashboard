@@ -3,6 +3,8 @@
 //! the last commit from a read transaction begun under the lock.
 //!
 //! 1. **ingest**: record the config, then the page documents (10.5).
+//! 1a. **write**: apply the owner's closes and their undos to GitHub (10.10), holding the lock
+//!    across each one's intent, call and result.
 //! 2. **observe**: plan from the ledger, read GitHub without the lock, record the reads under
 //!    it (chapter 2); then take the cycle's outbox sequence number in the same transaction.
 //! 3. **derive**: build the project's documents from the ledger as of that commit and write
@@ -23,6 +25,7 @@ use crate::ingest::{self, Pages};
 use crate::ledger::{Dedupe, Tx};
 use crate::root::{Root, parse_time};
 use crate::snapshot::{self, RepoReport};
+use crate::write::{self, IssueWriter, Written};
 
 /// What one cycle did.
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -30,6 +33,8 @@ pub struct CycleReport {
     pub project: String,
     pub ingest: ingest::Report,
     pub repos: Vec<RepoReport>,
+    /// The GitHub writes the cycle made or settled.
+    pub writes: Vec<Written>,
     pub sequence: i64,
     pub outbox: PathBuf,
 }
@@ -79,7 +84,7 @@ pub fn take_sequence(tx: &mut Tx<'_>, project: &str) -> Result<(i64, DateTime<Ut
     Ok((e.seq, parse_time(&taken_at)?))
 }
 
-/// One full cycle of `project`.
+/// One full cycle of `project`, without the write step: a close stays pending.
 pub fn cycle(
     root: &Root,
     gh: &dyn GitHub,
@@ -88,7 +93,24 @@ pub fn cycle(
     clock: &dyn Fn() -> DateTime<Utc>,
     page_size: u32,
 ) -> Result<CycleReport> {
+    cycle_with_writes(root, gh, None, project, pages, clock, page_size)
+}
+
+/// One full cycle of `project`; with a `writer`, the write step applies the owner's closes.
+pub fn cycle_with_writes(
+    root: &Root,
+    gh: &dyn GitHub,
+    writer: Option<&dyn IssueWriter>,
+    project: &str,
+    pages: &Pages,
+    clock: &dyn Fn() -> DateTime<Utc>,
+    page_size: u32,
+) -> Result<CycleReport> {
     let (config, ingested) = begin(root, clock, project, pages)?;
+    let writes = match writer {
+        Some(w) => root.session(clock, |s| write::step(s, w, &config, project))?,
+        None => Vec::new(),
+    };
     let plan = observe_plan(root, &config, project, clock)?;
     let fetches = snapshot::fetch(gh, &plan, clock, page_size);
     root.mutate_then_read(
@@ -105,6 +127,7 @@ pub fn cycle(
                 project: project.to_string(),
                 ingest: ingested,
                 repos,
+                writes,
                 sequence: seq,
                 outbox: path,
             })

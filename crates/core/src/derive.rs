@@ -5,7 +5,7 @@
 //! `forks` and `metrics` are written empty until the steps that produce them exist. Every
 //! document is checked against its schema before the file is written.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -17,7 +17,7 @@ use serde_json::{Value, json};
 
 use crate::config::{ConfigSet, View};
 use crate::decision::{self, Status};
-use crate::docs::{Action, DecisionValue, Priority};
+use crate::docs::{Action, Decision, DecisionValue, Priority};
 use crate::event::Kind;
 use crate::launch::{self, State};
 use crate::ledger;
@@ -26,6 +26,7 @@ use crate::root::{format_time, parse_time};
 use crate::schema;
 use crate::snapshot::{self, DEFAULT_HISTORY_DAYS};
 use crate::translate::Translation;
+use crate::write;
 use crate::{Error, Result};
 
 /// `sync_interval_minutes` when the project config does not set it (7.2).
@@ -112,6 +113,7 @@ struct Context<'a> {
     overrides: &'a BTreeMap<String, (DecisionValue, Option<String>)>,
     taken_at: DateTime<Utc>,
     stale: bool,
+    closes: &'a BTreeMap<String, Value>,
 }
 
 impl Context<'_> {
@@ -243,6 +245,7 @@ impl Context<'_> {
             "body": c.get("body").cloned().unwrap_or(Value::Null),
             "body_truncated": c.get("body_truncated").and_then(Value::as_bool).unwrap_or(false),
             "stale": self.stale,
+            "dashboard_close": self.closes.get(id).cloned().unwrap_or(Value::Null),
         }))
     }
 
@@ -295,6 +298,32 @@ fn limits(config: &ConfigSet, project: &str) -> Result<BTreeMap<Priority, u32>> 
     Ok(out)
 }
 
+/// The repo's node id: from its read state, else from any observation of it.
+fn repo_node(conn: &Connection, project: &str, repo: &str) -> Result<Option<String>> {
+    match snapshot::read_state(conn, project, repo)?.and_then(|s| s.repo_node) {
+        Some(n) => Ok(Some(n)),
+        None => snapshot::repo_node_of(conn, repo),
+    }
+}
+
+/// Why the tracker must not write to the repo (1.4), if it must not: `declared` in the config,
+/// or `no_write_access` from the viewer's permission as last read.
+pub fn read_only(conn: &Connection, project: &str, view: &View) -> Result<Option<&'static str>> {
+    if view.read_only {
+        return Ok(Some("declared"));
+    }
+    let permission = match repo_node(conn, project, &view.repo)? {
+        Some(n) => observed(conn, &n)?.and_then(|o| {
+            o.content
+                .get("viewer_permission")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        }),
+        None => None,
+    };
+    Ok(matches!(permission.as_deref(), Some("READ" | "TRIAGE" | "NONE")).then_some("no_write_access"))
+}
+
 /// The read state of one configured repo, for `meta` (2.5).
 fn repo_meta(
     conn: &Connection,
@@ -304,10 +333,7 @@ fn repo_meta(
     taken_at: DateTime<Utc>,
 ) -> Result<(Value, Option<String>, bool)> {
     let state = snapshot::read_state(conn, project, &view.repo)?;
-    let node = match state.as_ref().and_then(|s| s.repo_node.clone()) {
-        Some(n) => Some(n),
-        None => snapshot::repo_node_of(conn, &view.repo)?,
-    };
+    let node = repo_node(conn, project, &view.repo)?;
     let good_at = state.as_ref().and_then(|s| s.good_at.clone());
     let error = state.as_ref().and_then(|s| s.error.clone());
     let stale = error.is_some()
@@ -315,21 +341,14 @@ fn repo_meta(
             None => true,
             Some(g) => taken_at - parse_time(g)? > Duration::minutes(2 * sync_minutes as i64),
         };
-    let permission = match &node {
-        Some(n) => observed(conn, n)?.and_then(|o| {
-            o.content
-                .get("viewer_permission")
-                .and_then(Value::as_str)
-                .map(str::to_string)
-        }),
-        None => None,
+    let read_only = match read_only(conn, project, view)? {
+        Some(why) => json!({"value": true, "why": why}),
+        None => json!({"value": false, "why": null}),
     };
-    let read_only = if view.read_only {
-        json!({"value": true, "why": "declared"})
-    } else if matches!(permission.as_deref(), Some("READ" | "TRIAGE" | "NONE")) {
-        json!({"value": true, "why": "no_write_access"})
-    } else {
-        json!({"value": false, "why": null})
+    let visibility = match &node {
+        Some(n) => observed(conn, n)?
+            .and_then(|o| o.content.get("visibility").and_then(Value::as_str).map(str::to_string)),
+        None => None,
     };
     let mut m = json!({
         "repo": view.repo,
@@ -338,6 +357,7 @@ fn repo_meta(
         "error": error,
         "stale": stale,
         "read_only": read_only,
+        "visibility": visibility,
     });
     if let Some(n) = &node {
         m["id"] = json!(n);
@@ -359,8 +379,10 @@ fn acks(conn: &Connection, project: &str, taken_at: DateTime<Utc>) -> Result<Vec
             .find(|e| e.data.get("transition").and_then(Value::as_str) == Some("withdrawn"))
             .and_then(|e| e.data.get("decision").and_then(Value::as_str).map(str::to_string)))
     };
+    let resolved = decision::resolved(conn, project)?;
+    let by_id: HashMap<String, Decision> = resolved.iter().map(|(_, d, _)| (d.id.clone(), d.clone())).collect();
     let mut out = Vec::new();
-    for (seq, d, status) in decision::resolved(conn, project)? {
+    for (seq, d, status) in resolved {
         // The cycle that consumed it: the first outbox of the project after it was recorded.
         let Some((cycle, at)) = outboxes.iter().find(|(s, _)| *s > seq) else {
             continue;
@@ -368,7 +390,11 @@ fn acks(conn: &Connection, project: &str, taken_at: DateTime<Utc>) -> Result<Vec
         if taken_at - *at > Duration::days(ACK_DAYS) {
             continue;
         }
-        let (result, reason) = match status {
+        let (result, reason) = match write::ack(conn, &d, &status, &by_id)? {
+            // A close still waiting for its write: no ack yet.
+            Some(None) => continue,
+            Some(Some((result, reason))) => (result, reason),
+            None => match status {
             Status::Applied if d.action == Action::CancelLaunch => {
                 let target = d.target.launch.clone().unwrap_or_default();
                 match launches.get(&target) {
@@ -387,6 +413,7 @@ fn acks(conn: &Connection, project: &str, taken_at: DateTime<Utc>) -> Result<Vec
             Status::Applied => ("applied", None),
             Status::Refused { reason } => ("refused", Some(reason)),
             Status::Cancelled { by } => ("cancelled", Some(format!("undone by {by}"))),
+            },
         };
         let mut ack = json!({"id": d.id, "decision": d.id, "cycle": cycle, "result": result});
         if let Some(r) = reason.filter(|r| !r.is_empty()) {
@@ -456,6 +483,7 @@ pub fn derive(
     let project_priorities = decision::project_priorities(conn, project)?;
     let overrides: BTreeMap<String, (DecisionValue, Option<String>)> = decision::overrides(conn, project)?;
     let window = taken_at - Duration::days(history_days as i64);
+    let closes = write::standing_closes(conn, project)?;
 
     let mut repos = Vec::new();
     let mut issues = Vec::new();
@@ -476,6 +504,7 @@ pub fn derive(
             overrides: &overrides,
             taken_at,
             stale,
+            closes: &closes,
         };
         for id in members.all() {
             let Some(o) = observed(conn, &id)? else { continue };
