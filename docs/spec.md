@@ -32,15 +32,21 @@ it (an upstream like Rhai).
 **Non-goals:** a multi-user tool; tracking anything but GitHub issues; replacing
 GitHub as the record of the issues themselves.
 
+**Requirement under design (2026-10-23):** some or all of a project's repos may be **open
+source with the owner as maintainer**, so issues arrive from people outside the project.
+Its design is a chapter of its own, not yet written; chapters 1-3 must not assume every
+issue author is the owner.
+
 ## Chapters
 
-1. **Configuration, translation and priority** ← this draft
-2. The snapshot: what is read, what is derived, the JSON it writes
-3. The dashboard page and its database
-4. Ordering and the priority suggestion
-5. Launching sessions: the dispatcher, routing, briefs, launch recipes
-6. The CLI: label sync, config check, `explain`, plan/apply
-7. Documentation and skills
+1. Configuration, translation and priority — **approved 2026-10-23**
+2. **The snapshot: what is read, what is derived, the JSON it writes** ← draft
+3. **Upstream forks** ← draft
+4. The dashboard page and its database
+5. Ordering and the priority suggestion
+6. Launching sessions: the dispatcher, routing, briefs, launch recipes
+7. The CLI: label sync, config check, `explain`, plan/apply
+8. Documentation and skills
 
 ---
 
@@ -249,11 +255,11 @@ fight.
 ### 1.8 Issue identity and links
 
 Every issue is `owner/repo#N` in the tracker, the state files and the database. Links
-between issues come from GitHub's own sub-issue and blocked-by relationships where the
-repo has them, and otherwise from `blocked by #N` / `blocked by owner/repo#N` in an issue's
-body or comments. Whether personal repos have the native relationships is **unverified**:
-a probe before chapter 2 decides which is primary. A link to a repo in no project is kept
-and shown as external.
+between issues come from **GitHub's own sub-issue and blocked-by relationships first**,
+and from `blocked by #N` / `blocked by owner/repo#N` in an issue's body or comments as a
+fallback (probe, 2026-10-23: the native relationships are available on personal repos and
+unused so far; see chapter 2). A link to a repo in no project is kept and shown as
+external.
 
 ### 1.9 The config check and `explain`
 
@@ -276,7 +282,190 @@ reached: which label translated to which type and area, whether the filter or `a
 included the issue, which priority source won (and what the others say), and why the repo
 is or is not read-only.
 
-## Claims checked while writing this chapter
+---
+
+## 2. The snapshot
+
+The snapshot is the deterministic half of every tracker run: it reads GitHub and the local
+checkouts, applies chapter 1's rules, and writes one JSON document per project. No
+judgement happens here; the triage session (chapter 5) reads the snapshot and adds the
+judgement on top.
+
+### 2.1 What is read
+
+**From GitHub, per member repo** (GraphQL, through `gh api graphql`):
+
+| Read | Used for |
+|---|---|
+| repo: visibility, the account's permission (`viewerPermission`), the label list | forced read-only (1.4), the public-comment warning, label sync |
+| issues matching the member's view: the tracker's own `repo:` and `is:issue` qualifiers + `filter`, plus each issue in `also` | the issue set |
+| per issue: number, title, state and close reason, author, assignees, labels, created / updated / closed times, comment count, body | translation, status, aging, the structured filing block |
+| per issue: the timeline's labelled / unlabelled events for priority labels | the "more recent change wins" rule (1.5) |
+| per issue: `parent`, `subIssues`, `blockedBy`, `blocking` | the link graph (1.8), across repos |
+| comments, only for issues whose body or comments may hold a text link or a filing block | the text-link fallback |
+
+**Closed issues are read too**, back to a window set in the project config
+(`history_days`, default 180), because the flow metrics need what closed, not only what
+is open.
+
+**From each local checkout** (when the registry gives a `local_path`): `git log` of the
+default branch, for commits that mention an issue (`#N`, `owner/repo#N`, `fixes #N`), and
+the dependency manifests for chapter 3.
+
+### 2.2 Incremental by default
+
+A run asks GitHub only for issues updated since the previous run (`updated:>` the stored
+time, per repo, minus a five-minute overlap so a change landing during the last run is
+not missed). That keeps a run cheap enough to repeat every few minutes, which keeps the
+dashboard fresh and shrinks the window in which a GitHub edit and a tracker edit collide.
+
+A **full read** replaces the incremental one: on a repo's first run, after its filter or
+`also` changes (an incremental read cannot notice an issue that now falls out of the
+filter), after the repo's translation changes, and once a day. The daily read also catches
+what does not move an issue's update time: an issue transferred or deleted, and a label
+renamed in the repo's settings.
+
+A number in `also` that is a pull request, not an issue, or that does not exist, is
+reported by the config check and skipped, never silently treated as an issue.
+
+### 2.3 What is derived
+
+| Derived value | Rule |
+|---|---|
+| canonical type, areas, modifiers | translation (1.3), with untranslated labels listed per repo |
+| priority and its source | the three sources in order (1.5), plus every source's value for `explain` |
+| status | `untriaged` (an axis missing), `needs-decision`, `in-progress`, `blocked` (an open blocker), else `ready`; `umbrella` issues carry `umbrella` instead |
+| age and idle time | from created and updated times |
+| time-limit breach | idle time against the project's limit for the issue's priority |
+| link graph | native relationships first, text links second, with the source of each edge recorded |
+| "waiting on you" | issues with `needs-decision`, plans awaiting approval (1.7), overrides gone out of date (1.5), GitHub-side changes awaiting a decision in a shared repo (1.5) |
+| commits mentioning an open issue | from `git log`; the input to the triage session's "fixed but still open?" check |
+| flow | per week: opened, closed (completed / not planned), net, per repo and for the project |
+
+### 2.4 What is written
+
+`<root>/state/<project>/snapshot.json`, replaced on each run, and a copy per day under
+`<root>/state/<project>/history/YYYY-MM-DD.json` so metrics can be recomputed and compared
+over time. The document is sorted (repos by name, issues by number) so two runs over the
+same data produce identical bytes and a git diff shows only what changed.
+
+```json
+{
+  "schema": 1,
+  "project": "Villa Rakavy home automation",
+  "taken_at": "2026-10-23T08:00:00Z",
+  "repos": [
+    {
+      "repo": "yuvalrakavy/Store",
+      "read_at": "2026-10-23T08:00:00Z",
+      "read": "incremental",
+      "error": null,
+      "visibility": "private",
+      "read_only": { "value": false, "why": null },
+      "untranslated_labels": [],
+      "issues": [
+        {
+          "id": "yuvalrakavy/Store#403",
+          "title": "DeleteStore parks in remove_dir_all openat and the whole server stops answering",
+          "state": "open",
+          "type": "bug",
+          "areas": ["kernel"],
+          "modifiers": [],
+          "priority": { "value": "p0", "source": "label", "label": "p0", "project": null, "override": null },
+          "status": "ready",
+          "created_at": "…", "updated_at": "…", "idle_days": 1,
+          "limit_breached": false,
+          "links": { "blocked_by": [], "blocks": [], "parent": null, "children": [] },
+          "commits": []
+        }
+      ]
+    }
+  ],
+  "waiting_on_you": [],
+  "flow": []
+}
+```
+
+### 2.5 When a read fails
+
+A repo that cannot be read (network, rate limit, a renamed repo) records `error` and keeps
+its **last good issues, marked with the time they were read**. The dashboard shows that
+repo as stale rather than empty. A failed read never removes issues, because an empty repo
+and an unreadable one must not look the same. The run still writes the other repos.
+
+### 2.6 Testing seam
+
+All GitHub access goes through one `GitHub` trait, with two implementations: the real one,
+and a replay one that serves **recorded real responses** captured from Store, airzoned and
+Rhai. Translation, filtering, status, priority resolution and the incremental merge are
+tested against those recordings, so the tests see GitHub's real label spellings, missing
+fields and case differences rather than what a hand-written fixture assumes.
+
+---
+
+## 3. Upstream forks
+
+A member repo sometimes builds against a **fork** of an upstream project, because a fix it
+needs is not released yet. This chapter makes the tracker notice when it can go back to a
+released version, and the risk of staying on the fork in the meantime.
+
+### 3.1 Finding forks
+
+For each member repo with a local checkout, the tracker reads its dependency manifests and
+lists every dependency served from a git repository instead of the package registry.
+Cargo is the first reader (`Cargo.toml`, including `[patch.*]` sections, and
+`Cargo.lock` for the resolved revision); others (npm, pip) can be added as further readers
+without changing anything else.
+
+Which git sources count as forks is configuration, not code: the registry lists the
+owners whose repos are forks (`[forks] owners = ["yuvalrakavy"]`), and each fork may name
+its upstream when the name differs (`[fork."yuvalrakavy/rumqtt"] upstream =
+"bytebeamio/rumqtt"`). Otherwise the upstream is the repo the fork was created from, as
+GitHub reports it.
+
+### 3.2 Linking a fork to its upstream fix
+
+In this order:
+
+1. issue and pull-request links in the comment block directly above the dependency line
+   (Store's do this today: the rhai patch names rhaiscript/rhai#1188 and #1189);
+2. an entry in the registry (`[fork."yuvalrakavy/rhai"] fixes = ["rhaiscript/rhai#1189"]`);
+3. otherwise, the commits on the fork's pinned revision that are not in the upstream's
+   history, each checked for an upstream pull request containing it.
+
+### 3.3 The states
+
+| State | Condition | The dashboard shows |
+|---|---|---|
+| **Not offered upstream** | a fork commit is in no upstream pull request | "rumqttc: 1 local fix never sent upstream", with a launch button for a session that prepares the pull request |
+| **Under review** | the fix pull request is open | the pull request and how long it has been open |
+| **Merged, unreleased** | merged, and no release tag contains the merge commit | "merged on …, waiting for a release" |
+| **Released** | a release tag contains the merge commit **and** that version is published on the package registry | **"Can go back to rhai 1.27.0: it contains rhai#1189"**, with a launch button |
+| **Back on the release** | the manifest no longer uses the fork | removed from the list |
+
+"Contains" is checked with GitHub's compare API between the merge commit and the release
+tag. A release counts only once the registry has it, because a tag alone cannot be built
+against.
+
+### 3.4 The risk of staying on a fork
+
+A fork is pinned to an old base, so every upstream release after that base carries fixes
+the fork lacks. For each fork the dashboard also shows **how far behind its base is**
+("based on 1.26.1; latest is 1.27.0, 1 release behind"), and flags a release that is
+marked as a security fix (a GitHub security advisory against the package).
+
+### 3.5 What a launch carries
+
+The "go back" brief names the consumer repo, the manifest line and its comment, the version
+change it implies (going back is usually also an upgrade, as with rhai 1.26.1 to 1.27.0),
+the upstream release notes to read, and the tests the comment says must stay green. The
+"send it upstream" brief names the fork commit, the upstream repo, and that repo's own
+contribution rules, read from the upstream's `CONTRIBUTING` file.
+
+The first real case: yuvalrakavy/Store#410, filed 2026-10-23 when this check was done by
+hand.
+
+## Claims checked
 
 | Claim | Status | Evidence |
 |---|---|---|
@@ -287,5 +476,13 @@ is or is not read-only.
 | No open Rhai issue is authored by `yuvalrakavy`, so the example filter matches nothing today and the `also` numbers are placeholders | confirmed | `gh issue list -R rhaiscript/rhai --author yuvalrakavy` returned none |
 | GitHub label names are unique case-insensitively | confirmed | probe on this repo: `BUG` beside `bug`, and `probe-case` beside `Probe-Case`, both refused as "already exists" |
 | Seven of the 11 active repos are public | confirmed | `gh repo list` |
-| GitHub has native sub-issues and blocked-by links on personal repos | **unverified** | probe before chapter 2 |
+| GitHub's native sub-issues and blocked-by links work on personal repos | confirmed | probe 2026-10-23: the REST `sub_issues` and `dependencies/blocked_by` endpoints and the GraphQL `parent`, `subIssues`, `blockedBy`, `blocking` fields all answer on yuvalrakavy/Store (all empty: unused so far) |
+| Native links can cross repos | **unverified** | not probed: needs two test issues; probe before building 2.1 |
+| Repo-level issue types are not available on personal repos | confirmed | GraphQL `issueTypes` returns `null` on yuvalrakavy/Store |
+| 7 Store issues contain "blocked by" in their text, none of them open | confirmed | `gh search issues --repo yuvalrakavy/Store "blocked by"` |
+| Store patches `rhai` and `rumqttc` to forks | confirmed | `Store/Cargo.toml:85` and `:96` |
+| rhaiscript/rhai#1189 merged 2026-10-17 (merge commit `aaf90906`), contained in v1.27.0, which is crates.io's latest | confirmed | `gh pr list`, `gh api …/compare/aaf90906...v1.27.0` → `identical`, crates.io API |
+| No pull request by `yuvalrakavy` on bytebeamio/rumqtt | confirmed | `gh pr list -R bytebeamio/rumqtt --author @me` returned none |
+| Renaming a label in a repo's settings does not change its issues' update time | believed | not probed; the daily full read covers it either way |
+| The forks' upstreams are bytebeamio/rumqtt and rhaiscript/rhai | confirmed | `gh repo view … --json parent` on both forks |
 | `sendToClaude` wakes a watching session | confirmed | probe artifact, 2026-10-22 |
