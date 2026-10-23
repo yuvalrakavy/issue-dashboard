@@ -1002,7 +1002,7 @@ does not go through this seam.
 
 | Job | What it is | When |
 |---|---|---|
-| **Sync** | a scheduled Claude task on the smallest model: reads the page documents from the dashboard database, runs `issue-dashboard cycle` on them (10.4), then writes the cycle's outbox back in one pinned batch (10.6) | every `sync_interval` (default 5 min); this is the cycle that applies your decisions |
+| **Sync** | a scheduled Claude task on the smallest model: reads the page documents from the dashboard database, runs `issue-dashboard cycle` on them (10.4), then publishes the cycle's outbox as a new generation (10.6) | every `sync_interval` (default 5 min); this is the cycle that applies your decisions |
 | **Triage** | a Claude session: reads the snapshot, makes suggestions through the decision seam, checks claims against the code, groups defect classes and batches, and records all of it with `record-suggestions`; it applies nothing (10.4) | daily, and on demand from the dashboard |
 | **Dispatcher** | a long-lived Claude session watching each project's dashboard | always on while you want launches to work |
 
@@ -1348,16 +1348,20 @@ stamped with the cycle's sequence number, plus the acknowledgements of the decis
 consumed (the `acks` collection: decision id → cycle). **The tracker never edits a page
 document**; the page shows a decision as pending until its ack arrives.
 
-The sync job publishes an outbox only if it is newer than what the page shows:
+An outbox is larger than one database batch can carry (a batch holds at most 50 documents),
+so it is published as an **immutable generation** and switched on by one pinned write:
 
-1. read the `meta` document, which records the published sequence;
+1. read the `meta` document, which names the active generation and its sequence;
 2. if the outbox's sequence is not greater, stop: a newer one is already published;
-3. otherwise write the whole outbox as one batch in which **every entry**, `meta` included,
-   is pinned to the version just read, with documents no longer present written as deletions.
+3. write the outbox's documents under `gen-<seq>/…`, in as many batches as needed; nothing
+   reads them yet;
+4. write `meta` alone, pinned to the version read in step 1, naming `gen-<seq>` as active;
+5. delete the generation that was active before, once the switch has succeeded.
 
-A batch whose entries are all pinned is applied all or nothing, so two overlapping syncs
-cannot interleave, and an older outbox can never replace a newer one: either it sees the newer
-sequence at step 2, or its pinned batch fails because the newer one changed `meta`.
+The page reads only the generation `meta` names, so it never sees half an outbox. Two
+overlapping syncs cannot both switch: the second's pinned write in step 4 fails because the
+first changed `meta`, and an older outbox is stopped at step 2 or step 4. A sync that dies
+after step 3 leaves an unused generation, which the next successful sync deletes.
 
 Launch status shown on the page lives in a tracker-owned `launch_status` collection; the
 page's own `launches` documents are requests and are never changed after they are written.
