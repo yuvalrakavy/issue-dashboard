@@ -1,0 +1,23 @@
+{
+  "name": "issues_since",
+  "response": {
+    "data": {
+      "repository": {
+        "issues": {
+          "nodes": [],
+          "pageInfo": {
+            "endCursor": null,
+            "hasNextPage": false
+          }
+        }
+      }
+    }
+  },
+  "variables": {
+    "after": null,
+    "first": 25,
+    "name": "rhai",
+    "owner": "rhaiscript",
+    "since": "2026-10-23T10:31:54.559Z"
+  }
+}

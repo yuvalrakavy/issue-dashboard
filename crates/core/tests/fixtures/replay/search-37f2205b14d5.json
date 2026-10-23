@@ -1,0 +1,20 @@
+{
+  "name": "search",
+  "response": {
+    "data": {
+      "search": {
+        "issueCount": 0,
+        "nodes": [],
+        "pageInfo": {
+          "endCursor": null,
+          "hasNextPage": false
+        }
+      }
+    }
+  },
+  "variables": {
+    "after": null,
+    "first": 25,
+    "q": "repo:yuvalrakavy/Store is:pr is:open label:kernel"
+  }
+}

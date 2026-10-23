@@ -1,0 +1,3281 @@
+{
+  "name": "nodes",
+  "response": {
+    "data": {
+      "nodes": [
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "Noticed while auditing `FilterSet` handlers for the mandatory-value-removal design\n(deferring `DeleteNonOptionalProperty` to the commit boundary). It is **pre-existing\nbehaviour, unrelated to that change** — filing separately so it is not folded into a\nT3 kernel diff.\n\n## Observed\n\n`AirConditionGroup` carries five fan-down handlers of this shape\n(`data/frameworks/ha/schemas/HA/equipment/ac_defs.sdl:202-231`):\n\n```\non FilterSet(PowerState) {\n    let units = self.children_of_type(\"#Equipment/AirConditionUnit\");\n    add(|| { for u in units { u.PowerState = value; } })\n}\n```\n\n…and the same for `TargetTemperature`, `FanSpeed`, `Mode`, `Swing`.\n\nAll five properties are **optional**:\n- `PowerState: Boolean?` — `data/frameworks/ha/schemas/HA/component/power_and_dimmer.sdl:6`\n- `TargetTemperature: Temperature?` — `data/frameworks/ha/schemas/HA/component/temperature.sdl:15`\n- `FanSpeed: Enum?` / `Mode: Enum?` / `Swing: Enum?` — `data/frameworks/ha/schemas/HA/component/ac_control.sdl:20,25,38`\n\n`FilterSet` fires on an UNSET of an optional property, and the `value` a handler\nreceives is the property's **default**, not `()`:\n- dispatch decision: `store_server/src/command/set_property.rs:1300-1318` — for a\n  clear (`new_value == None`), `observed` is set to `get_default_property_value(...)`\n- that helper falls back to the **natural** default when no explicit default is\n  declared — `Boolean -> false`, `Int -> 0`, `Double -> 0.0`, `String -> \"\"`:\n  `shared/src/api.rs:1646-1652`\n\nSo unsetting `PowerState` on a group appears to dispatch `FilterSet(PowerState)` with\n`value == false`, whose handler then queues a companion writing `false` to every\n`AirConditionUnit` child — i.e. clearing the group's value would turn every unit off,\nrather than clearing the units or doing nothing.\n\n## Expected\n\nUnclear, and that is the question. Plausible intents:\n1. an unset on the group should fan an **unset** down, not a default;\n2. an unset on the group should fan nothing down;\n3. the current behaviour is intended and a group unset is simply never done.\n\nNote the neighbouring `FilterSet(HvacPlant)` handler (`ac_defs.sdl:233-251`) documents\nthe reference case deliberately: a reference CLEAR does not fire `FilterSet` (the kernel\nroutes it via `FilterRefRemoved`), so its unset fans post-commit via `PropertyChanged`.\nThe scalar properties have no equivalent note, which is what makes the intent ambiguous.\n\n## Confirmed\n\n- The five handlers exist with the quoted shape — `ac_defs.sdl:202-231`.\n- All five properties are declared optional at the cited lines.\n- `FilterSet` receives the property default (natural default when none is declared) on a\n  clear — `set_property.rs:1300-1318`, `api.rs:1646-1652`.\n\n## Hypotheses — UNVERIFIED, do not trust\n\n- That the fan-down of a default on unset is **undesired**. Not established: it may be\n  intended, or unreachable in practice.\n- **This was never executed.** No test drives a group-level unset; the reasoning above is\n  from reading the dispatch code, not from observing a transaction. Reproduce first —\n  unset `PowerState` on an `AirConditionGroup` with unit children and observe whether the\n  units are written — before treating any of this as a defect.\n- If it reproduces, decide the intent (1/2/3 above) before changing anything: the fix for\n  each is different, and option 3 wants a comment rather than code.\n",
+          "closedAt": null,
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-08-18T11:30:21Z"
+              },
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-08-18T18:18:26Z"
+              }
+            ],
+            "totalCount": 2
+          },
+          "createdAt": "2026-08-08T10:00:18Z",
+          "id": "I_kwDONszNXs8AAAABL84o8g",
+          "labels": {
+            "nodes": [
+              {
+                "name": "design-question"
+              },
+              {
+                "name": "p3"
+              },
+              {
+                "name": "sdl"
+              }
+            ],
+            "totalCount": 3
+          },
+          "milestone": null,
+          "number": 108,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "OPEN",
+          "stateReason": null,
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABL84o8s8AAAAGydWW0w"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABL84o8s8AAAAGydWW7w"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABL84o8s8AAAAGydWXFA"
+              }
+            ]
+          },
+          "title": "AirConditionGroup FilterSet fan-downs push a default value on unset",
+          "updatedAt": "2026-08-18T18:18:26Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "## Observed\n\nSDL MQTT drivers (ynca, coolmaster, airzone) are exercised either against live bridges/daemons or not at all — driver logic has no in-corpus coverage that runs without an external process. (Was chip `task_de71de5e`; strategy sketch in session memory `project_mqtt_test_strategy`.)\n\n## Expected\n\nDriver `.tests` that run in the standard corpus with no external daemon: a reactive SDL bridge-emulator inside the test store subscribes to the driver's command topics and answers with retained state, so config-by-intent, retained-truth sweeps, and echo-suppression paths are all exercised.\n\n## Confirmed\n\n(empty — this is a strategy item; nothing has been built or measured)\n\n## Hypotheses — UNVERIFIED, do not trust\n\n- The emulator-store pattern from `docs/guides/mqtt-bridge-contract.md` (emulator-store test strategy section) may already be most of the design — check it before designing fresh.\n- The per-lane mosquitto broker (dev-tracks, 2026-07-17) removes the shared-broker pollution objection that originally deferred this.\n",
+          "closedAt": null,
+          "comments": {
+            "nodes": [],
+            "totalCount": 0
+          },
+          "createdAt": "2026-08-01T10:33:50Z",
+          "id": "I_kwDONszNXs8AAAABLDRZzA",
+          "labels": {
+            "nodes": [
+              {
+                "name": "todo"
+              },
+              {
+                "name": "p3"
+              },
+              {
+                "name": "drivers"
+              },
+              {
+                "name": "harness"
+              }
+            ],
+            "totalCount": 4
+          },
+          "milestone": null,
+          "number": 8,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "OPEN",
+          "stateReason": null,
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABLDRZzM8AAAAGtZINRw"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABLDRZzM8AAAAGtZINZQ"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABLDRZzM8AAAAGtZINgQ"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABLDRZzM8AAAAGtZINlQ"
+              }
+            ]
+          },
+          "title": "Bridge-less MQTT driver testing: reactive SDL bridge-emulator in the test store",
+          "updatedAt": "2026-08-01T10:33:50Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "## Observed\n\nAdd a design-rule check that catches gadgets hidden behind opaque siblings — the class of bug the Layer=\"TopMost\" fix exposed, which current rules (size/font/contrast/scaling) miss entirely.\n\n## Detail (verbatim from the chip filed 2026-05-17, id `None`)\n\nDesign and implement a new design-rule check that detects a gadget being visually occluded (hidden behind) an opaque sibling.\n\nContext: The `Layer=\"TopMost\"` bug (fixed in commit a3f1408a) — an auth-screen error Label was fully painted but hidden behind opaque PIN-dot frames drawn on top of it — was NOT caught by the existing design-rule assertions. The rule catalog (`store_test/src/test/rule_check/`) only checks intrinsic per-gadget properties: button size, font size, on-screen, contrast, scaling. There is no concept of one gadget occluding another. `rule_check/` has zero references to occlusion/overlap/z-order.\n\nThe catchable version is z-aware: flag when an opaque gadget paints over a visible text gadget that has nothing of the text gadget's own subtree on top. A naive \"gadgets overlap\" rule would false-positive on intentional overlapping layouts (like the auth screen, where the error label is *meant* to overlap the PIN cells — it just needs to win z-order). So the rule must use the StateDump's paint/z order: an occlusion violation is \"text gadget T is fully covered by opaque gadget(s) painted after T, and no descendant of T is painted after those.\"\n\nRelevant files:\n- `store_test/src/test/rule_check/` — rule kinds live here (contrast.rs, evaluator.rs, registry.rs, violation.rs, scaling.rs, mod.rs).\n- `tests/rules.toml` — rule-set registry.\n- StateDump `gadgets.json` — per-gadget `bounds` `[x,y,w,h]`, `fill_color`, `visible`, `parent_index`, and emission order (which now reflects z-order after commit a3f1408a — the renderer stable-sorts layout entries by z_order).\n- Design-rule spec: `docs/superpowers/specs/2026-05-14-design-rule-assertions-design.md`; guide section in `docs/guides/store-test.md` §\"Design-rule assertions\".\n\nUse the `staged-design-review` skill — this is a new rule-check feature that warrants a spec. Include the gadgets.json paint-order semantics, false-positive avoidance, and a two-flavor test set (verification + adversarial probes).\n\n## Confirmed\n\n(empty — this was migrated from a chip and its claims have NOT been re-grounded against the current tree)\n\n## Hypotheses — UNVERIFIED, do not trust\n\n- Everything above reflects what was believed on 2026-05-17. Chip claims DECAY: across one earlier chip-clearing span ~6 of ~7 were wrong as written (shrunk / redirected / already-done / widened).\n- **This may already be fixed.** Re-ground before doing any work: reproduce the problem, enumerate the real state, confirm the scope. If already done, close as `completed` citing the commit.\n",
+          "closedAt": null,
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-08-01T11:06:40Z"
+              }
+            ],
+            "totalCount": 1
+          },
+          "createdAt": "2026-08-01T10:47:06Z",
+          "id": "I_kwDONszNXs8AAAABLDUTqQ",
+          "labels": {
+            "nodes": [
+              {
+                "name": "todo"
+              },
+              {
+                "name": "p3"
+              },
+              {
+                "name": "harness"
+              }
+            ],
+            "totalCount": 3
+          },
+          "milestone": null,
+          "number": 12,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "OPEN",
+          "stateReason": null,
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABLDUTqc8AAAAGtZVtwA"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABLDUTqc8AAAAGtZVt-Q"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABLDUTqc8AAAAGtZVuOw"
+              }
+            ]
+          },
+          "title": "Add z-aware occlusion design rule",
+          "updatedAt": "2026-08-01T11:06:40Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "## Observed\n\nCreate a per-test killable MQTT broker fixture so bridge reconnect behavior becomes testable, enable the deferred broker-bounce tests in mqtt_ynca and mqtt_mdns, and give the retained-topic cleanup tool a permanent home.\n\n## Detail (verbatim from the chip filed 2026-06-12, id `task_fbd927bb`)\n\nThree MQTT bridge test suites defer broker-bounce/reconnect tests because they run against a shared long-lived broker at localhost:1883 that cannot be killed mid-test: mqtt_ynca (~/Documents/Projects/Home/mqtt_ynca — deferred probe A6 in tests/adversarial.rs; see also §7 of the spec in the Store repo at ~/Documents/Projects/Store/docs/superpowers/specs/2026-06-12-ynca-bridge-design.md), mqtt_mdns (~/Documents/Projects/Home/mqtt_mdns — deferred broker-bounce test noted in its repo/spec), and the Store-side .tests suites.\n\nTask: implement a small test-support helper in mqtt_ynca that spawns a throwaway MQTT broker per test — mosquitto subprocess on a random free port (`mosquitto -p <port>` with a minimal config allowing anonymous), handle kept in a guard struct whose Drop kills it, plus explicit kill()/restart() methods so a test can bounce the broker mid-test. Per fleet convention, DUPLICATE this ~60-line helper into each bridge repo rather than extracting a shared crate (user feedback: shared crates are for protocol contracts only).\n\nProve it by implementing the deferred A6 broker-bounce probe in mqtt_ynca tests/adversarial.rs: start bridge + emulator against the disposable broker, kill the broker, restart it on the same port, assert the bridge reconnects (rumqttc v5 auto-reconnect), re-asserts retained Active/Status/State topics, and that the retained-truth sweep behaves (configs redelivered → receivers kept). Then copy the helper to mqtt_mdns and enable its deferred broker-bounce test similarly.\n\nStretch (optional, separate commit): give the one-off retained-topic cleaner a home — a tiny `mqtt-clean` bin (connect, subscribe '<root>/#', republish empty retained on every retained topic under the root) either as a bin target in one bridge repo or a standalone ~/Documents/Projects/Home tool. A scratch version existed at /tmp/claude/mqtt_clean (may be gone; it's ~50 lines to rewrite with rumqttc v5).\n\nAll builds/tests in the Home repos need cargo; brokers: check `which mosquitto` first (brew install mosquitto if absent — ask the user before installing).\n\n## Confirmed\n\n(empty — this was migrated from a chip and its claims have NOT been re-grounded against the current tree)\n\n## Hypotheses — UNVERIFIED, do not trust\n\n- Everything above reflects what was believed on 2026-06-12. Chip claims DECAY: across one earlier chip-clearing span ~6 of ~7 were wrong as written (shrunk / redirected / already-done / widened).\n- **This may already be fixed.** Re-ground before doing any work: reproduce the problem, enumerate the real state, confirm the scope. If already done, close as `completed` citing the commit.\n",
+          "closedAt": null,
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-08-01T11:06:43Z"
+              }
+            ],
+            "totalCount": 1
+          },
+          "createdAt": "2026-08-01T10:47:11Z",
+          "id": "I_kwDONszNXs8AAAABLDUVCw",
+          "labels": {
+            "nodes": [
+              {
+                "name": "todo"
+              },
+              {
+                "name": "p2"
+              },
+              {
+                "name": "drivers"
+              },
+              {
+                "name": "harness"
+              }
+            ],
+            "totalCount": 4
+          },
+          "milestone": null,
+          "number": 16,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "OPEN",
+          "stateReason": null,
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABLDUVC88AAAAGtZVz2A"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABLDUVC88AAAAGtZVz8g"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABLDUVC88AAAAGtZV0Gg"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABLDUVC88AAAAGtZV0Ow"
+              }
+            ]
+          },
+          "title": "Build disposable-broker fixture for MQTT bridge tests",
+          "updatedAt": "2026-08-01T11:06:43Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "## Observed\n\nInvestigate and fix the ht_server script cache serving screens for renamed/deleted panels, which wedges the panel's navigation stack, and add a regression test.\n\n## Detail (verbatim from the chip filed 2026-07-04, id `task_719f7548`)\n\nIn the Store repo (/Users/yuval/Documents/Projects/Store): pi_1 (TLV) was found serving a cached MainScreen script for /Home/Apartment/Master/TouchPanel/Screens/MainScreen — a logical panel path that no longer exists (the panel was renamed to TouchPanelEnterence at some point). The ht_server server-side script cache (and/or renderer script cache) replayed the stale entry on every reload/back-navigation, so the renderer's nav stack never returned to depth 1 and the panel showed a Back button instead of the language button on its own home screen (BackButton/ChangeLanguageButton visibility = IsTopScreen() = nav_stack_len() <= 1; see data/frameworks/hometouch/panel_scripts/Include/ScreenLayout.xml:568/608 and hometouch_renderer/src/render_thread.rs:367). Recovery was manual: HomeTouchPanel.InvalidateCache trigger + Restart.\n\nTask: make script-cache entries rename/delete-safe. Investigate ht_server/src/script_pipeline.rs cache keying (cache keys embed object PATHS, which go stale on rename — objects have stable ObjectIds) and add invalidation when a TouchPanel (or any ancestor of a cached screen path) is renamed/deleted — or key/validate cache entries by ObjectId so a stale-path entry misses instead of replaying. Add a regression test (renderer-E2E or ht_server unit) covering: bind panel, cache a screen, rename the logical panel, navigate — expect regeneration for the new path, not a stale replay. Evidence in logmon: \"Panel pi_1 - Generated script: /Home/Apartment/Master/TouchPanel/Screens/MainScreen/Method=Replace:...\" repeated on every Back press at 2026-07-04T21:32-21:34Z.\n\n## Confirmed\n\n(empty — this was migrated from a chip and its claims have NOT been re-grounded against the current tree)\n\n## Hypotheses — UNVERIFIED, do not trust\n\n- Everything above reflects what was believed on 2026-07-04. Chip claims DECAY: across one earlier chip-clearing span ~6 of ~7 were wrong as written (shrunk / redirected / already-done / widened).\n- **This may already be fixed.** Re-ground before doing any work: reproduce the problem, enumerate the real state, confirm the scope. If already done, close as `completed` citing the commit.\n",
+          "closedAt": "2026-09-28T21:34:07Z",
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-08-01T11:06:44Z"
+              },
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-08-19T22:38:43Z"
+              },
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-09-05T21:08:47Z"
+              },
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-09-28T21:34:06Z"
+              }
+            ],
+            "totalCount": 4
+          },
+          "createdAt": "2026-08-01T10:47:15Z",
+          "id": "I_kwDONszNXs8AAAABLDUVzQ",
+          "labels": {
+            "nodes": [
+              {
+                "name": "bug"
+              },
+              {
+                "name": "p2"
+              },
+              {
+                "name": "renderer"
+              }
+            ],
+            "totalCount": 3
+          },
+          "milestone": null,
+          "number": 19,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "CLOSED",
+          "stateReason": "COMPLETED",
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABLDUVzc8AAAAGtZV3SQ"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABLDUVzc8AAAAGtZV3bg"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABLDUVzc8AAAAGtZV3iw"
+              }
+            ]
+          },
+          "title": "Fix stale ht_server script cache after panel rename",
+          "updatedAt": "2026-09-28T21:34:07Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "## Observed\n\nMake workflow steps honor region exclusions inside nested rooms (currently the subtree walks act on excluded sub-rooms), with tests — needed before the BZ house deployment.\n\n## Detail (verbatim from the chip filed 2026-07-04, id `task_0c48a073`)\n\nIn the Store repo (/Users/yuval/Documents/Projects/Store), workflow engine (data/frameworks/ha/modules/workflows.sdl) + regions (data/frameworks/ha/modules/regions.sdl): region EXCLUSIONS are defeated by the step subtree walks. Region.members() correctly excludes a sub-location (Kind=Exclude or ExcludeUsed — e.g. an ensuite sub-Room whose UsedNow is set), but the excluded node's PARENT room/area remains a member, and the steps then act on the whole member subtree: Room.Shutdown (data/frameworks/ha/modules/... home.sdl:117-126) recurses into child Rooms unconditionally, and TurnOffLightsStep.lights_under / TurnOffClimateStep.acs_under / PoweredAcList.add_acs_under walk the member's entire subtree. Net effect: a sleeping guest's marked-used ensuite still gets its lights/AC turned off. TLV's flat room layout has no exposure today; this MUST be fixed before the nested-location BZ deployment. Documented in docs/superpowers/specs/2026-07-04-workflow-engine-design.md §8.5.\n\nFix direction (design first, T1/T2 memo): prune the walks by region coverage — each recursion step checks region.covers(node) before descending/acting; for Room members use the Shutdown cascade only when no exclusion exists under that member (else fall back to a covers()-filtered direct walk). Add two-flavor tests with a nested Room-in-Room fixture: verification (excluded sub-room's devices untouched, sibling devices acted on) + adversarial (ExcludeUsed marked mid-run via MarkRoomUsedStep on a NESTED room).\n\n## Confirmed\n\n(empty — this was migrated from a chip and its claims have NOT been re-grounded against the current tree)\n\n## Hypotheses — UNVERIFIED, do not trust\n\n- Everything above reflects what was believed on 2026-07-04. Chip claims DECAY: across one earlier chip-clearing span ~6 of ~7 were wrong as written (shrunk / redirected / already-done / widened).\n- **This may already be fixed.** Re-ground before doing any work: reproduce the problem, enumerate the real state, confirm the scope. If already done, close as `completed` citing the commit.\n",
+          "closedAt": null,
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-08-01T11:06:17Z"
+              },
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-10-19T18:20:18Z"
+              }
+            ],
+            "totalCount": 2
+          },
+          "createdAt": "2026-08-01T10:47:16Z",
+          "id": "I_kwDONszNXs8AAAABLDUWow",
+          "labels": {
+            "nodes": [
+              {
+                "name": "bug"
+              },
+              {
+                "name": "p1"
+              },
+              {
+                "name": "hometouch"
+              }
+            ],
+            "totalCount": 3
+          },
+          "milestone": null,
+          "number": 20,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "OPEN",
+          "stateReason": "REOPENED",
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABLDUWo88AAAAGtZV6Jg"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABLDUWo88AAAAGtZV6jQ"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABLDUWo88AAAAGtZV6xw"
+              }
+            ]
+          },
+          "title": "Fix region exclusions vs step subtree walks",
+          "updatedAt": "2026-10-19T18:20:18Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "## Observed\n\nThere is no grid auditor to promote — it has never been built, so this is designing a new layout design-rule from scratch, not wiring an existing one into the sweep.\n\n## Detail (verbatim from the chip filed 2026-07-19, id `task_d64dd767`)\n\nRESCOPES the old \"promote grid auditor into [auto_check] sweep\" chip. Investigation on 2026-07-19 found the premise does not hold: there is NO grid auditor anywhere in the tree. Verified — `grep -rl \"grid\"` across store_test/ and tests/ returns zero code files; store_test/src/test/rule_check/ contains only contrast.rs, evaluator.rs, mod.rs, registry.rs, scaling.rs, violation.rs; evaluator.rs implements check_min_px / check_min_pct / check_min_font / check_onscreen / check_text_clearance / check_in_safe_area / button-naming and nothing grid-related; and tests/rules.toml's [auto_check] configures exactly two sweeps (button_naming, text_clearance_in_window). scaling.rs is cross-RESOLUTION scaling verification, a different concept.\n\nSo the work is DESIGNING A NEW DESIGN-RULE, then wiring it up. The wiring is the easy half (~15-20 lines following run_text_clearance_sweep in store_test/src/test/auto_check.rs plus a tests/rules.toml stanza).\n\nThe hard half is deciding what the rule actually asserts. Motivating evidence from docs/process/retro-log.md (2026-07-18 entry): the PanelScript \"docking-remainder law\" bit THREE separate times in one feature — sequential same-side docking resolves `%` sizes against the REMAINDER, not the parent, so a row of N `%`-sized siblings silently collapses; the fix is `{ParentWidth() / N}`. That entry proposes \"a renderer-side lint eventually\". Candidate rule shapes worth weighing:\n- detect sibling gadgets whose combined docked extent falls short of / overflows the parent (the remainder bug's observable signature)\n- detect `%` sizes used in sequential same-side docking at all (a lint on the SOURCE, cheaper and catches it before render)\n- detect misaligned columns/rows across a screen (true \"grid\" alignment)\n\nThe first two target the bug that actually recurred; the third is what the title literally says. Recommend picking based on which failures actually cost time, and note the source-lint option may belong in tools/exps or the PanelScript expander rather than in rule_check (which operates on rendered gadget dumps).\n\nTreat as a small T2: the rule needs design before code. Sizing note: LARGE relative to the other backlog items, not because the sweep wiring is hard, but because nothing exists to promote.\n\n## Confirmed\n\n(empty — this was migrated from a chip and its claims have NOT been re-grounded against the current tree)\n\n## Hypotheses — UNVERIFIED, do not trust\n\n- Everything above reflects what was believed on 2026-07-19. Chip claims DECAY: across one earlier chip-clearing span ~6 of ~7 were wrong as written (shrunk / redirected / already-done / widened).\n- **This may already be fixed.** Re-ground before doing any work: reproduce the problem, enumerate the real state, confirm the scope. If already done, close as `completed` citing the commit.\n",
+          "closedAt": null,
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-08-01T11:06:48Z"
+              }
+            ],
+            "totalCount": 1
+          },
+          "createdAt": "2026-08-01T10:47:26Z",
+          "id": "I_kwDONszNXs8AAAABLDUY9g",
+          "labels": {
+            "nodes": [
+              {
+                "name": "todo"
+              },
+              {
+                "name": "p3"
+              },
+              {
+                "name": "harness"
+              }
+            ],
+            "totalCount": 3
+          },
+          "milestone": null,
+          "number": 28,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "OPEN",
+          "stateReason": null,
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABLDUY9s8AAAAGtZWEXQ"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABLDUY9s8AAAAGtZWEeg"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABLDUY9s8AAAAGtZWEsQ"
+              }
+            ]
+          },
+          "title": "Design a grid/alignment design-rule check",
+          "updatedAt": "2026-08-01T11:06:48Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "## Observed\n\nThe logmon wrapper shipped inert — nothing pointed at it, and dev-track lanes had no MCP servers at all. New lanes still need manual config, and the wrapper's own comment contradicts .mcp.json being gitignored.\n\n## Detail (verbatim from the chip filed 2026-07-17, id `task_ec34b1cb`)\n\nThe dev-tracks logmon \"read-side bind\" (docs/guides/dev-tracks.md §6.9, scripts/logmon-mcp-wrapper.sh, added in 70844a36) shipped INERT. Investigated and partially hand-fixed 2026-07-17; the systemic gaps remain.\n\nWHAT WAS FOUND (all verified):\n\n1. Nothing referenced the wrapper. `~/.claude.json` had a project-scoped logmon entry for\n   /Users/yuval/Documents/Projects/Store pointing at the RAW binary\n   (/Users/yuval/.cargo/bin/logmon-mcp), never at scripts/logmon-mcp-wrapper.sh. So no\n   session was ever auto-scoped to a track: every logmon session was anonymous, on the\n   `default` domain. Confirmed via `get_sessions` — only UUID sessions, none named t1/t2\n   (a wrapper-launched session execs `logmon-mcp --session tN`, so it would be NAMED).\n\n2. The dev-track LANES had NO mcpServers entries at all in ~/.claude.json — only home did\n   (playwright, github, logmon). So a Claude session started directly in a lane had no\n   logmon, no playwright, no github. This is probably WHY nobody noticed (1): the common\n   flow is \"start at home -> EnterWorktree\", which never launches MCP from a lane cwd.\n\n3. Consequence observed live: with an anonymous, unpinned session, the domain bind silently\n   DRIFTED (current_domain was found set to `t1` while working in lane t2, without the\n   session ever binding t1). The wrapper's own header states \"A named session is required\n   for reconnect-preservation of the domain bind\" — an unwrapped session has neither\n   --session nor LOGMON_DOMAIN, so its bind is not preserved. A drifted read is INVISIBLE:\n   a `track=t2` filter just returns empty, which reads as \"no errors\".\n\n4. DOC/DESIGN CONTRADICTION: scripts/logmon-mcp-wrapper.sh's header says \"The committed\n   `.mcp.json` is identical in every worktree, so it MUST NOT carry a literal\n   LOGMON_DOMAIN=t1 ... Instead the MCP entry invokes this wrapper\". But `.mcp.json` is\n   GITIGNORED (.gitignore:53) and untracked — home's is empty ({\"mcpServers\": {}}) and the\n   lanes have none. So the mechanism the wrapper was designed around does not exist.\n\nHAND-FIX ALREADY APPLIED (backup: ~/.claude.json.bak-logmon-1784283894):\n  - Store, Store-t1, Store-t2 project entries now point logmon at\n    <worktree>/scripts/logmon-mcp-wrapper.sh (each worktree its own copy).\n  - Store-t3 SKIPPED: it is detached at 37f74119, which predates the wrapper commit, so\n    scripts/logmon-mcp-wrapper.sh does not exist in that checkout.\n\nWHAT STILL NEEDS DECIDING/DOING:\n  - `dev-track init` / `claim` should wire the lane's logmon MCP entry (and arguably\n    playwright/github) automatically — otherwise every new lane, and every `--grow` lane\n    (t4+), silently repeats this. A lane is meant to be a first-class dev environment.\n  - Resolve the .mcp.json contradiction: either un-gitignore a committed .mcp.json that\n    points at ./scripts/logmon-mcp-wrapper.sh (the wrapper's stated design), or drop that\n    claim from the wrapper header and document the ~/.claude.json per-project approach.\n  - docs/guides/dev-tracks.md §6.9 presents the bind as \"zero ceremony\"; it is currently a\n    manual setup step that was never performed. Either automate it or say so plainly.\n  - Consider making a drifted/foreign domain loud rather than silent — e.g. logmon-mcp\n    warning when the bound domain does not match the cwd-resolved track.\n\nRelevant: scripts/logmon-mcp-wrapper.sh, docs/guides/dev-tracks.md (§6.9 ~line 177-188),\nstore_cli/src/bin/dev_track.rs (init/claim), .gitignore:53,\ndocs/superpowers/specs/2026-06-29-multi-worktree-dev-tracks-design.md.\n\n## Confirmed\n\n(empty — this was migrated from a chip and its claims have NOT been re-grounded against the current tree)\n\n## Hypotheses — UNVERIFIED, do not trust\n\n- Everything above reflects what was believed on 2026-07-17. Chip claims DECAY: across one earlier chip-clearing span ~6 of ~7 were wrong as written (shrunk / redirected / already-done / widened).\n- **This may already be fixed.** Re-ground before doing any work: reproduce the problem, enumerate the real state, confirm the scope. If already done, close as `completed` citing the commit.\n",
+          "closedAt": null,
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-08-01T11:06:47Z"
+              }
+            ],
+            "totalCount": 1
+          },
+          "createdAt": "2026-08-01T10:47:23Z",
+          "id": "I_kwDONszNXs8AAAABLDUYbQ",
+          "labels": {
+            "nodes": [
+              {
+                "name": "todo"
+              },
+              {
+                "name": "p2"
+              },
+              {
+                "name": "dev-loop"
+              }
+            ],
+            "totalCount": 3
+          },
+          "milestone": null,
+          "number": 26,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "OPEN",
+          "stateReason": null,
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABLDUYbc8AAAAGtZWCiQ"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABLDUYbc8AAAAGtZWCpg"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABLDUYbc8AAAAGtZWCwg"
+              }
+            ]
+          },
+          "title": "dev-track lanes need MCP config wired automatically",
+          "updatedAt": "2026-08-01T11:06:47Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "## Observed\n\nDriving a live panel step-by-step already works from existing primitives — what's missing is one ergonomic open/step/close wrapper, not new machinery.\n\n## Detail (verbatim from the chip filed 2026-07-19, id `task_a5dcdf93`)\n\nRESCOPES the old \"build interactive step-mode renderer harness\" chip, which was sized as new machinery. Investigation on 2026-07-19 found the underlying capability ALREADY EXISTS and already composes from shipped primitives — this is a wrapper/ergonomics task, not a subsystem.\n\nWhat already works today:\n- `store-test inspect-panel` (store_test/src/test/inspect_panel/run.rs) makes NO create_store/reset_store/delete_store calls at all — it drives whatever store is already loaded, addressed by name.\n- Its CLI (store_test/src/bin/store-test.rs:304-368) takes `--store <existing name>`, `--nav '<JSON array of DebugCommands>'` (the same enum panel_send_commands uses, hometouch_renderer/src/debug_commands/types.rs), and `--no-reset-home-before`, documented as \"chain inspect-panel invocations and preserve the panel's current surface.\"\n- `store-cli` has standalone create-store / reset-store-from-template / delete-store, decoupled from any .tests lifecycle, and reset_store_from_template_impl already starts managed services including the renderer.\n- `.claude/skills/debug-panel/SKILL.md` documents a fully ad hoc path: set `panel[\"DebugCommands\"]` via one `store-cli script` call against any live panel, then read debug_result.json.\n\nSo: `store-cli create-store` + `reset-store-from-template` (once) -> repeated `store-test inspect-panel --store X --nav '[...]' --no-reset-home-before` -> `store-cli delete-store` is already a working step-mode loop. No new wire-protocol or store-lifecycle work is needed.\n\nWHAT IS MISSING: a unified, documented open/step/close wrapper. No skill, guide, or script packages this composition, which is why the 2026-07-18 retro entry records paying the full per-iteration reset+respawn cost (\"would have cut Phase C by half\").\n\nWANTED (pick the lightest thing that removes the friction):\n1. Minimum viable: a documented recipe in .claude/skills/debug-panel/SKILL.md showing the three-step composition with a worked example. Possibly sufficient on its own.\n2. If that proves too clumsy in use: a thin `store-test panel-session` subcommand (open / step / close) wrapping the same primitives.\n3. Consider surfacing more inline in inspect-panel's output — today a ScreenDump/GetInternalState is read off disk separately rather than returned with the step.\n\nSize: SMALL-to-MEDIUM, revised DOWN from the original framing. Prefer option 1 first and only build option 2 if the recipe is actually used and found wanting.\n\n## Confirmed\n\n(empty — this was migrated from a chip and its claims have NOT been re-grounded against the current tree)\n\n## Hypotheses — UNVERIFIED, do not trust\n\n- Everything above reflects what was believed on 2026-07-19. Chip claims DECAY: across one earlier chip-clearing span ~6 of ~7 were wrong as written (shrunk / redirected / already-done / widened).\n- **This may already be fixed.** Re-ground before doing any work: reproduce the problem, enumerate the real state, confirm the scope. If already done, close as `completed` citing the commit.\n",
+          "closedAt": null,
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-08-01T11:06:49Z"
+              }
+            ],
+            "totalCount": 1
+          },
+          "createdAt": "2026-08-01T10:47:27Z",
+          "id": "I_kwDONszNXs8AAAABLDUZNw",
+          "labels": {
+            "nodes": [
+              {
+                "name": "todo"
+              },
+              {
+                "name": "p3"
+              },
+              {
+                "name": "dev-loop"
+              }
+            ],
+            "totalCount": 3
+          },
+          "milestone": null,
+          "number": 29,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "OPEN",
+          "stateReason": null,
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABLDUZN88AAAAGtZWFTw"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABLDUZN88AAAAGtZWFbA"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABLDUZN88AAAAGtZWFgg"
+              }
+            ]
+          },
+          "title": "Package a step-mode panel debug session wrapper",
+          "updatedAt": "2026-08-01T11:06:49Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "## Observed\n\nThe dev tooling shells out to Unix-only process commands, which blocks Windows and makes the freshness checks brittle; a cross-platform crate would fix both.\n\n## Detail (verbatim from the chip filed 2026-07-20, id `task_a6eb71f9`)\n\nIn /Users/yuval/Documents/Projects/Store, the dev-loop tooling inspects and kills processes by shelling out to Unix-only commands. This works on macOS and Linux but blocks Windows entirely, and it is also the source of a documented operational trap (the AI sandbox hides host PIDs, so these silently no-op — see CLAUDE.md's \"RED FLAG — dev-process management from an AI sandbox\").\n\nSites (all in store_cli):\n- `store_cli/src/bin/store-cli.rs`: `pgrep -f target/debug/store_server` (server freshness), `pgrep -f cargo-watch` (watcher probes, several call sites), `ps -p <pid> -o etime=` (uptime), and `std::os::unix::fs::MetadataExt::ino()` around line 291 for the mapped-executable inode check. The `MetadataExt` use is NOT cfg-gated, so the crate does not even COMPILE on Windows.\n- `store_cli/src/bin/dev_track.rs`: `pkill -f \"cargo-watch .* -w <sentinel>\"` to stop a lane's watcher.\n\nProposed direction: replace the shell-outs with a cross-platform crate (`sysinfo` is the obvious candidate — it enumerates processes with their command lines and supports kill, on all three platforms). That would:\n  (a) unblock Windows for this layer,\n  (b) remove the ERE-escaping helper (`escape_ere`) that exists only because `pgrep -f` takes a regex,\n  (c) make the sandbox-hides-PIDs failure mode explicit rather than an empty match set.\n\nThe inode check is separate: it compares the on-disk binary's inode against the running process's mapped executable to detect a stale server. On Windows there is no inode; the equivalent is comparing a file identity (`GetFileInformationByHandle` / `std::os::windows::fs::MetadataExt::file_index`). Either cfg-gate the two implementations behind one function, or fall back to mtime comparison on platforms without a stable file id.\n\nScope note: this alone does NOT make Windows work — `scripts/dev-server.sh`, `dev-ui.sh` and the logmon wrapper still need bash equivalents. Treat this as the first of two, and confirm whether Windows is actually wanted before doing the scripts (the user said \"if possible without too much hassle\").\n\nVerification is the hard part: there is no Linux or Windows environment available here. At minimum, keep the macOS behaviour identical and covered by the existing tests (`store-cli.rs::tests`), and prefer changes that are correct by construction over ones that need a platform to prove.\n\nContext: CLAUDE.md now has a \"## Platform support\" section stating the POSIX target and listing these blockers.\n\n## Confirmed\n\n(empty — this was migrated from a chip and its claims have NOT been re-grounded against the current tree)\n\n## Hypotheses — UNVERIFIED, do not trust\n\n- Everything above reflects what was believed on 2026-07-20. Chip claims DECAY: across one earlier chip-clearing span ~6 of ~7 were wrong as written (shrunk / redirected / already-done / widened).\n- **This may already be fixed.** Re-ground before doing any work: reproduce the problem, enumerate the real state, confirm the scope. If already done, close as `completed` citing the commit.\n",
+          "closedAt": null,
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-08-01T11:06:50Z"
+              }
+            ],
+            "totalCount": 1
+          },
+          "createdAt": "2026-08-01T10:47:29Z",
+          "id": "I_kwDONszNXs8AAAABLDUZvQ",
+          "labels": {
+            "nodes": [
+              {
+                "name": "todo"
+              },
+              {
+                "name": "p3"
+              },
+              {
+                "name": "dev-loop"
+              }
+            ],
+            "totalCount": 3
+          },
+          "milestone": null,
+          "number": 31,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "OPEN",
+          "stateReason": null,
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABLDUZvc8AAAAGtZWIOg"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABLDUZvc8AAAAGtZWIUQ"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABLDUZvc8AAAAGtZWIaA"
+              }
+            ]
+          },
+          "title": "Port the process-inspection layer off pgrep/pkill/ps",
+          "updatedAt": "2026-08-01T11:06:50Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "## Observed\n\nThe new template-value check only looks at a property's default editing rules, missing per-value exceptions; and a non-blessing save can stamp an unnormalised local cache with the normalised file's fingerprint.\n\n## Detail (verbatim from the chip filed 2026-07-26, id `task_4065a316`)\n\nTwo findings from the deep-gate review of the `[TemplateUnset]`/`[TemplateValue]` feature (branch feat/template-value-attribute, base 8324691a). Both were deliberately deferred as latent; neither is live today. Design docs: docs/superpowers/specs/2026-07-26-template-value-attribute-design.md and docs/guides/value-authority.md.\n\nFINDING A — the commit-time gate reads per-DEFINITION authority only, and a replacement strips a per-VALUE override. CONFIRMED.\n`store_server/src/command/schema_change.rs::validate_template_value_applicability` calls `crate::command::value_authority::value_authority(store, property_id)`, which reads the two CLASS_PROPERTY booleans on the property object (`value_authority.rs:47-59`) — the v1 per-definition axis. The v2 model adds a per-VALUE `ValueAuthorityOverride` (SDL value position `Prop: const value`; Rhai `frozen(v)` / `managed(v)`), and the validator never consults it. Meanwhile `store_artifact/src/lib.rs::apply_substitutions` writes a replacement with `ValueFlags::with_provenance(ValueProvenance::Plain)` = `{ provenance: Plain, authority: Inherit, secret: false }`.\nFailure scenario: property P is `editable` at the definition, but one framework-owned value was stamped `frozen(v)` (authority = Const). `[TemplateValue=\"x\"]` on P passes the gate — authority != Const, not readonly, not [Secret] — and at bless that record is rewritten with `authority: Inherit`. In the fixture the value is now user-writable where the source's was kernel-locked, and the write-gate that would have rejected a User write no longer fires. This is the very hazard the validator exists to prevent (\"the literal spends the write-once seed inside the fixture\"), reached through the axis the validator does not look at.\nWhy deferred: adoption of per-value overrides in `data/` is thin (CLAUDE.md calls the annotation pass a follow-on), so no live value hits it. But the gate is asymmetric with the model it guards.\nFix direction: the gate is per-PROPERTY while the hazard is per-VALUE, so a definition-time check cannot see it — either check at bless (where the specific record's flags are readable) and refuse, or preserve the source record's authority override on replacement instead of resetting it. Decide which, and say why in the commit.\nRelated, currently unreachable but unenforced: `apply_substitutions` also clears the Secret bit. Safe today only because the bless is the sole caller passing a non-empty table and always pairs it with `SecretsPolicy::Scrubbed`, so a secret record is already deleted before the pass runs. Nothing enforces that pairing — `WriteSpec` admits `substitutions` + `SecretsPolicy::Included`. Consider a debug_assert or a typed pairing.\n\nFINDING B — an unblessed save leaves the local db cache unnormalised while stamping it with the normalised artifact's hash. PLAUSIBLE (structural asymmetry CONFIRMED; the trigger not reproduced).\n`store_server/src/manager.rs`: `SnapshotDb` writes `tpl_db_dir` unconditionally from the source store (~:2284-2308). The re-materialize-from-the-artifact step — added precisely because \"a bless whose scrub deleted anything leaves the UNSCRUBBED snapshot as the db cache, stamped with the SCRUBBED artifact's hash — a stamp that lies\" — sits inside `if bless` (~:2409-2444). On the `bless=false` path the preserved artifact is written back and the stamp is set to ITS hash (~:2486-2497), so `ensure_template_materialized` considers the raw snapshot current.\nFailure scenario: an auto-rebake restores the scratch from an already-normalised artifact, reconciles, and something latches during that reconcile (a Schedule whose handler throws — the live 2026-07-25 failure this feature descends from). The snapshot carries Failed=true; the tracked artifact does not; the stamp says they match. A local `reset_store` serves the latch while CI (which materializes from the artifact) does not — the same \"template behaves differently on the blessing machine\" class the bless path already fixed.\nVerify first: reproduce by latching during a rebake reconcile, then diff the db cache against the artifact. If it reproduces, the fix is to apply the same re-materialize on the non-bless path (or to stamp with the SNAPSHOT's hash there, so a mismatch is detected rather than asserted away).\n\n## Confirmed\n\n(empty — this was migrated from a chip and its claims have NOT been re-grounded against the current tree)\n\n## Hypotheses — UNVERIFIED, do not trust\n\n- Everything above reflects what was believed on 2026-07-26. Chip claims DECAY: across one earlier chip-clearing span ~6 of ~7 were wrong as written (shrunk / redirected / already-done / widened).\n- **This may already be fixed.** Re-ground before doing any work: reproduce the problem, enumerate the real state, confirm the scope. If already done, close as `completed` citing the commit.\n",
+          "closedAt": "2026-09-30T16:26:33Z",
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-08-01T11:06:52Z"
+              },
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-08-10T08:16:02Z"
+              },
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-08-29T20:15:16Z"
+              },
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-09-30T16:26:32Z"
+              }
+            ],
+            "totalCount": 4
+          },
+          "createdAt": "2026-08-01T10:47:33Z",
+          "id": "I_kwDONszNXs8AAAABLDUbJg",
+          "labels": {
+            "nodes": [
+              {
+                "name": "bug"
+              },
+              {
+                "name": "p2"
+              },
+              {
+                "name": "kernel"
+              },
+              {
+                "name": "partial"
+              }
+            ],
+            "totalCount": 4
+          },
+          "milestone": null,
+          "number": 34,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "CLOSED",
+          "stateReason": "COMPLETED",
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABLDUbJs8AAAAGtZWODw"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABLDUbJs8AAAAGtZWONg"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABLDUbJs8AAAAGtZWObg"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABLDUbJs8AAAAHCT4X3Q"
+              }
+            ]
+          },
+          "title": "Close two gaps in bless-time value normalisation",
+          "updatedAt": "2026-09-30T16:26:33Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "## Observed\n\n#15 established the invariant *\"a channel may be closed only after every producer that\ncan write to it has stopped producing\"* and quiesced the producers it inventoried\n(timers, timer-failure dispatch, file_watcher; MQTT by ordering). The design gate found\n**two more command producers that were not in that inventory** and can still write after\nthe command channel closes.\n\nNeither is high-frequency — both measured **0** occurrences in a 331-test corpus slice —\nwhich is why they were deliberately deferred rather than folded into #15. Filing so the\ninventory is complete rather than silently partial.\n\n### 1. `ServiceStarted` is fired from a detached, untracked spawn\n\n`store_server/src/service_manager.rs:222-231` — `start_service` fires the\n`ServiceStarted` event inside a bare `tokio::spawn` whose `JoinHandle` is dropped.\n`stop_all()` cannot wait on it.\n\nThe *stop* path is clean: `stop_service` awaits the monitor handle and then fires\n`ServiceStopped` inline, and the monitor's unexpected-exit branch is inside that awaited\nhandle. Only the **start** path is undrained.\n\nReachable when a service starts and the store is torn down promptly after — e.g.\n`reset_store_from_template` → `start_store_services` → teardown. Note #15's §2.1 lists\nmanaged services as already handled; that is true of the stop path only.\n\nSharpest consequence: it means \"port `stop_all()` verbatim\" — which #15's design\nexplicitly held up as the proven reference — propagates this gap rather than the fix.\n\n### 2. The MQTT event loop writes commands via `update_status`\n\n`store_server/src/mqtt.rs:317-341` — `update_status` calls `execute_from` and logs\n`kind = \"invariant_violation\"` at ERROR on failure. Called from `mqtt.rs:1299` and\n`:1515`.\n\nThis is **not** the inbound-dispatch surface #15 §6 deferred. The event loop stays in\nits main select until Phase C cancels it, so a broker event landing between the\ncommand-processor ack and that cancel produces exactly the `channel closed` ERROR #15\nremoves elsewhere.\n\n## Suggested fix\n\nBoth fit #15's existing shape:\n\n- Track the `ServiceStarted` handle the same way #15 tracks timer-failure dispatches\n  (`Vec<JoinHandle>` under a std mutex on the owning struct), and await it in the\n  services drain.\n- Give the MQTT event loop a quiesce signal distinct from `cancel` — the same\n  distinction #15 draws between *stop producing* and *stop existing*. Note #15 §6\n  records that no such seam exists today and that building one is its own chapter.\n\n## Do not\n\nDo not \"fix\" these by moving MQTT or services teardown earlier. #15 established that\nMQTT teardown must come **last** (`MqttClient.publish` throws rather than no-ops, and\ndrivers publish from timer bodies), and that services must stop **first** (their\n`ServiceStopped` handlers write through the command channel). Both orderings are\nload-bearing and were arrived at by killing the alternatives.\n\nFound by the design gate on #15, 2026-08-02.\n",
+          "closedAt": "2026-09-30T16:26:36Z",
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-08-29T19:56:25Z"
+              },
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-09-30T16:26:35Z"
+              },
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-09-30T17:09:02Z"
+              }
+            ],
+            "totalCount": 3
+          },
+          "createdAt": "2026-08-02T13:58:29Z",
+          "id": "I_kwDONszNXs8AAAABLJJbUA",
+          "labels": {
+            "nodes": [
+              {
+                "name": "bug"
+              },
+              {
+                "name": "p3"
+              },
+              {
+                "name": "kernel"
+              },
+              {
+                "name": "self-contained"
+              },
+              {
+                "name": "partial"
+              }
+            ],
+            "totalCount": 5
+          },
+          "milestone": null,
+          "number": 56,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "CLOSED",
+          "stateReason": "COMPLETED",
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABLJJbUM8AAAAGt46IHQ"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABLJJbUM8AAAAGt46ISA"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABLJJbUM8AAAAGt46IZw"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABLJJbUM8AAAAGt46IlA"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABLJJbUM8AAAAHCT4WEA"
+              }
+            ]
+          },
+          "title": "Two command producers outside #15's teardown inventory: detached ServiceStarted spawn, MQTT event-loop update_status",
+          "updatedAt": "2026-09-30T17:09:02Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "## Observation\n\nThe renderer↔ht_server wire protocol is implemented **twice**, as two\nhand-maintained copies that must stay byte-identical:\n\n| | file | size | enums | codec fns |\n|---|---|---|---|---|\n| renderer | `hometouch_renderer/src/protocol.rs` | 31,505 B | `OutgoingMessage` / `IncomingMessage` | `encode_outgoing` / `decode_incoming` |\n| ht_server | `ht_server/src/protocol.rs` | 30,033 B | `RendererMessage` / `ServerMessage` | `encode_server_message` / `decode_renderer_message` |\n\nBoth carry their own copy of the `MSG_*` id table (`MSG_LOGIN = 0x01` …\n`MSG_GET_AND_SUBSCRIBE_REPLY = 0x17`), their own `Frame` / `PayloadWriter` /\n`PayloadReader` primitives, and their own `#[cfg(test)]` suites asserting exact\npayload layouts.\n\n## Why this is worth an issue\n\nNothing enforces that the two stay in sync. There is no shared crate, no\ngenerated code, no round-trip test that encodes with one side and decodes with\nthe other. The invariant is entirely \"whoever edits one remembers to edit the\nother, identically\".\n\nThe failure mode is not a compile error — each crate compiles fine against its\nown copy. It is a **runtime wire desync**: one side writes N fields, the other\nreads N−1, and the symptom surfaces as a garbled payload or a decode error far\nfrom the edit.\n\nEvery future wire change therefore costs 2× and carries that risk. Concretely,\nadding one field to four message variants plus one new message (the shape the\n#60 write-settle barrier would have needed) touches ~9 existing payload-layout\ntests **per file**.\n\n## Not proposing a fix here\n\nOptions range from cheap to invasive — a shared `protocol` crate; codegen from a\nsingle description; or just a cross-side round-trip test (`encode_outgoing` →\n`decode_renderer_message`) that would catch a desync at build time without\nrestructuring anything. The last one is probably the right first move, but that\nis a decision, not an obvious call.\n\n## How this surfaced\n\nFound by the implementer lens of the #60 design gate — the spec named only the\nrenderer's `protocol.rs` and would have sent an implementer into a mid-build\nsurprise. Not a #60 blocker (that design may not proceed), but it outlives #60.\n\nRelated: #60, and the design gate record in\n`docs/superpowers/specs/2026-08-03-renderer-store-write-settle-barrier-design.md`.\n",
+          "closedAt": null,
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-08-18T11:21:50Z"
+              },
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-08-18T19:33:14Z"
+              }
+            ],
+            "totalCount": 2
+          },
+          "createdAt": "2026-08-03T05:45:01Z",
+          "id": "I_kwDONszNXs8AAAABLM52nA",
+          "labels": {
+            "nodes": [
+              {
+                "name": "design-question"
+              },
+              {
+                "name": "p2"
+              },
+              {
+                "name": "renderer"
+              }
+            ],
+            "totalCount": 3
+          },
+          "milestone": null,
+          "number": 66,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "OPEN",
+          "stateReason": null,
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABLM52nM8AAAAGuMSN6Q"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABLM52nM8AAAAGuMSOJQ"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABLM52nM8AAAAGuMSOdg"
+              }
+            ]
+          },
+          "title": "Renderer wire protocol is two hand-maintained copies with nothing enforcing sync",
+          "updatedAt": "2026-08-18T19:33:14Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "**MP-102** · depends on: MP-101, MP-301\n\nTwo sessions want the same speaker. The design (§5.3) calls for RAOP preemption plus reconnect-backoff v1, escalating to a speaker-ownership registry if that proves insufficient. **It has never been exercised.**\n\n## Blocked on\n\n- MP-101 — contention is only meaningful once multi-speaker works.\n- MP-301 (airzoned#13) — the retiring pool holds one slot per receiver and structurally cannot represent two members on one receiver, which is exactly the contention shape.\n\n## Acceptance\n\nSession A holds a speaker; session B claims it; A releases cleanly with no wedge and no orphaned RTSP session, and B renders. Then the reverse. No `kind=` ERROR in either daemon log.\n\n---\n*Node `MP-102` in the [media port DAG](docs/media-port-dag.md). Mission: complete the live frontier (#81).*\n\n---\n\n<!-- media-port-dag:relationships -->\n### Position in the media-port DAG\n\n**Depends on** — must land first\n- #82 — **MP-101** · ✔ done\n- yuvalrakavy/airzoned#13 — **MP-301** · ready\n\n**Blocks** — waiting on this\n- _nothing_\n\n<sub>Generated from [`docs/media-port-dag.md`](https://github.com/yuvalrakavy/Store/blob/main/docs/media-port-dag.md) — the DAG is the source of truth; edit it there and re-run <code>scripts/dag-sync-issues.py</code>. Edges point from dependency to dependent.</sub>\n<!-- /media-port-dag:relationships -->\n",
+          "closedAt": null,
+          "comments": {
+            "nodes": [],
+            "totalCount": 0
+          },
+          "createdAt": "2026-08-03T10:23:04Z",
+          "id": "I_kwDONszNXs8AAAABLO40NQ",
+          "labels": {
+            "nodes": [
+              {
+                "name": "todo"
+              },
+              {
+                "name": "p2"
+              },
+              {
+                "name": "drivers"
+              },
+              {
+                "name": "media-port"
+              }
+            ],
+            "totalCount": 4
+          },
+          "milestone": null,
+          "number": 83,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "OPEN",
+          "stateReason": null,
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABLO40Nc8AAAAGuXg7CA"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABLO40Nc8AAAAGuXg7iQ"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABLO40Nc8AAAAGuXg8Ew"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABLO40Nc8AAAAGuXg8lw"
+              }
+            ]
+          },
+          "title": "MP-102: Exercise cross-session speaker contention (preemption + backoff)",
+          "updatedAt": "2026-08-25T22:12:45Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "**MP-105** · depends on: MP-006 (done)\n\n`Pause`, `FinishTrack` and `Stop` all currently degrade to a graceful Stop (`src/player.rs:240`). FinishTrack should let the current track play out and then stop.\n\nDesign fork 4 (§6.5). The envelope and producer machinery it needs already exist — the warm idle-hold work made the producer outlive a stop so a long fade has real audio to fade.\n\n## Acceptance\n\n`FinishTrack` on a playing session: audio continues to the track boundary, then the session stops without a mid-track cut. Distinguishable from `Stop` by ear and in the log.\n\n---\n*Node `MP-105` in the [media port DAG](docs/media-port-dag.md). Mission: complete the live frontier (#81).*\n\n---\n\n<!-- media-port-dag:relationships -->\n### Position in the media-port DAG\n\n**Depends on** — must land first\n- **MP-006** — done · _no issue yet_\n\n**Blocks** — waiting on this\n- _nothing_\n\n<sub>Generated from [`docs/media-port-dag.md`](https://github.com/yuvalrakavy/Store/blob/main/docs/media-port-dag.md) — the DAG is the source of truth; edit it there and re-run <code>scripts/dag-sync-issues.py</code>. Edges point from dependency to dependent.</sub>\n<!-- /media-port-dag:relationships -->\n",
+          "closedAt": null,
+          "comments": {
+            "nodes": [],
+            "totalCount": 0
+          },
+          "createdAt": "2026-08-03T10:23:08Z",
+          "id": "I_kwDONszNXs8AAAABLO42XA",
+          "labels": {
+            "nodes": [
+              {
+                "name": "todo"
+              },
+              {
+                "name": "p2"
+              },
+              {
+                "name": "drivers"
+              },
+              {
+                "name": "media-port"
+              }
+            ],
+            "totalCount": 4
+          },
+          "milestone": null,
+          "number": 86,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "OPEN",
+          "stateReason": null,
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABLO42XM8AAAAGuXhH3w"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABLO42XM8AAAAGuXhIag"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABLO42XM8AAAAGuXhIxA"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABLO42XM8AAAAGuXhJOA"
+              }
+            ]
+          },
+          "title": "MP-105: FinishTrack — stop at the end of the current track",
+          "updatedAt": "2026-08-25T22:12:47Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "**MP-106** · depends on: MP-006 (done)\n\nNothing exists today. A Mix that walks from a quiet acoustic track to a loud master is jarring, and the problem is worse across *sources* (a radio stream against a local file).\n\n## Scope question to settle at design time\n\nPer-track analysis (ReplayGain-style, needs a scan pass over the library) vs streaming/real-time normalization (no scan, but reacts within a track). The library is large — 28.7k mp3 + 18k m4a + 20k wma — so a full offline scan is a real project; a streaming limiter is not.\n\n---\n*Node `MP-106` in the [media port DAG](docs/media-port-dag.md). Mission: complete the live frontier (#81).*\n\n---\n\n<!-- media-port-dag:relationships -->\n### Position in the media-port DAG\n\n**Depends on** — must land first\n- **MP-006** — done · _no issue yet_\n\n**Blocks** — waiting on this\n- _nothing_\n\n<sub>Generated from [`docs/media-port-dag.md`](https://github.com/yuvalrakavy/Store/blob/main/docs/media-port-dag.md) — the DAG is the source of truth; edit it there and re-run <code>scripts/dag-sync-issues.py</code>. Edges point from dependency to dependent.</sub>\n<!-- /media-port-dag:relationships -->\n",
+          "closedAt": null,
+          "comments": {
+            "nodes": [],
+            "totalCount": 0
+          },
+          "createdAt": "2026-08-03T10:23:09Z",
+          "id": "I_kwDONszNXs8AAAABLO43Bg",
+          "labels": {
+            "nodes": [
+              {
+                "name": "todo"
+              },
+              {
+                "name": "p2"
+              },
+              {
+                "name": "drivers"
+              },
+              {
+                "name": "media-port"
+              }
+            ],
+            "totalCount": 4
+          },
+          "milestone": null,
+          "number": 87,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "OPEN",
+          "stateReason": null,
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABLO43Bs8AAAAGuXhLsA"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABLO43Bs8AAAAGuXhMGA"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABLO43Bs8AAAAGuXhMdA"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABLO43Bs8AAAAGuXhM6g"
+              }
+            ]
+          },
+          "title": "MP-106: Loudness normalization across tracks and sources",
+          "updatedAt": "2026-08-25T22:12:49Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "**MP-601** · depends on: —\n\nOpen confirmation §18.6, and a standing watch-item on the whole port: the daemon assumes the music library is local to the player machine (no SMB hop). That assumption has never been pinned to an actual host.\n\n## Needs deciding\n\n- Linux, always-on, routes to both sites (TLV and BZ), library-local.\n- Where `/Volumes/Media/Music` lives from that host's point of view, and what `LIBRARY_ROOT` becomes (§18.8).\n- One daemon per site or one across both.\n\nUntil this is settled the daemon runs from a dev machine, which is fine for building and wrong for living with.\n\n---\n*Node `MP-601` in the [media port DAG](docs/media-port-dag.md). Mission: complete the live frontier (#81).*\n\n---\n\n<!-- media-port-dag:relationships -->\n### Position in the media-port DAG\n\n**Depends on** — must land first\n- _nothing — this is a root_\n\n**Blocks** — waiting on this\n- _nothing_\n\n<sub>Generated from [`docs/media-port-dag.md`](https://github.com/yuvalrakavy/Store/blob/main/docs/media-port-dag.md) — the DAG is the source of truth; edit it there and re-run <code>scripts/dag-sync-issues.py</code>. Edges point from dependency to dependent.</sub>\n<!-- /media-port-dag:relationships -->\n",
+          "closedAt": null,
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-08-18T11:36:36Z"
+              }
+            ],
+            "totalCount": 1
+          },
+          "createdAt": "2026-08-03T10:23:16Z",
+          "id": "I_kwDONszNXs8AAAABLO46Zw",
+          "labels": {
+            "nodes": [
+              {
+                "name": "design-question"
+              },
+              {
+                "name": "p2"
+              },
+              {
+                "name": "drivers"
+              },
+              {
+                "name": "needs-decision"
+              },
+              {
+                "name": "media-port"
+              }
+            ],
+            "totalCount": 5
+          },
+          "milestone": null,
+          "number": 92,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "OPEN",
+          "stateReason": null,
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABLO46Z88AAAAGuXhdjQ"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABLO46Z88AAAAGuXheJg"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABLO46Z88AAAAGuXheoQ"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABLO46Z88AAAAGuXhfHQ"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABLO46Z88AAAAGuXhfnw"
+              }
+            ]
+          },
+          "title": "MP-601: Decide and provision the deployment host",
+          "updatedAt": "2026-08-25T22:12:52Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "Phase 3 of the 5-step media system port (`docs/requirements/Porting Media System.md`, \"Agreed plan\") — **the largest phase.**\n\n## Scope\n\nFull Rust port of the legacy C#/C++ AirZonePlayer: a multi-room AirPlay/RAOP streaming daemon driven by store-owned session documents over MQTT.\n\nBridging was **rejected 2026-06-12** (recorded in the requirements doc): the port removes the Windows dependency, the GC, and BASS.net. RAOP is plain RTSP/RTP with encryption compiled out; ALAC comes from the pure-Rust `alac-encoder` crate; symphonia plus a custom mixer replaces BASS, with ffmpeg kept as a subprocess fallback.\n\n- Design: `docs/superpowers/specs/2026-06-19-airzone-player-design.md` (the MQTT contract + the store module) and `2026-06-20-airzone-player-engine-design.md` (the engine primitives).\n- Repo: `~/Documents/Projects/Home/airzoned` (private). **Daemon-level defects live in that repo's own tracker**; this issue and its milestones track the arc.\n\n## Milestones\n\n| Rung | Adds | Status |\n|---|---|---|\n| M0 first sound (#72) | one session, one speaker, a local file | **done** |\n| M1 first music in TLV (#73) | radio · panel selector · recents · cover art | partial — radio + recents done; selector + cover art open |\n| M2 multiroom (#74) | join / transfer, multi-speaker sync | partial — membership done; **sync unproven on hardware** |\n| M3 auto-DJ (#75) | Mix · crossfade · FinishTrack · loudness | partial — crossfade/shuffle/loop done; Mix + FinishTrack + loudness open |\n| M4 Spotify (#76) | librespot as a push source | not started |\n| M5 AirPlay-IN (#77) | shairport channels + provisioning | not started |\n| M6 overlay/paging (#78) | per-member output stage + TTS | not started — **needs its own design pass** |\n\nEach rung is shippable on its own; the ordering front-loads the scariest risk (the end-to-end audio path) and defers all breadth.\n\n## Depends on\n\nStep 1 (#69) — the daemon resolves speaker addresses from the mDNS fabric catalog rather than doing its own discovery.\n\n## Status\n\nM0 done and proven on real hardware. M1–M3 partially delivered. M4–M6 not started.\n\nBeyond the rungs, the daemon has absorbed a lot of unplanned reliability work (teardown safety, the warm idle-hold, graceful shutdown, the config-runaway fix) — those are in the airzoned tracker, not here.",
+          "closedAt": null,
+          "comments": {
+            "nodes": [],
+            "totalCount": 0
+          },
+          "createdAt": "2026-08-03T09:53:23Z",
+          "id": "I_kwDONszNXs8AAAABLOqF9w",
+          "labels": {
+            "nodes": [
+              {
+                "name": "todo"
+              },
+              {
+                "name": "drivers"
+              },
+              {
+                "name": "media-port"
+              }
+            ],
+            "totalCount": 3
+          },
+          "milestone": null,
+          "number": 71,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "OPEN",
+          "stateReason": null,
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABLOqF988AAAAGuWOHNQ"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABLOqF988AAAAGuWOH3Q"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABLOqF988AAAAGuXifDQ"
+              }
+            ]
+          },
+          "title": "Media port step 3: AirZonePlayer — full Rust port (airzoned)",
+          "updatedAt": "2026-08-03T10:23:39Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "Rung **M1** of step 3 (#71) — the **anchor** rung: \"tap the wall, music plays.\"\n\n## Scope\n\nRadio (the live-stream pump) · panel source-selector · recents · cover art.\n\n## Done\n\n- **Live-stream pump** — http(s)/HLS via an ffmpeg subprocess (`0f4685f`), plus the `.wma` and video-as-audio ffmpeg fallback (`0c0089d`). Both matter: the playlist survey found WMA in the hot path (7,005 refs) and 3,987 video-as-audio refs.\n- **Recents** — `RecentSource` and `RoomAudio` shipped store-side.\n- Daemon work that landed alongside: gapless playlist transitions, graceful SIGTERM, the teardown-safety redesign, and the warm idle-hold (a stop parks the room, so a replay inside the window issues no RTSP).\n\n## Not done\n\n- **Panel source-selector** — there is no media panel script at all; `data/frameworks/hometouch/panel_scripts/` has no audio or media screen. Overlaps step 5 (#80).\n- **Cover art** — no artwork or now-playing metadata is pushed to the receiver. `SET_PARAMETER` is used only for volume; there is no DMAP path.\n\n## Depends on\n\nM0 (#72).\n\n## Status\n\nPartially delivered. Both open line items are panel/metadata surface rather than audio-path work, so they are cheap relative to what M1 has already retired — but until the selector exists, \"tap the wall\" is unmet and the rung is not closed.\n",
+          "closedAt": null,
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-08-03T10:00:37Z"
+              },
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-08-03T10:23:31Z"
+              }
+            ],
+            "totalCount": 2
+          },
+          "createdAt": "2026-08-03T09:53:26Z",
+          "id": "I_kwDONszNXs8AAAABLOqHew",
+          "labels": {
+            "nodes": [
+              {
+                "name": "todo"
+              },
+              {
+                "name": "p2"
+              },
+              {
+                "name": "drivers"
+              },
+              {
+                "name": "media-port"
+              }
+            ],
+            "totalCount": 4
+          },
+          "milestone": null,
+          "number": 73,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "OPEN",
+          "stateReason": null,
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABLOqHe88AAAAGuWOPuA"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABLOqHe88AAAAGuWOQGw"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABLOqHe88AAAAGuXiLiA"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABLOqHe88AAAAH6pHy2g"
+              }
+            ]
+          },
+          "title": "airzoned M1: first music in TLV — radio, panel source-selector, recents, cover art",
+          "updatedAt": "2026-10-22T22:39:32Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "Rung **M2** of step 3 (#71) — join / transfer (membership edits). Retires the session model and RAOP multi-speaker sync.\n\n## Done\n\n- **Membership converge** — `src/engine/converge.rs` reconciles the desired member set **adds-before-removes**, so an intra-session change (a transfer's add side) never gaps.\n- **Store verbs** — `RoomAudio.join` / `.transfer` shipped.\n- The engine is shared-timeline **by construction**: members share one ring and one immutable `SessionClock`, captured at sender spawn.\n\n## Not done / unproven\n\n- **Multi-speaker RAOP sync has never been verified on real hardware.** Risk register §13 #2 still carries it; every measurement to date was on ONE receiver. This is the substance of the rung.\n- **Cross-session speaker contention** (§5.3) — designed (RAOP preemption + reconnect backoff v1), never exercised. Escalation path if it bites: a speaker-ownership registry.\n\n## Known defects that block a clean M2\n\n- #68 — `RoomAudio.transfer` never renames the session, so the source room can never Play again.\n- #64 — a restart while playing orphans the `AudioSession` (`needs-decision`).\n- airzoned#13 — the retiring pool holds one slot per receiver and cannot represent two members on it.\n\n## Depends on\n\nM1 (#73).",
+          "closedAt": null,
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-08-03T10:23:34Z"
+              }
+            ],
+            "totalCount": 1
+          },
+          "createdAt": "2026-08-03T09:53:28Z",
+          "id": "I_kwDONszNXs8AAAABLOqIJw",
+          "labels": {
+            "nodes": [
+              {
+                "name": "todo"
+              },
+              {
+                "name": "p2"
+              },
+              {
+                "name": "drivers"
+              },
+              {
+                "name": "media-port"
+              }
+            ],
+            "totalCount": 4
+          },
+          "milestone": null,
+          "number": 74,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "OPEN",
+          "stateReason": null,
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABLOqIJ88AAAAGuWORiA"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABLOqIJ88AAAAGuWOR8g"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABLOqIJ88AAAAGuXiSdg"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABLOqIJ88AAAAH6pH8Xw"
+              }
+            ]
+          },
+          "title": "airzoned M2: multiroom — join, transfer, and RAOP multi-speaker sync",
+          "updatedAt": "2026-10-22T22:39:34Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "Rung **M3** of step 3 (#71) — retires design forks 3 and 4 and the mixer crossfade path.\n\n## Done\n\n- **Crossfade** — equal-power, with decode-ahead gapless transitions and baked-in-silence trimming at the seam (`de611ba`, `624bc78`).\n- **Shuffle / loop** over local `.m3u` playlists, including Windows-authored legacy paths (backslashes, `/volumes` case).\n\n## Not done\n\n- **Mix** — the store carries the `MixSource` class and the bounded type-gate (radio or AirPlay inside a Mix is rejected at commit), but the daemon has no structured Mix. **The wire shape is still an open design item** (spec §4.6): per-entry `{uri, weight}` objects vs a flat URI array with parallel weights. A Mix is store-expanded — the player stays catalog-agnostic. Decide the shape before building.\n- **FinishTrack** — currently degrades to a graceful Stop (`src/player.rs:240`).\n- **Loudness normalization** — nothing.\n\n## Known defects\n\n- airzoned#1 — `CrossfadeSeconds` (and Shuffle/Loop) only take effect after a Stop/Play.\n- airzoned#8 — an unvalidated `CrossfadeSeconds` panics the playlist thread under the dev profile.\n\n## Depends on\n\nM1 (#73). Independent of M2 — the two can proceed in parallel.",
+          "closedAt": null,
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-08-03T10:23:36Z"
+              }
+            ],
+            "totalCount": 1
+          },
+          "createdAt": "2026-08-03T09:53:29Z",
+          "id": "I_kwDONszNXs8AAAABLOqIyQ",
+          "labels": {
+            "nodes": [
+              {
+                "name": "todo"
+              },
+              {
+                "name": "p2"
+              },
+              {
+                "name": "drivers"
+              },
+              {
+                "name": "media-port"
+              }
+            ],
+            "totalCount": 4
+          },
+          "milestone": null,
+          "number": 75,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "OPEN",
+          "stateReason": null,
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABLOqIyc8AAAAGuWOVfw"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABLOqIyc8AAAAGuWOV3A"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABLOqIyc8AAAAGuXiakg"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABLOqIyc8AAAAH6pID9w"
+              }
+            ]
+          },
+          "title": "airzoned M3: auto-DJ — Mix, crossfade, FinishTrack, loudness",
+          "updatedAt": "2026-10-22T22:39:36Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "Rung **M5** of step 3 (#71) — retires the inbound face: the house becomes an AirPlay **receiver**, so a phone can play into a room.\n\n## Scope\n\nPer spec §8: shairport-sync instances as channels, provisioned and supervised (the `ht_server` managed-service spawn is the precedent). `AirPlayChannel` already exists store-side, with `on GetDefaults` auto-labelling (\"AirZone N\").\n\n## Depends on\n\nM2 (#74) — an inbound channel is a source feeding the same session/membership model, so multiroom must be settled first.\n\n## Status\n\nNot started; the seam is designed.\n\n---\n\n<!-- media-port-dag:relationships -->\n### Position in the media-port DAG\n\n**Depends on** — must land first\n- #82 — **MP-101** · ✔ done\n\n**Blocks** — waiting on this\n- _nothing_\n\n<sub>Generated from [`docs/media-port-dag.md`](https://github.com/yuvalrakavy/Store/blob/main/docs/media-port-dag.md) — the DAG is the source of truth; edit it there and re-run <code>scripts/dag-sync-issues.py</code>. Edges point from dependency to dependent.</sub>\n<!-- /media-port-dag:relationships -->\n",
+          "closedAt": null,
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-08-08T08:56:25Z"
+              }
+            ],
+            "totalCount": 1
+          },
+          "createdAt": "2026-08-03T09:53:32Z",
+          "id": "I_kwDONszNXs8AAAABLOqJ9A",
+          "labels": {
+            "nodes": [
+              {
+                "name": "todo"
+              },
+              {
+                "name": "p3"
+              },
+              {
+                "name": "drivers"
+              },
+              {
+                "name": "media-port"
+              }
+            ],
+            "totalCount": 4
+          },
+          "milestone": null,
+          "number": 77,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "OPEN",
+          "stateReason": null,
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABLOqJ9M8AAAAGuWOfvQ"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABLOqJ9M8AAAAGuWOgJw"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABLOqJ9M8AAAAGuXhxYg"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABLOqJ9M8AAAAH6pINjw"
+              }
+            ]
+          },
+          "title": "MP-109: AirPlay-IN — in-process receiver channels and provisioning",
+          "updatedAt": "2026-10-22T22:39:38Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "Rung **M6** of step 3 (#71) — per-member output stage + permission + announcement-as-TTS. Retires the simultaneous-mix layer.\n\n## Honest readiness (spec §9)\n\nThis is a **designed seam and a direction, NOT a build-ready chapter.** Already reserved: the per-member output stage (§6.2), overlay-is-not-a-session, permission reuse, and the deferred listener half (§11.1).\n\nM6 needs **its own design pass**, deliberately deferred — specifying it against unbuilt M1–M5 realities would be speculative. Three open pieces:\n\n1. **The store↔player overlay wire contract.** An overlay is not a session, so it needs its own representation; nothing in §3/§4 covers it.\n2. **Subset-targeting stream split.** When an overlay hits only some members of a synchronized group, those members split off the shared RAOP timeline transiently and then re-merge. **This is the flagged hard problem.**\n3. **Trigger / duck / chime specifics** — panel- and automation/HA-TTS-initiated: targeting, duck gain and ramp, chime, post-announce restore.\n\n## Depends on\n\nM2 (#74) — the synchronized-group model is exactly what an overlay splits and re-merges.\n\n## Status\n\nNot started. **Design pass required before any build estimate is meaningful.**\n\n---\n\n<!-- media-port-dag:relationships -->\n### Position in the media-port DAG\n\nThis issue carries **2 nodes**: `MP-110`, `MP-111`.\n\n**Depends on** — must land first\n- #82 — **MP-101** · ✔ done\n\n**Blocks** — waiting on this\n- _nothing_\n\n<sub>Generated from [`docs/media-port-dag.md`](https://github.com/yuvalrakavy/Store/blob/main/docs/media-port-dag.md) — the DAG is the source of truth; edit it there and re-run <code>scripts/dag-sync-issues.py</code>. Edges point from dependency to dependent.</sub>\n<!-- /media-port-dag:relationships -->\n",
+          "closedAt": null,
+          "comments": {
+            "nodes": [],
+            "totalCount": 0
+          },
+          "createdAt": "2026-08-03T09:53:33Z",
+          "id": "I_kwDONszNXs8AAAABLOqKmQ",
+          "labels": {
+            "nodes": [
+              {
+                "name": "todo"
+              },
+              {
+                "name": "p3"
+              },
+              {
+                "name": "drivers"
+              },
+              {
+                "name": "needs-decision"
+              },
+              {
+                "name": "media-port"
+              }
+            ],
+            "totalCount": 5
+          },
+          "milestone": null,
+          "number": 78,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "OPEN",
+          "stateReason": null,
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABLOqKmc8AAAAGuWOiDQ"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABLOqKmc8AAAAGuWOioA"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABLOqKmc8AAAAGuXh2wg"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABLOqKmc8AAAAH6pIbEw"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABLOqKmc8AAAAH6pIbcg"
+              }
+            ]
+          },
+          "title": "MP-110/111: Overlay / paging — needs its own design pass first",
+          "updatedAt": "2026-10-22T22:39:41Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "Umbrella for porting the legacy media system — AirzonePlayer, the YNCA driver, mDNSproxy, and the VBA orchestration — onto the Store, per `docs/requirements/Porting Media System.md`.\n\nPattern for every component: **external service → MQTT → Store SDL → object model.**\n\nStatus as of **2026-09-17**. Node-level status and what unblocks what live in [`docs/media-port-dag.md`](https://github.com/yuvalrakavy/Store/blob/main/docs/media-port-dag.md); this issue is the one-screen summary.\n\n## The five steps\n\n| Step | What | Status |\n|---|---|---|\n| 1 (#69) | mDNS proxy fabric — `mqtt_mdns` + `Std/mdns.sdl` | **done** 2026-06-13 |\n| 2 (#70) | YNCA receiver driver — `mqtt_ynca` + `ynca.sdl` | **done** 2026-06-13 |\n| 3 (#71) | AirZonePlayer — full Rust port (`airzoned`) | in flight: every node of M0, M1 and M4 is done; M2, M3, M5 and M6 are open |\n| 4 | Media orchestration (SDL) — rooms, zones, source selection | **partly shipped**: the room orchestrator (RoomMedia, apps, resources, regions and receiver zones; 2026-08) and the audio app on it (MP-405, MP-406; 2026-09-07). The TV/IR app is externally gated. MP-401–404 still read *deferred* in the DAG and have not been re-audited against what shipped |\n| 5 | Media UI (PanelScript) | **shipped for audio** 2026-09-08: the room tile and its volume windows, the now-playing overlay, the source list, recents, play-from-room and the info dialog (MP-501–505) |\n\n## Step 3 milestones\n\n| Rung | Adds | Status |\n|---|---|---|\n| M0 (#72) | first sound | **done** |\n| M1 (#73) | first music in TLV | **every node done**: MP-107 cover art (2026-09-07), MP-501 panel source list (2026-09-08). TLV-Salon played end to end on 2026-09-17. #73 still needs closing |\n| M2 (#74) | multiroom | open: MP-102 contention (#83), waiting on MP-301 pool 2/receiver (yuvalrakavy/airzoned#13), which itself goes after yuvalrakavy/airzoned#43 (serial shutdown TEARDOWN). Multi-speaker sync and join/transfer are done |\n| M3 (#75) | auto-DJ | open: MP-105 FinishTrack (#86), MP-106 loudness (#87). The Mix and live crossfade params are done |\n| M4 (#76) | Spotify | **done** 2026-08-18 |\n| M5 (#77) | AirPlay-IN | open: MP-109 designed, ready to build |\n| M6 (#78) | overlay / paging | open: the MP-110 design decision comes first |\n\n## Shipped since the last update (2026-08-03)\n\n- The reliability band: session worker, config across restarts, receiver health.\n- The Mix wire contract and engine (MP-103/104), Spotify (MP-108), in-session source crossfade (MP-315).\n- The audio app (spec `2026-09-06-audio-media-app-design.md`): the catalog as user data, the app and the AirPlay output, the resolve and art lanes, the panel, the exit handshake (MP-210), catalog bundles (MP-604), and source end, which turns a room off when its program ends.\n- RAOP proven on a TLV Yamaha (TLV-Salon, 2026-09-17). #98's `520` was a probe artifact, not a closed door.\n\n## Waiting on a decision\n\nMP-110 overlay design (#78) · MP-206 the spoken substitute for an unplayable entry (#137) · MP-601 the deployment host (#92).\n\n## Deliberately deferred or unfiled\n\n- **Unfiled, by the user's choice** (audio-app spec §8.4): window-aware invoke replies in the renderer; real pause with resume-from-position in the daemon (MP-310, whose only issue, yuvalrakavy/airzoned#19, closed as the documentation half). Don't file them without asking.\n- **Deferred:** the AirPlay 2 sender and mixed-domain sync (MP-112/113; nice-to-have, since every fleet receiver advertises RAOP) · the legacy `AudioMediaPlayer` / `MediaComputer` family scope (MP-401) · WMA Lossless → FLAC conversion (MP-603) · the TV/IR app (the orchestrator's externally gated OT phase).\n- **Out of scope:** full queue micromanagement, unified cross-service search, per-room EQ and lyrics/karaoke (§17, against the UX-first intent) · video/AV sources · FairPlay-DRM `.m4p` and Zune/WMP playlists.\n",
+          "closedAt": null,
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-08-03T12:15:23Z"
+              },
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-08-03T15:30:51Z"
+              }
+            ],
+            "totalCount": 2
+          },
+          "createdAt": "2026-08-03T09:53:38Z",
+          "id": "I_kwDONszNXs8AAAABLOqNfg",
+          "labels": {
+            "nodes": [
+              {
+                "name": "todo"
+              },
+              {
+                "name": "drivers"
+              },
+              {
+                "name": "media-port"
+              }
+            ],
+            "totalCount": 3
+          },
+          "milestone": null,
+          "number": 81,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "OPEN",
+          "stateReason": null,
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABLOqNfs8AAAAGuWOygw"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABLOqNfs8AAAAGuWOy3w"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABLOqNfs8AAAAGuXijGA"
+              }
+            ]
+          },
+          "title": "Media system port — phase tracker",
+          "updatedAt": "2026-09-16T23:06:59Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "**MP-112** · depends on: MP-004 (done) · blocks: MP-113, and the whole TLV deployment\n\nAirPlay 2 sending is a **base transport feature alongside RAOP**, not an extension. Decided 2026-08-03 on the evidence below.\n\n## Why it is not optional\n\n**Every Yamaha in TLV is AirPlay 2, and airzoned cannot reach any of them.** TLV is the porting roadmap's first deployment target.\n\nProbed on live hardware (RTSP handshakes only — stopped before `RECORD`, no audio):\n\n| Device | Model | `OPTIONS` | `/auth-setup` | `ANNOUNCE` | `SETUP` |\n|---|---|---|---|---|---|\n| BZm Yuval O *(control)* | RX-V673 | 200 | 200 | 200 | **200** |\n| TLV-Salon | RX-A6A | 200 | 200 | 200 | **520 Origin Error** |\n| TLV-Bedroom | RX-A2A | 200 | 200 | 200 | **520 Origin Error** |\n| BZm Family | RX-A3080 | 200 | 200 | 200 | **520 Origin Error** |\n| Mac Studio | Mac13,2 | **403** | — | — | — |\n\nThe AirPlay 2 units accept the legacy `ANNOUNCE` and then refuse the legacy `SETUP`. **No Transport variant reopens it** — tried airzoned's exact header, without `interleaved`, `timing_port=0`, no `timing_port`, and bare `mode=record`: all 520. airzoned's Transport string is byte-identical to the probe's, so this is what airzoned itself would hit.\n\n## Two false leads, recorded so nobody re-walks them\n\n1. **The first probe reported 403 on every AirPlay 2 Yamaha.** That was the probe's bug: it skipped `POST /auth-setup`, which *both* the legacy C# sender (`HomeMedia/AirZoneAudioPlayer/AirplaySession.cs`, `RtspAuthenticationRequest`) and airzoned (`rtsp.rs::auth_setup`) send before ANNOUNCE. With it, ANNOUNCE succeeds everywhere. **The wall is protocol-version, not authentication.**\n2. **`et=0` in the mDNS TXT record does not mean the legacy path is open.** These units advertise `et=0,4` — identical to the AirPlay 1 ones — and still refuse legacy SETUP.\n\n## The good news: no pairing needed\n\n`pyatv` **successfully streamed to TLV-Salon**, unpaired:\n\n```\nSETUP → SET_PARAMETER → RECORD → FLUSH → /feedback → TEARDOWN   all 200 OK\nServer: AirTunes/366.0\nContent-Type: application/x-apple-binary-plist\nhap_channel: Sending data (Encrypted=…)\n```\n\nThat is **transient pairing** — an ephemeral encrypted session with no PIN and no stored credentials. `atvremote scan` confirms `RAOP … Pairing: NotNeeded` for the Yamahas (the Mac is `Pairing: Mandatory`, needing a PIN off its screen).\n\nSo the scope excludes the expensive part: no credential store, no per-device pairing state, no user-facing PIN flow for the speakers.\n\n## Scope\n\n1. Transient pair-setup → ChaCha20-Poly1305 encrypted control channel\n2. Two-phase binary-plist `SETUP` (session-level, then stream-level)\n3. Audio on the data channel (ALAC realtime to start)\n4. Timing — NTP where the receiver allows it, PTP where it declares it\n5. `/feedback` keepalive + the receiver→sender event channel (volume and transport commands arrive here; RAOP has no equivalent)\n\n## References — this is reverse-engineered, do not derive from first principles\n\n- [airplay2-rs](https://github.com/lmcgartland/airplay2-rs) — Rust sender; closest to airzoned's language\n- [music-assistant/airplay-cli](https://github.com/music-assistant/airplay-cli) — **unified AirPlay 1 + 2 sender with a shared-clock daemon for multi-room**; this is MP-113's problem already solved\n- [pyatv](https://pyatv.dev/documentation/protocols/) — readable Python, and proven against *this* hardware\n- [AirPlay 2 Internals](https://emanuelecozzi.net/docs/airplay2/rtsp/), [AirPlay2 Protocol wiki](https://github.com/SteeBono/airplayreceiver/wiki/AirPlay2-Protocol)\n- [airplay2-sender-cpp](https://github.com/akustikrausch/airplay2-sender-cpp)\n\n## Beyond reach — what else this buys\n\n- **Buffered audio** instead of RAOP's ~2 s realtime window: WiFi hiccups stop being dropouts. Much of the receiver-wedge/teardown fragility class comes from realtime-mode brittleness.\n- **PTP multi-room sync** — drift handled by a clock protocol rather than by our sender.\n- **A return channel** — the probe saw the receiver push `volume` and `sendMediaRemoteCommand`. A physical volume knob is invisible over RAOP.\n\n## Open question, worth answering first\n\nThe legacy system reportedly played to TLV speakers, but its code is legacy-RAOP only and would hit the same 520. Either those receivers were replaced (RX-A2A/A6A are 2020–21), or a firmware update closed the path. **If it is firmware, the same update will eventually reach the Beit-Zayit units airzoned depends on today** — which raises this from \"TLV needs it\" to \"everything will need it\".\n\n## Does NOT replace RAOP\n\n11 AirPlay 1 receivers in Beit-Zayit still need the existing path. This is a second transport, permanently.\n\n---\n\n<!-- media-port-dag:relationships -->\n### Position in the media-port DAG\n\n**Depends on** — must land first\n- #72 — **MP-004** · ✔ done\n\n**Blocks** — waiting on this\n- #99 — **MP-113** · ✔ deferred\n\n<sub>Generated from [`docs/media-port-dag.md`](https://github.com/yuvalrakavy/Store/blob/main/docs/media-port-dag.md) — the DAG is the source of truth; edit it there and re-run <code>scripts/dag-sync-issues.py</code>. Edges point from dependency to dependent.</sub>\n<!-- /media-port-dag:relationships -->\n",
+          "closedAt": null,
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-08-04T07:49:46Z"
+              },
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-08-04T08:17:47Z"
+              },
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-08-04T08:46:25Z"
+              },
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-08-04T09:31:31Z"
+              },
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-08-04T09:35:43Z"
+              },
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-08-04T17:35:05Z"
+              },
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-09-16T21:56:53Z"
+              }
+            ],
+            "totalCount": 7
+          },
+          "createdAt": "2026-08-04T07:03:14Z",
+          "id": "I_kwDONszNXs8AAAABLXY30Q",
+          "labels": {
+            "nodes": [
+              {
+                "name": "todo"
+              },
+              {
+                "name": "p3"
+              },
+              {
+                "name": "drivers"
+              },
+              {
+                "name": "media-port"
+              }
+            ],
+            "totalCount": 4
+          },
+          "milestone": null,
+          "number": 98,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "OPEN",
+          "stateReason": null,
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABLXY30c8AAAAGvIKygQ"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABLXY30c8AAAAGvIKy8g"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABLXY30c8AAAAGvIKzdA"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABLXY30c8AAAAGvIKz8w"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABLXY30c8AAAAGvnOwYQ"
+              },
+              {
+                "id": "UNLE_lADONszNXs8AAAABLXY30c8AAAAGvnOwsw"
+              }
+            ]
+          },
+          "title": "MP-112: AirPlay 2 sender — a base transport alongside RAOP",
+          "updatedAt": "2026-09-16T23:07:31Z"
+        }
+      ]
+    }
+  },
+  "variables": {
+    "ids": [
+      "I_kwDONszNXs8AAAABL84o8g",
+      "I_kwDONszNXs8AAAABLDRZzA",
+      "I_kwDONszNXs8AAAABLDUTqQ",
+      "I_kwDONszNXs8AAAABLDUVCw",
+      "I_kwDONszNXs8AAAABLDUVzQ",
+      "I_kwDONszNXs8AAAABLDUWow",
+      "I_kwDONszNXs8AAAABLDUY9g",
+      "I_kwDONszNXs8AAAABLDUYbQ",
+      "I_kwDONszNXs8AAAABLDUZNw",
+      "I_kwDONszNXs8AAAABLDUZvQ",
+      "I_kwDONszNXs8AAAABLDUbJg",
+      "I_kwDONszNXs8AAAABLJJbUA",
+      "I_kwDONszNXs8AAAABLM52nA",
+      "I_kwDONszNXs8AAAABLO40NQ",
+      "I_kwDONszNXs8AAAABLO42XA",
+      "I_kwDONszNXs8AAAABLO43Bg",
+      "I_kwDONszNXs8AAAABLO46Zw",
+      "I_kwDONszNXs8AAAABLOqF9w",
+      "I_kwDONszNXs8AAAABLOqHew",
+      "I_kwDONszNXs8AAAABLOqIJw",
+      "I_kwDONszNXs8AAAABLOqIyQ",
+      "I_kwDONszNXs8AAAABLOqJ9A",
+      "I_kwDONszNXs8AAAABLOqKmQ",
+      "I_kwDONszNXs8AAAABLOqNfg",
+      "I_kwDONszNXs8AAAABLXY30Q"
+    ]
+  }
+}

@@ -1,0 +1,147 @@
+{
+  "name": "search",
+  "response": {
+    "data": {
+      "search": {
+        "issueCount": 14,
+        "nodes": [
+          {
+            "__typename": "Issue",
+            "closedAt": null,
+            "id": "I_kwDOTBQnEM8AAAABRq0Nog",
+            "number": 44,
+            "repository": {
+              "nameWithOwner": "yuvalrakavy/airzoned"
+            }
+          },
+          {
+            "__typename": "Issue",
+            "closedAt": null,
+            "id": "I_kwDOTBQnEM8AAAABRq0NOA",
+            "number": 43,
+            "repository": {
+              "nameWithOwner": "yuvalrakavy/airzoned"
+            }
+          },
+          {
+            "__typename": "Issue",
+            "closedAt": null,
+            "id": "I_kwDOTBQnEM8AAAABQzuRnw",
+            "number": 42,
+            "repository": {
+              "nameWithOwner": "yuvalrakavy/airzoned"
+            }
+          },
+          {
+            "__typename": "Issue",
+            "closedAt": null,
+            "id": "I_kwDOTBQnEM8AAAABQzuQzQ",
+            "number": 41,
+            "repository": {
+              "nameWithOwner": "yuvalrakavy/airzoned"
+            }
+          },
+          {
+            "__typename": "Issue",
+            "closedAt": null,
+            "id": "I_kwDOTBQnEM8AAAABQJcVNg",
+            "number": 40,
+            "repository": {
+              "nameWithOwner": "yuvalrakavy/airzoned"
+            }
+          },
+          {
+            "__typename": "Issue",
+            "closedAt": null,
+            "id": "I_kwDOTBQnEM8AAAABM4Ucjw",
+            "number": 36,
+            "repository": {
+              "nameWithOwner": "yuvalrakavy/airzoned"
+            }
+          },
+          {
+            "__typename": "Issue",
+            "closedAt": null,
+            "id": "I_kwDOTBQnEM8AAAABM4UcXw",
+            "number": 35,
+            "repository": {
+              "nameWithOwner": "yuvalrakavy/airzoned"
+            }
+          },
+          {
+            "__typename": "Issue",
+            "closedAt": null,
+            "id": "I_kwDOTBQnEM8AAAABM3zGPw",
+            "number": 34,
+            "repository": {
+              "nameWithOwner": "yuvalrakavy/airzoned"
+            }
+          },
+          {
+            "__typename": "Issue",
+            "closedAt": null,
+            "id": "I_kwDOTBQnEM8AAAABM3vAPA",
+            "number": 33,
+            "repository": {
+              "nameWithOwner": "yuvalrakavy/airzoned"
+            }
+          },
+          {
+            "__typename": "Issue",
+            "closedAt": null,
+            "id": "I_kwDOTBQnEM8AAAABM2tFag",
+            "number": 30,
+            "repository": {
+              "nameWithOwner": "yuvalrakavy/airzoned"
+            }
+          },
+          {
+            "__typename": "Issue",
+            "closedAt": null,
+            "id": "I_kwDOTBQnEM8AAAABM2tFFw",
+            "number": 28,
+            "repository": {
+              "nameWithOwner": "yuvalrakavy/airzoned"
+            }
+          },
+          {
+            "__typename": "Issue",
+            "closedAt": null,
+            "id": "I_kwDOTBQnEM8AAAABM2tFRg",
+            "number": 29,
+            "repository": {
+              "nameWithOwner": "yuvalrakavy/airzoned"
+            }
+          },
+          {
+            "__typename": "Issue",
+            "closedAt": null,
+            "id": "I_kwDOTBQnEM8AAAABLK3ELA",
+            "number": 13,
+            "repository": {
+              "nameWithOwner": "yuvalrakavy/airzoned"
+            }
+          },
+          {
+            "__typename": "Issue",
+            "closedAt": null,
+            "id": "I_kwDOTBQnEM8AAAABLJzwTg",
+            "number": 4,
+            "repository": {
+              "nameWithOwner": "yuvalrakavy/airzoned"
+            }
+          }
+        ],
+        "pageInfo": {
+          "endCursor": "Y3Vyc29yOjE0",
+          "hasNextPage": false
+        }
+      }
+    }
+  },
+  "variables": {
+    "after": null,
+    "first": 25,
+    "q": "repo:yuvalrakavy/airzoned is:issue is:open"
+  }
+}

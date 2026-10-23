@@ -1,0 +1,20 @@
+{
+  "name": "number",
+  "response": {
+    "data": {
+      "repository": {
+        "issueOrPullRequest": {
+          "__typename": "PullRequest",
+          "closedAt": "2026-10-23T06:41:29Z",
+          "id": "PR_kwDOAyYOjc8AAAABKKQvDw",
+          "number": 1194
+        }
+      }
+    }
+  },
+  "variables": {
+    "name": "rhai",
+    "number": 1194,
+    "owner": "rhaiscript"
+  }
+}

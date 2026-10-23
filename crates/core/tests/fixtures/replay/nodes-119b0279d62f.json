@@ -1,0 +1,400 @@
+{
+  "name": "nodes",
+  "response": {
+    "data": {
+      "nodes": [
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "## Observed\n\nA parent's `contains` restriction is enforced or not depending on HOW the child was created, not on what was created.\n\n```sdl\nclass CdStranger { is RootObject }\nclass CdBox { is RootObject  contains CdKind }\n```\n\n```rhai\nlet box = store.root.create(#{ Class: \"/Schema/User/CdBox\", Name: \"D1Box\" });\nbox.create(#{ Class: \"/Schema/User/CdStranger\", Name: \"Kid\" });   // ACCEPTED\n```\n\nThe same pair created nested, through a reconcile, is refused with `InvalidChildContainment`:\n\n```sdl\nmerge \"/\" { object D2Box: #CdBox { object Kid: #CdStranger { } } }\n```\n\nBoth are cases in `tests/transaction/schema_change/containment_doors_adversarial.tests` (`door_direct_create`, `door_reconcile_nested`). The first is listed `KNOWN_OPEN`, so that file currently asserts the hole stays open.\n\n**Owner ruling (2026-10-19): this is a bug, not an accepted asymmetry.** A store must never be able to hold a state its own schema says is impossible.\n\n## Where\n\n`store_server/src/command/precommit_store.rs::set_current_object`: with no `parent_stack` entry (a standalone `CreateObject`, i.e. a script's `parent.create(...)` or any single create command), the pair is queued with `queue_containment(parent_id, current_object, false)`. `check_child_class = false` skips the whole `ChildClass` block in `check_child_containment`. Only the child's `contained_in` is checked.\n\nPath coverage today:\n\n| Route | parent `contains` | child `contained_in` |\n|---|---|---|\n| nested create / reconcile | checked | checked |\n| direct create | **not checked** | checked |\n| cast, reparent | checked (gh #233) | checked |\n\n## Why it is still open\n\nFlipping the flag to `true` was tried and measured on 2026-08-26: **326 of 1,912 corpus tests fail with 1,026 violations**, dominated by 348 creates under `/Home` (which declares `contains Location`) and 266 at the store root. Record: `docs/superpowers/notes/2026-08-26-containment-invariant-findings.md` §\"The create path: TRIED, MEASURED, REVERTED\". So the corpus creates wrong-kind children constantly, and the flag cannot flip until those containers declare what they actually hold (or the tests stop using them as scratch space; the `test_world` module already provides a container fixture for that).\n\n## What done looks like\n\n1. **Declare what `/` and `/Home` hold**, or move the tests that use them as scratch space onto `test_world` / `Std/Container`. Decide per site; do not widen `/Home` to `contains Object` just to make the count drop.\n2. **Flip the direct-create path to `check_child_class = true`.** `door_direct_create` moves from `KNOWN_OPEN` into the shut assertion.\n3. **Existing stores.** A store created before the fix may already hold violating pairs. Add a whole-store containment census, reported at load (report-only, never an auto-repair, the same posture as `store.orphan_values`), plus a repair path, and run it against home TLV and the templates before the flip lands.\n4. **Docs.** `CLAUDE.md` (the containment paragraph and the TouchPanel catalog row) describe the gap as still open; update them to the fixed state.\n\n## Who depends on it\n\nThe behaviors design (master spec D44, and the node-context scheme being recorded as D52) enforces which node may sit where through `contains`. Until this is fixed it must declare `contained_in` on the child side as well and keep a Check backstop, because the parent's half can be bypassed by any script.\n\nRelated, separate: gh #394 (relation-change checks skip classes outside `/Schema`).",
+          "closedAt": null,
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-10-19T14:28:23Z"
+              },
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-10-19T16:52:50Z"
+              }
+            ],
+            "totalCount": 2
+          },
+          "createdAt": "2026-10-19T14:23:47Z",
+          "id": "I_kwDONszNXs8AAAABYTLWtA",
+          "labels": {
+            "nodes": [
+              {
+                "name": "bug"
+              },
+              {
+                "name": "p1"
+              },
+              {
+                "name": "kernel"
+              },
+              {
+                "name": "InProgress"
+              }
+            ],
+            "totalCount": 4
+          },
+          "milestone": null,
+          "number": 401,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "OPEN",
+          "stateReason": null,
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABYTLWtM8AAAAH1ePuuA"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABYTLWtM8AAAAH1ePv2Q"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABYTLWtM8AAAAH1ePxJA"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABYTLWtM8AAAAH1eqDzQ"
+              }
+            ]
+          },
+          "title": "A direct create ignores the parent's `contains`, so the store accepts a child its schema forbids",
+          "updatedAt": "2026-10-19T16:52:51Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "## Observed\n\nOn lane t1 (branch `fix/containment-direct-create`, server up 2 days 10 h), `store-cli delete-store --store-name _rb_climate_e2e_panel` never returned. That store was a scratch store, reset from a template and not loaded at the time. From the moment the server logged `DeleteStore: destructive operation on a store` (05:33:22Z), it **stopped answering every request**:\n\n- `ht_server` logged `Store-Server stream error, reconnecting` at 05:33:55Z.\n- From then on it logged `Failed to connect to Store-Server` roughly every 40 s.\n- The gRPC port stayed bound (`lsof` showed it listening) while nothing was served.\n\nThe process sat at 0.0 % CPU. A `sample` of it (kept in the session scratchpad) shows the request thread parked in a syscall that does not return:\n\n```\nStoreManagerService::delete_store\n  store_server::manager::destroy_store_dir\n    std::fs::remove_dir_all\n      std::sys::fs::unix::remove_dir_impl::remove_dir_all_recursive\n        openat            <- parked\n```\n\nEvery other tokio worker in the sample is idle (`Context::park` → `pthread_cond_wait`), including a blocking-pool thread that last ran `command::processor::flush_now`.\n\n## Expected\n\nA delete either completes or fails with an error. No single request may stop the server from serving others (owner rule: no scenario may hang the system).\n\n## Confirmed\n\n- The store directory and everything under it is readable while the delete is parked. A bounded `ls -laO` of `_rb_climate_e2e_panel` and its `db/` returned at once, and showed `.instance`, `.materialized`, `.reconciled` and `store.redb`, none with a dataless flag.\n- The server process holds none of those files open (`lsof -p` shows 0 entries under `_rb_`).\n- `DeleteStore` calls `StoreManager::force_unload_store_deleting` and then `destroy_store_dir`, synchronously, on the async request task (`services/management.rs:311-321`).\n\n## Hypotheses — UNVERIFIED, do not trust\n\n- **Which path `openat` is parked on is unknown.** It is not visible without a root-level trace such as `fs_usage`. `destroy_store_dir` may also remove a `db_root` or artifacts half outside the store directory; one of those could be the slow path.\n- **Why the whole server stops is unknown.** A synchronous `remove_dir_all` on a tokio worker blocks only that worker. That every request stalls suggests something else waits on this request, perhaps a lock taken by the unload or a shutdown handshake, but nothing in the sample shows a second thread waiting on it.\n- Either way, a filesystem call on the request path has no bound. One direction is `spawn_blocking` with a timeout that reports and leaves the directory for a later sweep.\n\nFound in passing during gh #401, which does not touch this path. The lane was recovered by killing the server.\n",
+          "closedAt": null,
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-10-22T05:38:31Z"
+              },
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-10-22T07:45:54Z"
+              }
+            ],
+            "totalCount": 2
+          },
+          "createdAt": "2026-10-22T05:38:10Z",
+          "id": "I_kwDONszNXs8AAAABZBARHA",
+          "labels": {
+            "nodes": [
+              {
+                "name": "bug"
+              },
+              {
+                "name": "p0"
+              },
+              {
+                "name": "kernel"
+              }
+            ],
+            "totalCount": 3
+          },
+          "milestone": null,
+          "number": 403,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "OPEN",
+          "stateReason": null,
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABZBARHM8AAAAH5akjSw"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABZBARHM8AAAAH5akj8g"
+              },
+              {
+                "id": "UNLE_lADONszNXs8AAAABZBARHM8AAAAH6pJ3Bg"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABZBARHM8AAAAH6pJ3Hg"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABZBARHM8AAAAH6pJ3Tw"
+              }
+            ]
+          },
+          "title": "DeleteStore parks in remove_dir_all openat and the whole server stops answering",
+          "updatedAt": "2026-10-22T22:40:02Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "## Observed\nstore_server's OTel span queue (16384, from `server.toml` `[logging.otel] span_queue_size`) overflows during a dense DSL selection, so store-test marks the run \"RUN FAILED ... not a measurement\" although every test passed. It is intermittent on one identical selection: 2 runs of 3 dropped, on freshly restarted servers. Each drop began inside a `ResetStoreFromTemplate`.\n\nThe selection: the six `.tests` files of the 5d tags-workflows branch (`tests/admin_ui/tree_annotation_census.tests`, `tests/workflows/{regions,steps,tag_step,retire_used_now}.tests`, `tests/workflows/renderer_e2e/tag_notes.tests`). That is 45 tests, almost all resetting `tlv_apartment`.\n\nMeasured with a logmon collector over one clean run of that selection: **67,780 spans in 33 s**. 48,363 of them are the `processor.transaction` / `execute` / `processor.post_transaction` triple, i.e. **16,121 committed transactions**, about 358 per test.\n\nOne bare `tlv_apartment` template reset, nothing else running:\n\n| Server | Transactions | Spans |\n|---|---|---|\n| main tip `c5c7fbb8d` (home) | 323 | 1,448 |\n| main + 5d branch (lane t2) | 308 | 1,362 |\n\nSo the volume is per-reset initialization, not test bodies, and it is present on main without the branch.\n\n## Expected\nA gate selection of this size runs inside the span budget; a store reset does not commit hundreds of micro-transactions.\n\n## Confirmed\n- The applied queue is 16384: the tracing-init banner reads `otel(..., queue:16384/toml)`.\n- The drop is per selection density, not per reset: the census test alone (an `all_public_content` reset) dropped nothing.\n\n## Hypotheses: UNVERIFIED\n- The ~300 transactions per reset are `on Initialized` handlers committing one micro-transaction per write. Candidates are main's recent BridgeConfigs adoption (`70a1e28ba`) and the HDL catalog seeding (`5a19dd81d`), which grew `tlv_apartment`'s declared shape. Not compared against a pre-`5a19dd81d` main.\n- If the count grew recently, the fix is batching those writes (`begin_atomic_batch`), not a larger queue.\n\nRelated: #190, #266 and #286 (queue defaults and drop attribution, all closed).\n",
+          "closedAt": null,
+          "comments": {
+            "nodes": [],
+            "totalCount": 0
+          },
+          "createdAt": "2026-10-22T09:49:05Z",
+          "id": "I_kwDONszNXs8AAAABZEHoaQ",
+          "labels": {
+            "nodes": [
+              {
+                "name": "bug"
+              },
+              {
+                "name": "p2"
+              },
+              {
+                "name": "kernel"
+              }
+            ],
+            "totalCount": 3
+          },
+          "milestone": null,
+          "number": 408,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "OPEN",
+          "stateReason": null,
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABZEHoac8AAAAH5r9d_A"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABZEHoac8AAAAH5r9fLQ"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABZEHoac8AAAAH6pKX_g"
+              }
+            ]
+          },
+          "title": "A tlv_apartment reset commits ~300 micro-transactions, and a dense selection overflows the server's 16384 span queue",
+          "updatedAt": "2026-10-22T22:40:09Z"
+        }
+      ]
+    }
+  },
+  "variables": {
+    "ids": [
+      "I_kwDONszNXs8AAAABYTLWtA",
+      "I_kwDONszNXs8AAAABZBARHA",
+      "I_kwDONszNXs8AAAABZEHoaQ"
+    ]
+  }
+}

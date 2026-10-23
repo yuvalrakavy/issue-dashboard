@@ -1,0 +1,824 @@
+{
+  "name": "nodes",
+  "response": {
+    "data": {
+      "nodes": [
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "## Observed\n\n`tests/reconcile_manifest_coverage.tests` fails on main (verified 2026-10-22 against home's server, which runs main):\n\n```\nassert { result.probed >= 15 }: script threw: Rhai limit exceeded: max_array_size (rpc=run_script)\n```\n\nThe server logs `ErrorDataTooLarge(\"Size of array/BLOB\", 64:41)` from the script's `manifest_entries` helper, which calls `b.len()` / `b[i]` on a module's `Manifest` blob. At least one module's manifest is now larger than Rhai's 100 KB `max_array_size`. That is the gh #322 rule: a host-delivered blob may pass through Rhai, but it cannot be measured or indexed there.\n\n## Effect\n\nThe incremental-reconcile coverage ratchet (the guard that every module stays skippable) no longer runs at all, so a regression it exists to catch would go unnoticed.\n\n## Expected\n\nThe manifest is read on the store side, through a binding that returns the entry count (or the entry paths), so the test never handles the raw blob. A fix that only raises the Rhai limit would just move the threshold.\n\nFound in passing during gh #401, which does not touch this path.\n",
+          "closedAt": null,
+          "comments": {
+            "nodes": [],
+            "totalCount": 0
+          },
+          "createdAt": "2026-10-22T07:46:57Z",
+          "id": "I_kwDONszNXs8AAAABZCcZmw",
+          "labels": {
+            "nodes": [
+              {
+                "name": "bug"
+              },
+              {
+                "name": "p2"
+              },
+              {
+                "name": "harness"
+              }
+            ],
+            "totalCount": 3
+          },
+          "milestone": null,
+          "number": 404,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "OPEN",
+          "stateReason": null,
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABZCcZm88AAAAH5igVuA"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABZCcZm88AAAAH5igXjA"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABZCcZm88AAAAH6pKAUg"
+              }
+            ]
+          },
+          "title": "reconcile_manifest_coverage can no longer read a manifest: it exceeds Rhai's 100 KB blob limit",
+          "updatedAt": "2026-10-22T22:40:03Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "## Observed\n\n`template::binary_version()` (store_server/src/template.rs:914) fingerprints the workspace SOURCE lazily, the first time it is called (a `OnceLock` around `hash_workspace_source()`), not when the server starts or when the binary was built.\n\nSeen during gh #401's mutation pass on lane t4:\n1. The server was started on the frozen kernel.\n2. A mutant edit was made to a source file.\n3. The first rebake then ran and stamped the templates with the mutant's source hash.\n4. A restart onto the mutant judged those templates \"fresh\", although they were baked by the unmutated code.\n\n## Effect\n\nA running server can stamp templates with a fingerprint that describes code it is not running. Staleness then reads \"fresh\" across a real kernel change. This is the gh #6 failure class, now reachable through timing instead of a constant. It bites whoever edits source while a server is up: every worktree workflow, and the mutation finder by construction.\n\n## Expected\n\nThe fingerprint describes the code the process runs. Either:\n- compute it eagerly at startup, which narrows the window to edit-while-building; or\n- derive it at build time (e.g. a `build.rs` hash of the same inputs, rebuilt whenever they change), which closes the window.\n",
+          "closedAt": null,
+          "comments": {
+            "nodes": [],
+            "totalCount": 0
+          },
+          "createdAt": "2026-10-22T08:46:28Z",
+          "id": "I_kwDONszNXs8AAAABZDPolg",
+          "labels": {
+            "nodes": [
+              {
+                "name": "bug"
+              },
+              {
+                "name": "p3"
+              },
+              {
+                "name": "harness"
+              }
+            ],
+            "totalCount": 3
+          },
+          "milestone": null,
+          "number": 405,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "OPEN",
+          "stateReason": null,
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABZDPols8AAAAH5nBuKA"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABZDPols8AAAAH5nBvMg"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABZDPols8AAAAH6pKIYA"
+              }
+            ]
+          },
+          "title": "binary_version fingerprints source at first call, so a running server can stamp templates with code it isn't running",
+          "updatedAt": "2026-10-22T22:40:05Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "## Observed\n\nIn the full pre-merge corpus (gh #401 branch, lane t1, about 20-way parallel), `tests/mqtt_bridge_kit/processes.tests:1225` (\"processes: an ignored target records and stays quiet\") failed:\n\n```\nthe withdrawal is retracted on the wire: [#{\"payload\": \"3.0\", ...}, #{\"payload\": \"\", ...}, #{\"payload\": \"\", ...\n```\n\nThe level topic carried THREE messages: the request (`3.0`) and then two empty retained retractions. Run alone, the file passes (2026-10-22).\n\n## Mechanism (hypothesis, from reading the test; not yet traced into the kit)\n\nThe test waits for `l.len() == 2 && l[1].payload == \"\"`. If `Ignore()` always publishes the retraction twice, a fast run sees `len == 2` in the gap between the two publishes and passes. A slow poll sees only `len == 3` and times out.\n\nSo either:\n- the kit sends a duplicate retraction (the withdrawal of `PendingRequests` and the `Ignored` transition each retract), and the test's exact count is the only thing noticing it; or\n- the second empty publish is legitimate, and the assertion should not count messages.\n\n## Expected\n\n- Decide which.\n- If the duplicate is a defect, fix it in the kit and keep the count.\n- If it is legitimate, assert the LAST message is an empty retraction.\n\nEither way, the test must not depend on poll timing.\n",
+          "closedAt": null,
+          "comments": {
+            "nodes": [],
+            "totalCount": 0
+          },
+          "createdAt": "2026-10-22T09:20:32Z",
+          "id": "I_kwDONszNXs8AAAABZDuJug",
+          "labels": {
+            "nodes": [
+              {
+                "name": "bug"
+              },
+              {
+                "name": "p2"
+              },
+              {
+                "name": "drivers"
+              }
+            ],
+            "totalCount": 3
+          },
+          "milestone": null,
+          "number": 406,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "OPEN",
+          "stateReason": null,
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABZDuJus8AAAAH5pvXtQ"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABZDuJus8AAAAH5pvZoA"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABZDuJus8AAAAH6pKPig"
+              }
+            ]
+          },
+          "title": "Bridge kit Ignore() retracts the desired level twice; the processes test passes only when its poll lands between them",
+          "updatedAt": "2026-10-22T22:40:07Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "## Observed\n\nIn the full pre-merge corpus (gh #401 branch, lane t1, about 20-way parallel), `tests/docs/behaviors_examples.tests:548` (`behaviors.examples.ch12_fall_cancels_the_ladder_and_a_new_rise_starts_over`) failed:\n\n```\nthe countdown started over: 1.2 s since the first rise is not enough\n```\n\nThe same test's `ex_make` step took 17.7 s in that run. Run alone, the file passes (2026-10-22).\n\n## Mechanism (hypothesis)\n\nThe assertion measures a real-time interval since the first rise. Under load, the steps between that rise and the check take long enough that the interval no longer separates \"started over\" from \"kept counting\". That is a wall-clock budget inside a correctness assertion.\n\n## Expected\n\nThe example asserts what started over, not how much real time passed. Two ways to do that:\n- drive time through `TestClock`;\n- compare against a version or counter the engine stamps when the ladder restarts.\n",
+          "closedAt": null,
+          "comments": {
+            "nodes": [],
+            "totalCount": 0
+          },
+          "createdAt": "2026-10-22T09:20:33Z",
+          "id": "I_kwDONszNXs8AAAABZDuLKA",
+          "labels": {
+            "nodes": [
+              {
+                "name": "bug"
+              },
+              {
+                "name": "p2"
+              },
+              {
+                "name": "behaviors"
+              }
+            ],
+            "totalCount": 3
+          },
+          "milestone": null,
+          "number": 407,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "OPEN",
+          "stateReason": null,
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABZDuLKM8AAAAH5pvh2Q"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABZDuLKM8AAAAH5pvjFw"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABZDuLKM8AAAAH6pJJfw"
+              }
+            ]
+          },
+          "title": "behaviors_examples ch12 asserts a real-time interval and fails under a parallel corpus",
+          "updatedAt": "2026-10-22T22:39:51Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "## Observed\nstore_server's OTel span queue (16384, from `server.toml` `[logging.otel] span_queue_size`) overflows during a dense DSL selection, so store-test marks the run \"RUN FAILED ... not a measurement\" although every test passed. It is intermittent on one identical selection: 2 runs of 3 dropped, on freshly restarted servers. Each drop began inside a `ResetStoreFromTemplate`.\n\nThe selection: the six `.tests` files of the 5d tags-workflows branch (`tests/admin_ui/tree_annotation_census.tests`, `tests/workflows/{regions,steps,tag_step,retire_used_now}.tests`, `tests/workflows/renderer_e2e/tag_notes.tests`). That is 45 tests, almost all resetting `tlv_apartment`.\n\nMeasured with a logmon collector over one clean run of that selection: **67,780 spans in 33 s**. 48,363 of them are the `processor.transaction` / `execute` / `processor.post_transaction` triple, i.e. **16,121 committed transactions**, about 358 per test.\n\nOne bare `tlv_apartment` template reset, nothing else running:\n\n| Server | Transactions | Spans |\n|---|---|---|\n| main tip `c5c7fbb8d` (home) | 323 | 1,448 |\n| main + 5d branch (lane t2) | 308 | 1,362 |\n\nSo the volume is per-reset initialization, not test bodies, and it is present on main without the branch.\n\n## Expected\nA gate selection of this size runs inside the span budget; a store reset does not commit hundreds of micro-transactions.\n\n## Confirmed\n- The applied queue is 16384: the tracing-init banner reads `otel(..., queue:16384/toml)`.\n- The drop is per selection density, not per reset: the census test alone (an `all_public_content` reset) dropped nothing.\n\n## Hypotheses: UNVERIFIED\n- The ~300 transactions per reset are `on Initialized` handlers committing one micro-transaction per write. Candidates are main's recent BridgeConfigs adoption (`70a1e28ba`) and the HDL catalog seeding (`5a19dd81d`), which grew `tlv_apartment`'s declared shape. Not compared against a pre-`5a19dd81d` main.\n- If the count grew recently, the fix is batching those writes (`begin_atomic_batch`), not a larger queue.\n\nRelated: #190, #266 and #286 (queue defaults and drop attribution, all closed).\n",
+          "closedAt": null,
+          "comments": {
+            "nodes": [],
+            "totalCount": 0
+          },
+          "createdAt": "2026-10-22T09:49:05Z",
+          "id": "I_kwDONszNXs8AAAABZEHoaQ",
+          "labels": {
+            "nodes": [
+              {
+                "name": "bug"
+              },
+              {
+                "name": "p2"
+              },
+              {
+                "name": "kernel"
+              }
+            ],
+            "totalCount": 3
+          },
+          "milestone": null,
+          "number": 408,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "OPEN",
+          "stateReason": null,
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABZEHoac8AAAAH5r9d_A"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABZEHoac8AAAAH5r9fLQ"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABZEHoac8AAAAH6pKX_g"
+              }
+            ]
+          },
+          "title": "A tlv_apartment reset commits ~300 micro-transactions, and a dense selection overflows the server's 16384 span queue",
+          "updatedAt": "2026-10-22T22:40:09Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "## Observed\nOn every start, store_server logs `kind=\"otel_queue_config\" max_queue_size=2048` with \"OTEL_BSP_MAX_QUEUE_SIZE not set: span queue is at the SDK default, and a dense parallel run may drop spans (gh #190)\". The same start's tracing-init banner reads `otel(http://127.0.0.1:4322, ..., queue:16384/toml)`.\n\n`store_server/src/main.rs:1072` computes the reported value from the environment variable only. Since the span-queue size moved into `server.toml` (`[logging.otel] span_queue_size`; see the comment in `scripts/dev-server.sh` at the \"OpenTelemetry span queue (gh #190)\" block), the line reports 2048 while 16384 is in force.\n\n## Expected\nThe line reports the queue actually in force, and which source set it (env over TOML over default), as its own comment promises (\"The OTel span-queue size actually in force\").\n\n## Why it matters\nIt points anyone chasing a span-drop at the wrong cause. During a drop investigation it read as \"the queue was never raised\", which was false.\n\n## Hypotheses: UNVERIFIED\n- The fix is to read the resolved value from the loaded logging config (the same value tracing-init uses), with the env as the override, rather than re-deriving it from the env alone.\n",
+          "closedAt": null,
+          "comments": {
+            "nodes": [],
+            "totalCount": 0
+          },
+          "createdAt": "2026-10-22T09:49:07Z",
+          "id": "I_kwDONszNXs8AAAABZEHp0Q",
+          "labels": {
+            "nodes": [
+              {
+                "name": "bug"
+              },
+              {
+                "name": "p3"
+              },
+              {
+                "name": "dev-loop"
+              }
+            ],
+            "totalCount": 3
+          },
+          "milestone": null,
+          "number": 409,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "OPEN",
+          "stateReason": null,
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABZEHp0c8AAAAH5r9jJQ"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABZEHp0c8AAAAH5r9kzw"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABZEHp0c8AAAAH6pKhig"
+              }
+            ]
+          },
+          "title": "store_server's startup otel_queue_config line reports 2048 while server.toml's 16384 is in force",
+          "updatedAt": "2026-10-22T22:40:11Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "## Observed\n\n`Cargo.toml:96` patches `rhai` to the fork `yuvalrakavy/rhai` at `81f110a6`, for gh #387. Its comment says: delete this line once a rhai release carries the fix from rhaiscript/rhai#1189, keeping the #387 tests.\n\nThat release now exists:\n\n- rhaiscript/rhai#1189 (\"Restore a native call's copied first argument on unwind\") was merged 2026-10-17; merge commit `aaf90906`.\n- **rhai v1.27.0** was released 2026-10-21 and contains that commit (`gh api repos/rhaiscript/rhai/compare/aaf90906...v1.27.0` reports `identical`). It is the crates.io `max_stable_version` (checked 2026-10-23).\n\n## Expected\n\nStore builds against a released rhai, not a fork, as the comment beside the patch line asks.\n\n## Confirmed\n\n- The fork is the 1.26.1 release commit plus one fix commit (`Cargo.toml:86-95`), so going back is a **version upgrade, 1.26.1 to 1.27.0**, not only a line deletion.\n- `store_server/Cargo.toml:76` requires `rhai = \"1.26\"` (caret), which 1.27.0 satisfies, so removing the patch lets the lockfile resolve to 1.27.x once updated.\n- The #387 tests are the check that the fix survived the move.\n\n## Hypotheses (unverified)\n\n- 1.27.0 may change behaviour that Store's scripts depend on, as 1.26 did (see `docs/superpowers/specs/2026-10-16-rhai-1-26-upgrade-memo.md`). Its changelog should be read before the upgrade, and the derived gate decides what else must run; a rhai upgrade reaches every script, so it likely needs the full corpus.\n\n## To do\n\n1. Read the rhai 1.27.0 changelog against the 1.26 upgrade memo.\n2. Remove the `[patch.crates-io]` rhai line and its comment; `cargo update -p rhai`.\n3. Run the #387 tests and the gate the diff derives.\n4. Land; this closes the fork. The `rumqttc` patch at `Cargo.toml:85` is separate: no upstream PR for it was found.\n\nFound by the issue-dashboard fork-return check (design in yuvalrakavy/issue-dashboard, `docs/spec.md`).\n",
+          "closedAt": null,
+          "comments": {
+            "nodes": [],
+            "totalCount": 0
+          },
+          "createdAt": "2026-10-23T03:30:24Z",
+          "id": "I_kwDONszNXs8AAAABZRzv8g",
+          "labels": {
+            "nodes": [
+              {
+                "name": "todo"
+              },
+              {
+                "name": "p2"
+              },
+              {
+                "name": "sdl"
+              },
+              {
+                "name": "self-contained"
+              }
+            ],
+            "totalCount": 4
+          },
+          "milestone": null,
+          "number": 410,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "OPEN",
+          "stateReason": null,
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABZRzv8s8AAAAH63mwsQ"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABZRzv8s8AAAAH63mxWw"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABZRzv8s8AAAAH63myFw"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABZRzv8s8AAAAH63my9g"
+              }
+            ]
+          },
+          "title": "Go back from the rhai fork to rhai 1.27.0, which carries the #387 fix",
+          "updatedAt": "2026-10-23T03:30:24Z"
+        }
+      ]
+    }
+  },
+  "variables": {
+    "ids": [
+      "I_kwDONszNXs8AAAABZCcZmw",
+      "I_kwDONszNXs8AAAABZDPolg",
+      "I_kwDONszNXs8AAAABZDuJug",
+      "I_kwDONszNXs8AAAABZDuLKA",
+      "I_kwDONszNXs8AAAABZEHoaQ",
+      "I_kwDONszNXs8AAAABZEHp0Q",
+      "I_kwDONszNXs8AAAABZRzv8g"
+    ]
+  }
+}

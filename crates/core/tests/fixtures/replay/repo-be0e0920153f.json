@@ -1,0 +1,52 @@
+{
+  "name": "repo",
+  "response": {
+    "data": {
+      "repository": {
+        "defaultBranchRef": {
+          "name": "main"
+        },
+        "id": "R_kgDOTBQnEA",
+        "labels": {
+          "nodes": [
+            {
+              "name": "bug"
+            },
+            {
+              "name": "documentation"
+            },
+            {
+              "name": "duplicate"
+            },
+            {
+              "name": "enhancement"
+            },
+            {
+              "name": "good first issue"
+            },
+            {
+              "name": "help wanted"
+            },
+            {
+              "name": "invalid"
+            },
+            {
+              "name": "question"
+            },
+            {
+              "name": "wontfix"
+            }
+          ],
+          "totalCount": 9
+        },
+        "nameWithOwner": "yuvalrakavy/airzoned",
+        "viewerPermission": "ADMIN",
+        "visibility": "PRIVATE"
+      }
+    }
+  },
+  "variables": {
+    "name": "airzoned",
+    "owner": "yuvalrakavy"
+  }
+}

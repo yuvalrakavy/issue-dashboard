@@ -1,0 +1,3213 @@
+{
+  "name": "prs_since",
+  "response": {
+    "data": {
+      "repository": {
+        "pullRequests": {
+          "nodes": [
+            {
+              "assignees": {
+                "nodes": []
+              },
+              "author": {
+                "login": "luispedro"
+              },
+              "authorAssociation": "CONTRIBUTOR",
+              "body": "Fixes #1193.\n\n## Problem\n\nSince 648c6848 (\"Remove unnecessary embedded environment from FnPtr\"), a closure gets its environment only from its function's entry in the lib, which closures of the main script don't have. A closure kept by the host and called after the script has finished, with `FnPtr::call`, no longer finds the script's `import`s:\n\n```rust\nimport \"m\" as m; keep(|| m::who());\n```\n\nfails with `ErrorModuleNotFound(\"m\")` when the kept closure is called. It worked in 1.26.1. The bisect and the repro are in the issue.\n\n## Changes\n\n**Commit 1: AST walker.** Put back `FnPtr::env`, set when a closure literal is evaluated (as before 648c6848), and prefer it to the lib's environment when calling. The bare function name as a variable (6f4ed21f) keeps `env: None`, so the fix for a module's closure seeing the caller's functions stays. `FnPtr` is 48 bytes again. Test: `test_module_closure_keeps_imports`.\n\n**Commit 2: Grain.** The first commit left Grain unchanged, and it hit the same error: the compiler pools closure literals as constants and the VM pushed them with `env: None`.\n\n- The VM now gives a loaded `FnPtr` constant an environment built from its global state, as `get_literal_value` does for the walker. It checks only when the program uses function pointers (`Caps::FN_PTR`), so other programs pay one flag test per constant load.\n- `constant_caps` refuses a `FnPtr` that already has an environment, so such a constant is not pooled. The compiler leaves it to the walker instead of writing an artifact that loses the environment and fails the same way when read back. (As suggested in the issue discussion.) I could not get an `env: Some` constant into an AST through the public API, since the optimizer rebuilds scope-constant closures as `Fn(\"anon$…\")` calls, so this guard is defensive.\n- Tests: a Grain version of the repro (`a_kept_closure_keeps_the_imports_of_its_script`) and a unit test for `constant_caps`.\n\n## Design note\n\nI did not fragment every closure literal into a residual so that the walker sets the environment. That would stop `a.map(|x| ..)` and similar from lowering, and the Grain `AGENTS.md` says to prefer instructions over fragments. Setting the environment in the VM needs no new opcode and no wire-format change.\n\n## Testing\n\n`cargo test --tests` passes with the default features, `internals,grain`, `bin-features,grain,internals`, and `internals,grain` combined with each of `no_closure`, `no_function`, `no_module` and `no_object,no_index`. The library builds without warnings under several `no_*` combinations.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n",
+              "closedAt": "2026-10-23T06:41:29Z",
+              "closingIssuesReferences": {
+                "nodes": [
+                  {
+                    "id": "I_kwDOAyYOjc8AAAABZPn5tQ",
+                    "number": 1193,
+                    "repository": {
+                      "nameWithOwner": "rhaiscript/rhai"
+                    },
+                    "state": "CLOSED"
+                  }
+                ]
+              },
+              "comments": {
+                "nodes": [
+                  {
+                    "author": {
+                      "login": "schungx"
+                    },
+                    "authorAssociation": "COLLABORATOR",
+                    "createdAt": "2026-10-23T02:48:09Z"
+                  }
+                ],
+                "totalCount": 1
+              },
+              "commits": {
+                "nodes": [
+                  {
+                    "commit": {
+                      "oid": "781293420b6d69c40663e5114b71f0719a3cccf3",
+                      "statusCheckRollup": {
+                        "state": "SUCCESS"
+                      }
+                    }
+                  }
+                ]
+              },
+              "createdAt": "2026-10-23T02:16:19Z",
+              "id": "PR_kwDOAyYOjc8AAAABKKQvDw",
+              "isDraft": false,
+              "labels": {
+                "nodes": [
+                  {
+                    "name": "bug"
+                  }
+                ],
+                "totalCount": 1
+              },
+              "mergeable": "UNKNOWN",
+              "milestone": null,
+              "number": 1194,
+              "reactionGroups": [
+                {
+                  "content": "THUMBS_UP",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "THUMBS_DOWN",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "LAUGH",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "HOORAY",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "CONFUSED",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "HEART",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "ROCKET",
+                  "reactors": {
+                    "totalCount": 1
+                  }
+                },
+                {
+                  "content": "EYES",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                }
+              ],
+              "repository": {
+                "nameWithOwner": "rhaiscript/rhai"
+              },
+              "reviewDecision": null,
+              "state": "MERGED",
+              "timelineItems": {
+                "nodes": [
+                  {
+                    "id": "LE_lADOAyYOjc8AAAABZRKRSc8AAAAH61bI9A"
+                  }
+                ]
+              },
+              "title": "Closures keep the imports of the script that made them (fixes #1193)",
+              "updatedAt": "2026-10-23T06:41:29Z"
+            },
+            {
+              "assignees": {
+                "nodes": []
+              },
+              "author": {
+                "login": "ImTheSquid"
+              },
+              "authorAssociation": "COLLABORATOR",
+              "body": "This PR addresses a few problems:\n- Adds support for lazy loading Grain functions from other modules.\n- Verifies only parts of a Grain artifact that need verification (ie jump instructions).\n- Sparsifies the position array to do binary search instead.",
+              "closedAt": null,
+              "closingIssuesReferences": {
+                "nodes": []
+              },
+              "comments": {
+                "nodes": [
+                  {
+                    "author": {
+                      "login": "schungx"
+                    },
+                    "authorAssociation": "COLLABORATOR",
+                    "createdAt": "2026-10-22T02:23:45Z"
+                  },
+                  {
+                    "author": {
+                      "login": "schungx"
+                    },
+                    "authorAssociation": "COLLABORATOR",
+                    "createdAt": "2026-10-23T01:59:13Z"
+                  }
+                ],
+                "totalCount": 2
+              },
+              "commits": {
+                "nodes": [
+                  {
+                    "commit": {
+                      "oid": "4dfb038b0f76a96e652858a4e864a1a8a7bd3375",
+                      "statusCheckRollup": {
+                        "state": "SUCCESS"
+                      }
+                    }
+                  }
+                ]
+              },
+              "createdAt": "2026-10-22T02:15:51Z",
+              "id": "PR_kwDOAyYOjc8AAAABJ7QrLw",
+              "isDraft": false,
+              "labels": {
+                "nodes": [
+                  {
+                    "name": "vm"
+                  }
+                ],
+                "totalCount": 1
+              },
+              "mergeable": "MERGEABLE",
+              "milestone": null,
+              "number": 1192,
+              "reactionGroups": [
+                {
+                  "content": "THUMBS_UP",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "THUMBS_DOWN",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "LAUGH",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "HOORAY",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "CONFUSED",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "HEART",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "ROCKET",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "EYES",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                }
+              ],
+              "repository": {
+                "nameWithOwner": "rhaiscript/rhai"
+              },
+              "reviewDecision": null,
+              "state": "OPEN",
+              "timelineItems": {
+                "nodes": [
+                  {
+                    "id": "LE_lADOAyYOjc8AAAABY_LATs8AAAAH5Q4kCg"
+                  }
+                ]
+              },
+              "title": "Make Grain function loading lazy, tighten up routines",
+              "updatedAt": "2026-10-23T01:59:13Z"
+            },
+            {
+              "assignees": {
+                "nodes": []
+              },
+              "author": {
+                "login": "yuvalrakavy"
+              },
+              "authorAssociation": "CONTRIBUTOR",
+              "body": "Fixes the abort reported in #1188. The `sync` panic behind it is split out into #1190, as requested.\n\n`exec_native_fn_call` swaps a copy of the first argument in through `ArgBackup` when a non-method native function is called with a variable first argument, and restored it only on the normal-return path. If the native function panics, the unwind drops the `ArgBackup` unrestored, its `Drop` assertion panics during the unwind, and the process aborts, so a host's `catch_unwind` cannot contain it.\n\n```rust\nlet mut engine = Engine::new();\nengine.register_fn(\"buggy\", |_x: INT| -> INT { panic!(\"buggy native function\") });\n// Aborts the process today:\nlet _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| engine.eval::<INT>(\"let t = 1; buggy(t)\")));\n```\n\nThe fix restores through the same `defer!` guard the script-function path in `func_call.rs` already uses, which also runs on unwind. The assertion is kept.\n\nTest: `test_native_panic_with_variable_first_argument_unwinds` in `tests/native.rs`. `buggy(t)` is the aborting case and runs under every feature combination; the method-call spelling `t.buggy()` is a control and is gated on `no_object`, which disables the dot syntax (that was the CI failure on the `no_object` rows). Without the fix the test aborts with SIGABRT; with it the panic is caught and the engine is usable afterwards.\n\nChecks: `cargo test` with default features, `cargo test --test native` under the three `no_object` rows of the CI matrix, `cargo +nightly fmt --check`. CHANGELOG line under 1.27.0's bug fixes, linking this PR.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n",
+              "closedAt": "2026-10-17T23:44:49Z",
+              "closingIssuesReferences": {
+                "nodes": [
+                  {
+                    "id": "I_kwDOAyYOjc8AAAABXrsslw",
+                    "number": 1188,
+                    "repository": {
+                      "nameWithOwner": "rhaiscript/rhai"
+                    },
+                    "state": "CLOSED"
+                  }
+                ]
+              },
+              "comments": {
+                "nodes": [
+                  {
+                    "author": {
+                      "login": "schungx"
+                    },
+                    "authorAssociation": "COLLABORATOR",
+                    "createdAt": "2026-10-17T00:13:43Z"
+                  },
+                  {
+                    "author": {
+                      "login": "yuvalrakavy"
+                    },
+                    "authorAssociation": "CONTRIBUTOR",
+                    "createdAt": "2026-10-17T12:14:51Z"
+                  },
+                  {
+                    "author": {
+                      "login": "yuvalrakavy"
+                    },
+                    "authorAssociation": "CONTRIBUTOR",
+                    "createdAt": "2026-10-17T14:26:37Z"
+                  },
+                  {
+                    "author": {
+                      "login": "schungx"
+                    },
+                    "authorAssociation": "COLLABORATOR",
+                    "createdAt": "2026-10-17T14:33:07Z"
+                  },
+                  {
+                    "author": {
+                      "login": "yuvalrakavy"
+                    },
+                    "authorAssociation": "CONTRIBUTOR",
+                    "createdAt": "2026-10-17T22:46:12Z"
+                  }
+                ],
+                "totalCount": 5
+              },
+              "commits": {
+                "nodes": [
+                  {
+                    "commit": {
+                      "oid": "5c8a4055f722c6ab83218f8dc4ded6db2f18acec",
+                      "statusCheckRollup": {
+                        "state": "SUCCESS"
+                      }
+                    }
+                  }
+                ]
+              },
+              "createdAt": "2026-10-16T17:51:20Z",
+              "id": "PR_kwDOAyYOjc8AAAABI5kd-A",
+              "isDraft": false,
+              "labels": {
+                "nodes": [
+                  {
+                    "name": "bug"
+                  }
+                ],
+                "totalCount": 1
+              },
+              "mergeable": "UNKNOWN",
+              "milestone": null,
+              "number": 1189,
+              "reactionGroups": [
+                {
+                  "content": "THUMBS_UP",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "THUMBS_DOWN",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "LAUGH",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "HOORAY",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "CONFUSED",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "HEART",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "ROCKET",
+                  "reactors": {
+                    "totalCount": 1
+                  }
+                },
+                {
+                  "content": "EYES",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                }
+              ],
+              "repository": {
+                "nameWithOwner": "rhaiscript/rhai"
+              },
+              "reviewDecision": null,
+              "state": "MERGED",
+              "timelineItems": {
+                "nodes": [
+                  {
+                    "id": "LE_lADOAyYOjc8AAAABXv7hM88AAAAHzF2Kow"
+                  }
+                ]
+              },
+              "title": "Restore a native call's copied first argument on unwind",
+              "updatedAt": "2026-10-17T23:44:50Z"
+            },
+            {
+              "assignees": {
+                "nodes": []
+              },
+              "author": {
+                "login": "yuvalrakavy"
+              },
+              "authorAssociation": "CONTRIBUTOR",
+              "body": "Fixes the `NoStdBuild` jobs, which have been red on every branch since the nightly of 2026-10-16 (seen on #1189 and #1190, which touch nothing `no_std`-specific; `main`'s run of 2026-10-13 was still green).\n\nrust-lang/rust#148413 (merged 2026-10-15) mangles the personality symbol like the other std-internal symbols, so the pre-built `core`/`alloc` now reference `__rustc::rust_eh_personality`, and the `#[no_mangle] extern \"C\" fn rust_eh_personality()` in `no_std/no_std_test/src/main.rs` no longer satisfies the linker:\n\n```\nerror: linking with `cc` failed: exit status: 1\n  = note: Undefined symbols for architecture arm64:\n            \"__RNvCs6EUDi8WbMwz_7___rustc19rust_eh_personality\", referenced from: ...\n```\n\nThe change declares the function as `#[lang = \"eh_personality\"]` (with `#![feature(lang_items)]`), which is what rust-lang/rust's own `no_std` binary fixture (`tests/run-make/no-alloc-shim/foo.rs`) moved to in that PR. The compiler then emits the symbol under whatever name it expects, so the harness builds on nightlies before and after the change. The routine is still never called, since every profile sets `panic = \"abort\"`; the other shims are untouched.\n\nVerified locally on aarch64-apple-darwin: with `nightly-2026-10-16` the harness fails to link without this change and builds with it, for `--profile unix` and `--profile macos`; with `nightly-2026-10-09` it builds either way.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n",
+              "closedAt": "2026-10-17T14:34:25Z",
+              "closingIssuesReferences": {
+                "nodes": []
+              },
+              "comments": {
+                "nodes": [],
+                "totalCount": 0
+              },
+              "commits": {
+                "nodes": [
+                  {
+                    "commit": {
+                      "oid": "73f47eacf3d2786e563ec76883b9ec51e9fbf6ef",
+                      "statusCheckRollup": {
+                        "state": "SUCCESS"
+                      }
+                    }
+                  }
+                ]
+              },
+              "createdAt": "2026-10-17T14:26:35Z",
+              "id": "PR_kwDOAyYOjc8AAAABJB1z8Q",
+              "isDraft": false,
+              "labels": {
+                "nodes": [
+                  {
+                    "name": "bug"
+                  }
+                ],
+                "totalCount": 1
+              },
+              "mergeable": "UNKNOWN",
+              "milestone": null,
+              "number": 1191,
+              "reactionGroups": [
+                {
+                  "content": "THUMBS_UP",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "THUMBS_DOWN",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "LAUGH",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "HOORAY",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "CONFUSED",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "HEART",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "ROCKET",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "EYES",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                }
+              ],
+              "repository": {
+                "nameWithOwner": "rhaiscript/rhai"
+              },
+              "reviewDecision": null,
+              "state": "MERGED",
+              "timelineItems": {
+                "nodes": [
+                  {
+                    "id": "LE_lADOAyYOjc8AAAABX6Df288AAAAHzi86CQ"
+                  }
+                ]
+              },
+              "title": "no_std_test: declare the personality routine as the lang item (fixes NoStdBuild on current nightly)",
+              "updatedAt": "2026-10-17T14:34:25Z"
+            },
+            {
+              "assignees": {
+                "nodes": []
+              },
+              "author": {
+                "login": "yuvalrakavy"
+              },
+              "authorAssociation": "CONTRIBUTOR",
+              "body": "Split out of #1189 at the maintainer's request. Refs #1188 (the panic half); the abort half is #1189.\n\nUnder `sync`, `Dynamic::is_locked` returns `false` for every shared value, on the reasoning that access waits for the `RwLock`. Under `not(unchecked)` it does not wait indefinitely: `locked_read` tries a few times and gives up, and `type_id()` / `type_name()` then unwrap the `None` and panic. That always happens when the current thread itself holds the value locked for write:\n\n```rust\n#[derive(Clone)]\nstruct Thing(i64);\n\nfn with_arg(ctx: NativeCallContext, t: Thing, f: FnPtr) -> Result<Dynamic, Box<EvalAltResult>> {\n    f.call_within_context(&ctx, (t,))\n}\n\nlet mut e = Engine::new();\ne.register_type_with_name::<Thing>(\"Thing\");\ne.register_fn(\"with_arg\", with_arg);\ne.register_fn(\"get\", |t: &mut Thing| t.0);\nlet mut scope = Scope::new();\nscope.push(\"t\", Thing(7));\n// `||` takes no argument but `with_arg` passes one; `t` is captured, so the method call holds it locked.\ne.eval_with_scope::<Dynamic>(&mut scope, \"t.with_arg(|| t.get())\");\n```\n\nWithout `sync`, #1161's `ensure_no_data_race` turns this into `ErrorDataRace`. Under `sync` it does not, because `is_locked` says the value is free; the call goes on to `resolve_fn`, which hashes each argument's `type_id()`, and that read gives up and panics.\n\nThe change makes `is_locked` under `sync` (and not `unchecked`) return `true` exactly when `locked_read` would give up, so the existing data-race check covers `sync` as well. Under `sync` + `unchecked` access blocks rather than gives up, so `is_locked` stays `false`.\n\n**This changes the documented meaning of a public method under `sync`** (the doc said shared values \"are never locked\" there), which is why it is its own PR for you to shape. Another option is to keep `is_locked` as it is and make `ensure_no_data_race` probe `locked_read` itself.\n\nTest: `test_closures_capturing_locked_method_receiver` in `tests/closures.rs`, gated on `no_closure` (the closure must capture the variable to share it; that was the CI failure on the `no_closure` row), `no_object` (the method-call syntax) and `unchecked`. Under `sync` without this change it panics in `type_id`; with it, `ErrorDataRace` under both feature sets.\n\nChecks: `cargo test --features sync`, `cargo test --test closures` with default features and under the `no_closure` CI row, `cargo +nightly fmt --check`. CHANGELOG line under 1.27.0's bug fixes, linking this PR.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n",
+              "closedAt": "2026-10-17T14:30:20Z",
+              "closingIssuesReferences": {
+                "nodes": []
+              },
+              "comments": {
+                "nodes": [
+                  {
+                    "author": {
+                      "login": "yuvalrakavy"
+                    },
+                    "authorAssociation": "CONTRIBUTOR",
+                    "createdAt": "2026-10-17T14:26:38Z"
+                  }
+                ],
+                "totalCount": 1
+              },
+              "commits": {
+                "nodes": [
+                  {
+                    "commit": {
+                      "oid": "26a13a5c190aeaef84dc40f0509613726a12530e",
+                      "statusCheckRollup": {
+                        "state": "FAILURE"
+                      }
+                    }
+                  }
+                ]
+              },
+              "createdAt": "2026-10-17T12:14:06Z",
+              "id": "PR_kwDOAyYOjc8AAAABJA9rDw",
+              "isDraft": false,
+              "labels": {
+                "nodes": [
+                  {
+                    "name": "bug"
+                  }
+                ],
+                "totalCount": 1
+              },
+              "mergeable": "UNKNOWN",
+              "milestone": null,
+              "number": 1190,
+              "reactionGroups": [
+                {
+                  "content": "THUMBS_UP",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "THUMBS_DOWN",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "LAUGH",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "HOORAY",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "CONFUSED",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "HEART",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "ROCKET",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "EYES",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                }
+              ],
+              "repository": {
+                "nameWithOwner": "rhaiscript/rhai"
+              },
+              "reviewDecision": null,
+              "state": "MERGED",
+              "timelineItems": {
+                "nodes": [
+                  {
+                    "id": "LE_lADOAyYOjc8AAAABX4-Ts88AAAAHziykVA"
+                  }
+                ]
+              },
+              "title": "Report a shared value locked by its own thread as locked under sync",
+              "updatedAt": "2026-10-17T14:30:20Z"
+            },
+            {
+              "assignees": {
+                "nodes": []
+              },
+              "author": {
+                "login": "schungx"
+              },
+              "authorAssociation": "COLLABORATOR",
+              "body": "",
+              "closedAt": "2026-10-13T19:28:05Z",
+              "closingIssuesReferences": {
+                "nodes": [
+                  {
+                    "id": "I_kwDOAyYOjc8AAAABWtOT8w",
+                    "number": 1184,
+                    "repository": {
+                      "nameWithOwner": "rhaiscript/rhai"
+                    },
+                    "state": "CLOSED"
+                  }
+                ]
+              },
+              "comments": {
+                "nodes": [],
+                "totalCount": 0
+              },
+              "commits": {
+                "nodes": [
+                  {
+                    "commit": {
+                      "oid": "ec774d3027c5a950eea0b7c9d2c4f915adb00003",
+                      "statusCheckRollup": {
+                        "state": "SUCCESS"
+                      }
+                    }
+                  }
+                ]
+              },
+              "createdAt": "2026-10-13T18:50:27Z",
+              "id": "PR_kwDOAyYOjc8AAAABIPWbMQ",
+              "isDraft": false,
+              "labels": {
+                "nodes": [
+                  {
+                    "name": "bug"
+                  }
+                ],
+                "totalCount": 1
+              },
+              "mergeable": "UNKNOWN",
+              "milestone": null,
+              "number": 1187,
+              "reactionGroups": [
+                {
+                  "content": "THUMBS_UP",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "THUMBS_DOWN",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "LAUGH",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "HOORAY",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "CONFUSED",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "HEART",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "ROCKET",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "EYES",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                }
+              ],
+              "repository": {
+                "nameWithOwner": "rhaiscript/rhai"
+              },
+              "reviewDecision": null,
+              "state": "MERGED",
+              "timelineItems": {
+                "nodes": [
+                  {
+                    "id": "LE_lADOAyYOjc8AAAABW9ixi88AAAAHuKO8AA"
+                  }
+                ]
+              },
+              "title": "Fix bug in constant assignment",
+              "updatedAt": "2026-10-13T19:28:05Z"
+            },
+            {
+              "assignees": {
+                "nodes": []
+              },
+              "author": {
+                "login": "ImTheSquid"
+              },
+              "authorAssociation": "COLLABORATOR",
+              "body": "As it currently stands, Rhai loads an entire module including all of its functions, variables, etc when it is given to `Engine`. This is a lot of stuff to load, especially when most scripts will not use every function introduced into `Engine`. It is especially important in embedded contexts, where RAM is at a premium and nothing can go to waste.\r\n\r\nNow, lazy loading allows `Engine` to only load specific items out of a `Module`. It will run top-level items, then registers the requested function/variable with the `Engine` for use. This function remains loaded for the lifetime of the `Engine` or until manually evicted. This feature is opt-in.\r\n\r\nThe way it works under the hood is creating a static registration table for each module that can be quickly searched for hot loading functions.",
+              "closedAt": "2026-10-06T19:59:08Z",
+              "closingIssuesReferences": {
+                "nodes": []
+              },
+              "comments": {
+                "nodes": [
+                  {
+                    "author": {
+                      "login": "schungx"
+                    },
+                    "authorAssociation": "COLLABORATOR",
+                    "createdAt": "2026-10-03T01:27:31Z"
+                  },
+                  {
+                    "author": {
+                      "login": "schungx"
+                    },
+                    "authorAssociation": "COLLABORATOR",
+                    "createdAt": "2026-10-03T05:20:25Z"
+                  },
+                  {
+                    "author": {
+                      "login": "ImTheSquid"
+                    },
+                    "authorAssociation": "COLLABORATOR",
+                    "createdAt": "2026-10-03T19:17:51Z"
+                  },
+                  {
+                    "author": {
+                      "login": "schungx"
+                    },
+                    "authorAssociation": "COLLABORATOR",
+                    "createdAt": "2026-10-04T07:34:31Z"
+                  },
+                  {
+                    "author": {
+                      "login": "schungx"
+                    },
+                    "authorAssociation": "COLLABORATOR",
+                    "createdAt": "2026-10-04T07:35:21Z"
+                  },
+                  {
+                    "author": {
+                      "login": "ImTheSquid"
+                    },
+                    "authorAssociation": "COLLABORATOR",
+                    "createdAt": "2026-10-04T19:32:52Z"
+                  },
+                  {
+                    "author": {
+                      "login": "schungx"
+                    },
+                    "authorAssociation": "COLLABORATOR",
+                    "createdAt": "2026-10-05T00:10:49Z"
+                  },
+                  {
+                    "author": {
+                      "login": "schungx"
+                    },
+                    "authorAssociation": "COLLABORATOR",
+                    "createdAt": "2026-10-05T00:28:32Z"
+                  },
+                  {
+                    "author": {
+                      "login": "ImTheSquid"
+                    },
+                    "authorAssociation": "COLLABORATOR",
+                    "createdAt": "2026-10-05T00:32:40Z"
+                  },
+                  {
+                    "author": {
+                      "login": "schungx"
+                    },
+                    "authorAssociation": "COLLABORATOR",
+                    "createdAt": "2026-10-05T02:00:57Z"
+                  },
+                  {
+                    "author": {
+                      "login": "schungx"
+                    },
+                    "authorAssociation": "COLLABORATOR",
+                    "createdAt": "2026-10-05T02:17:28Z"
+                  },
+                  {
+                    "author": {
+                      "login": "schungx"
+                    },
+                    "authorAssociation": "COLLABORATOR",
+                    "createdAt": "2026-10-05T14:09:57Z"
+                  },
+                  {
+                    "author": {
+                      "login": "ImTheSquid"
+                    },
+                    "authorAssociation": "COLLABORATOR",
+                    "createdAt": "2026-10-05T18:52:48Z"
+                  },
+                  {
+                    "author": {
+                      "login": "ImTheSquid"
+                    },
+                    "authorAssociation": "COLLABORATOR",
+                    "createdAt": "2026-10-05T18:55:36Z"
+                  },
+                  {
+                    "author": {
+                      "login": "ImTheSquid"
+                    },
+                    "authorAssociation": "COLLABORATOR",
+                    "createdAt": "2026-10-05T19:27:35Z"
+                  },
+                  {
+                    "author": {
+                      "login": "schungx"
+                    },
+                    "authorAssociation": "COLLABORATOR",
+                    "createdAt": "2026-10-05T23:48:15Z"
+                  }
+                ],
+                "totalCount": 16
+              },
+              "commits": {
+                "nodes": [
+                  {
+                    "commit": {
+                      "oid": "5b18e2084557cf351694ab280cd9967e65fb32d3",
+                      "statusCheckRollup": {
+                        "state": "SUCCESS"
+                      }
+                    }
+                  }
+                ]
+              },
+              "createdAt": "2026-10-02T22:25:26Z",
+              "id": "PR_kwDOAyYOjc8AAAABGXWWVA",
+              "isDraft": false,
+              "labels": {
+                "nodes": [
+                  {
+                    "name": "enhancement"
+                  }
+                ],
+                "totalCount": 1
+              },
+              "mergeable": "UNKNOWN",
+              "milestone": null,
+              "number": 1178,
+              "reactionGroups": [
+                {
+                  "content": "THUMBS_UP",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "THUMBS_DOWN",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "LAUGH",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "HOORAY",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "CONFUSED",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "HEART",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "ROCKET",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "EYES",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                }
+              ],
+              "repository": {
+                "nameWithOwner": "rhaiscript/rhai"
+              },
+              "reviewDecision": null,
+              "state": "MERGED",
+              "timelineItems": {
+                "nodes": [
+                  {
+                    "id": "LE_lADOAyYOjc8AAAABUs1jZc8AAAAHjBvS7g"
+                  }
+                ]
+              },
+              "title": "Lazy function loading",
+              "updatedAt": "2026-10-06T19:59:08Z"
+            },
+            {
+              "assignees": {
+                "nodes": []
+              },
+              "author": {
+                "login": "schungx"
+              },
+              "authorAssociation": "COLLABORATOR",
+              "body": "This is it.  The last piece of the puzzle.  A large PR in that.\r\n\r\nThis PR completely implements modules in Grain, including the ability to load Grain artifact modules from the AST walker, and vice versa.  Grain and script modules are completely interchangeable.\r\n\r\nMissing features such as `export var`, `global::var`, and `path::to::func(...)` etc. all work seamlessly.\r\n\r\nThe `FileModuleResolver` defaults to try to load `.rgrn` files if it cannot find the corresponding `.rhai` files...\r\n\r\nThe pitfall is the introduction of a bunch of new opcodes, essentially the qualified versions of all the `CALL_FN` codes.  I don't see a way to avoid that unfortunately.\r\n",
+              "closedAt": "2026-10-06T09:00:28Z",
+              "closingIssuesReferences": {
+                "nodes": []
+              },
+              "comments": {
+                "nodes": [
+                  {
+                    "author": {
+                      "login": "ImTheSquid"
+                    },
+                    "authorAssociation": "COLLABORATOR",
+                    "createdAt": "2026-10-03T21:21:49Z"
+                  },
+                  {
+                    "author": {
+                      "login": "schungx"
+                    },
+                    "authorAssociation": "COLLABORATOR",
+                    "createdAt": "2026-10-04T00:31:24Z"
+                  },
+                  {
+                    "author": {
+                      "login": "ImTheSquid"
+                    },
+                    "authorAssociation": "COLLABORATOR",
+                    "createdAt": "2026-10-04T00:35:11Z"
+                  },
+                  {
+                    "author": {
+                      "login": "schungx"
+                    },
+                    "authorAssociation": "COLLABORATOR",
+                    "createdAt": "2026-10-04T01:16:12Z"
+                  },
+                  {
+                    "author": {
+                      "login": "schungx"
+                    },
+                    "authorAssociation": "COLLABORATOR",
+                    "createdAt": "2026-10-05T04:43:40Z"
+                  },
+                  {
+                    "author": {
+                      "login": "schungx"
+                    },
+                    "authorAssociation": "COLLABORATOR",
+                    "createdAt": "2026-10-06T00:13:55Z"
+                  }
+                ],
+                "totalCount": 6
+              },
+              "commits": {
+                "nodes": [
+                  {
+                    "commit": {
+                      "oid": "73ac7719f6d9ebbcea04ed12a61462c835554208",
+                      "statusCheckRollup": {
+                        "state": "SUCCESS"
+                      }
+                    }
+                  }
+                ]
+              },
+              "createdAt": "2026-10-03T09:55:18Z",
+              "id": "PR_kwDOAyYOjc8AAAABGavePg",
+              "isDraft": false,
+              "labels": {
+                "nodes": [
+                  {
+                    "name": "vm"
+                  }
+                ],
+                "totalCount": 1
+              },
+              "mergeable": "UNKNOWN",
+              "milestone": null,
+              "number": 1179,
+              "reactionGroups": [
+                {
+                  "content": "THUMBS_UP",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "THUMBS_DOWN",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "LAUGH",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "HOORAY",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "CONFUSED",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "HEART",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "ROCKET",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "EYES",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                }
+              ],
+              "repository": {
+                "nameWithOwner": "rhaiscript/rhai"
+              },
+              "reviewDecision": "APPROVED",
+              "state": "MERGED",
+              "timelineItems": {
+                "nodes": [
+                  {
+                    "id": "LE_lADOAyYOjc8AAAABUxAVQc8AAAAHiqcymA"
+                  }
+                ]
+              },
+              "title": "VM: Support modules",
+              "updatedAt": "2026-10-06T09:00:33Z"
+            },
+            {
+              "assignees": {
+                "nodes": []
+              },
+              "author": {
+                "login": "ImTheSquid"
+              },
+              "authorAssociation": "COLLABORATOR",
+              "body": "Split out of #1178 as requested.\n\n### Resolution misses for non-binary calls were never cached\nIn `resolve_fn`, once all `Dynamic` permutations are exhausted, the code returned `None` early for any call that does not have exactly two arguments. That return skipped the cache insert. The behaviour changed by accident in b0ce3ee4 (v1.10), when `or_insert_with` became an `Entry` match.\n\nThe result: a miss was only cached for binary calls. Before calling a native function, the evaluator checks whether a script function of the same name exists, using a lookup with no arguments. So that check never got cached. A call like `abs(x)` in a loop re-scanned every module for a script function on every iteration.\n\nThe fix keeps the built-in operator lookup restricted to two arguments (`args.filter(|_| num_args == 2)`) and lets every miss fall through to the cache insert. In #1178's benchmarks this made eager evaluation about 3–5% faster.\n\n### The first resolution cache was dropped at the end of a block\nCaches are created lazily. If the first one was created inside a block, such as a loop body, the block's `rewind_fn_resolution_caches` popped it at the end, so every iteration started with an empty cache. `eval_stmt_block` now pushes a cache before the block when none exists yet, so it lives for the rest of the evaluation. Popping a cache pushed for an `import` inside a block is unchanged.\n\n### String interpolation\nEach interpolated non-string value created a new `NativeCallContext`, which clones the global runtime state, and resolved `to_string` with fresh caches. The new `print_with_func_raw` resolves it through `exec_native_fn_call` with the evaluation's own `global` and `caches`. Both the AST interpreter and Rhai Grain use it.\n\n### Tests\n- `tests/functions.rs`: a native 1-argument call in a loop, alongside script functions with the same name and a different/the same arity.\n- `tests/modules.rs`: global functions imported inside a block or a loop body don't leak past it (covers the cache-scoping change).\n- `tests/string.rs`: interpolation with a custom `to_string`, in a loop and inside a function.\n\n`cargo test --tests` passes with the default features and with `internals,grain`, `bin-features`, `no_function,no_module`, and `no_index,no_object,no_float`. Under that last set, `parse_json::test_parse_json_err_no_object` fails, but it fails the same way on `main`.\n",
+              "closedAt": "2026-10-06T08:48:17Z",
+              "closingIssuesReferences": {
+                "nodes": []
+              },
+              "comments": {
+                "nodes": [],
+                "totalCount": 0
+              },
+              "commits": {
+                "nodes": [
+                  {
+                    "commit": {
+                      "oid": "7bb41e20d1293f79d9de0fb3b168e13d2c28f8bf",
+                      "statusCheckRollup": {
+                        "state": "SUCCESS"
+                      }
+                    }
+                  }
+                ]
+              },
+              "createdAt": "2026-10-05T19:15:40Z",
+              "id": "PR_kwDOAyYOjc8AAAABGxsRow",
+              "isDraft": false,
+              "labels": {
+                "nodes": [
+                  {
+                    "name": "bug"
+                  }
+                ],
+                "totalCount": 1
+              },
+              "mergeable": "UNKNOWN",
+              "milestone": null,
+              "number": 1183,
+              "reactionGroups": [
+                {
+                  "content": "THUMBS_UP",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "THUMBS_DOWN",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "LAUGH",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "HOORAY",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "CONFUSED",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "HEART",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "ROCKET",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "EYES",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                }
+              ],
+              "repository": {
+                "nameWithOwner": "rhaiscript/rhai"
+              },
+              "reviewDecision": null,
+              "state": "MERGED",
+              "timelineItems": {
+                "nodes": [
+                  {
+                    "id": "LE_lADOAyYOjc8AAAABVMzRgc8AAAAHlIZVQA"
+                  }
+                ]
+              },
+              "title": "Fix function resolution caching",
+              "updatedAt": "2026-10-06T08:48:17Z"
+            },
+            {
+              "assignees": {
+                "nodes": []
+              },
+              "author": {
+                "login": "schungx"
+              },
+              "authorAssociation": "COLLABORATOR",
+              "body": "Closes #1181 \r\n\r\nConstants did not check for the caps of elements inside arrays, maps, currying, `switch` cases etc.\r\n",
+              "closedAt": "2026-10-05T23:19:03Z",
+              "closingIssuesReferences": {
+                "nodes": [
+                  {
+                    "id": "I_kwDOAyYOjc8AAAABVEcEFA",
+                    "number": 1181,
+                    "repository": {
+                      "nameWithOwner": "rhaiscript/rhai"
+                    },
+                    "state": "CLOSED"
+                  }
+                ]
+              },
+              "comments": {
+                "nodes": [],
+                "totalCount": 0
+              },
+              "commits": {
+                "nodes": [
+                  {
+                    "commit": {
+                      "oid": "679378f4919af7e3cdff21d22ff1dd74c085827b",
+                      "statusCheckRollup": {
+                        "state": "SUCCESS"
+                      }
+                    }
+                  }
+                ]
+              },
+              "createdAt": "2026-10-05T13:45:44Z",
+              "id": "PR_kwDOAyYOjc8AAAABGuAyVw",
+              "isDraft": false,
+              "labels": {
+                "nodes": [
+                  {
+                    "name": "bug"
+                  },
+                  {
+                    "name": "vm"
+                  }
+                ],
+                "totalCount": 2
+              },
+              "mergeable": "UNKNOWN",
+              "milestone": null,
+              "number": 1182,
+              "reactionGroups": [
+                {
+                  "content": "THUMBS_UP",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "THUMBS_DOWN",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "LAUGH",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "HOORAY",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "CONFUSED",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "HEART",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "ROCKET",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "EYES",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                }
+              ],
+              "repository": {
+                "nameWithOwner": "rhaiscript/rhai"
+              },
+              "reviewDecision": "APPROVED",
+              "state": "MERGED",
+              "timelineItems": {
+                "nodes": [
+                  {
+                    "id": "LE_lADOAyYOjc8AAAABVId5q88AAAAHkfQw6g"
+                  },
+                  {
+                    "id": "LE_lADOAyYOjc8AAAABVId5q88AAAAHkfQyog"
+                  }
+                ]
+              },
+              "title": "VM: Fix bug in constant caps.",
+              "updatedAt": "2026-10-05T23:19:03Z"
+            },
+            {
+              "assignees": {
+                "nodes": []
+              },
+              "author": {
+                "login": "schungx"
+              },
+              "authorAssociation": "COLLABORATOR",
+              "body": "Based on your idea, capturing parent scope is greatly simplified!\r\n\r\nI mangle the function name with `!` at the end indicating a capturing call.  Removed four `_CAPTURE` opcode variants.\r\n\r\nThe `CALL_FN_PTR_CAPTURE` opcode to handle `call!(...)` stays because the name cannot be mangled.\r\n\r\nDon't worry about the `no-std` failures... that is due to the latest Rust compiler.",
+              "closedAt": "2026-10-04T03:42:44Z",
+              "closingIssuesReferences": {
+                "nodes": []
+              },
+              "comments": {
+                "nodes": [
+                  {
+                    "author": {
+                      "login": "schungx"
+                    },
+                    "authorAssociation": "COLLABORATOR",
+                    "createdAt": "2026-10-04T03:41:55Z"
+                  }
+                ],
+                "totalCount": 1
+              },
+              "commits": {
+                "nodes": [
+                  {
+                    "commit": {
+                      "oid": "c55cc926b26a49c313dd3e43911a4659b7ff70f8",
+                      "statusCheckRollup": {
+                        "state": "FAILURE"
+                      }
+                    }
+                  }
+                ]
+              },
+              "createdAt": "2026-10-04T02:23:52Z",
+              "id": "PR_kwDOAyYOjc8AAAABGgJV3g",
+              "isDraft": false,
+              "labels": {
+                "nodes": [
+                  {
+                    "name": "vm"
+                  }
+                ],
+                "totalCount": 1
+              },
+              "mergeable": "UNKNOWN",
+              "milestone": null,
+              "number": 1180,
+              "reactionGroups": [
+                {
+                  "content": "THUMBS_UP",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "THUMBS_DOWN",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "LAUGH",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "HOORAY",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "CONFUSED",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "HEART",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "ROCKET",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "EYES",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                }
+              ],
+              "repository": {
+                "nameWithOwner": "rhaiscript/rhai"
+              },
+              "reviewDecision": "APPROVED",
+              "state": "MERGED",
+              "timelineItems": {
+                "nodes": [
+                  {
+                    "id": "LE_lADOAyYOjc8AAAABU3sLcM8AAAAHjKr6Jg"
+                  }
+                ]
+              },
+              "title": "VM: Simplify parent scope captures",
+              "updatedAt": "2026-10-04T03:42:51Z"
+            },
+            {
+              "assignees": {
+                "nodes": []
+              },
+              "author": {
+                "login": "schungx"
+              },
+              "authorAssociation": "COLLABORATOR",
+              "body": "## Purpose\r\n\r\nThis PR revamps the general handling of loops in the Grain VM.\r\n\r\n## Why Loops Are Tricky\r\n\r\n* They contain back-jumps that may lead to infinite loops, so they must _tick_ once in a while.\r\n* They trap the `continue` and `break` keywords which breaks normal control flow.\r\n* In Rhai, due to their flow-breaking nature, the `continue` and `break` keywords are implemented as _pseudo-errors_ (like `return` and `throw`); these pseudo-errors can potentially be returned from a function (e.g. in a custom syntax implementation).\r\n* The compiler currently unwinds loops automatically, so this information is not strictly necessary except for `for` loops (which needs to keep track of the iterator object and the iteration count).\r\n* Nevertheless, not knowing how many loops there are and where they are makes the implementation brittle.  In the future, when things happen deep inside loops, it becomes extremely troublesome to unwind properly.  This has occurred when enhancing the `switch` statement, and when implementing custom syntax, and will certainly occur again in the future with new language features.\n* In the future when we want to add a tracing JIT, e.g., a tight loop would be the natural place to start and this info would again be needed.\r\n\r\n## Limitations of The Original Implementation\r\n\r\n* It only keeps information on `for` loops, omitting `while`, `loop` and `do` (because the compiler already lowers all of them).\r\n* It ignores _pseudo-errors_ returned from functions (and other places), treating them all as normal errors.\r\n* Some pseudo-errors (especially `continue` and `break`) needs to be revised to rewind loops.\r\n\r\n## Current Revision\r\n\r\n* A general `EnterLoop` opcode is introduced.  The `IterDrop` opcode is renamed `ExitLoop`.  They wrap each loop.\r\n* `EnterLoop` does the work of `Tick`, so the `Tick` opcode is no longer used and deprecated.\r\n* During runtime, loops are tracked on a stack, not just `for` loop iterators.  Therefore, `Vm::iterators` is renamed `Vm::Loops` and `Iteration` is renamed `Loop`.\r\n\r\n## Impact\r\n\r\nOn  normal loops, they add four bytes to the payload (to hold the exit target), replacing the `Tick` op.\r\n\r\nFor reasonable loop lengths, the cost of added tracking is amortized over a large number of iterations, so impact is minimal.\n\nThe tracking involves pushing a `Loop` structure containing mostly `usize` fields.  Most of the counts would never exhaust a `usize`, possibly not even a `u8`. But let's leave them as `usize` unless profiling shows clear benefits in reducing the size of this struct.\r\n\r\nFor very short loops, such as repeatedly iterating loops with 1-2 iterations, which are quite rare, they still incur very small cost.\r\n\r\n",
+              "closedAt": "2026-10-02T07:39:54Z",
+              "closingIssuesReferences": {
+                "nodes": []
+              },
+              "comments": {
+                "nodes": [
+                  {
+                    "author": {
+                      "login": "ImTheSquid"
+                    },
+                    "authorAssociation": "COLLABORATOR",
+                    "createdAt": "2026-10-02T00:18:05Z"
+                  },
+                  {
+                    "author": {
+                      "login": "schungx"
+                    },
+                    "authorAssociation": "COLLABORATOR",
+                    "createdAt": "2026-10-02T01:03:53Z"
+                  },
+                  {
+                    "author": {
+                      "login": "schungx"
+                    },
+                    "authorAssociation": "COLLABORATOR",
+                    "createdAt": "2026-10-02T03:10:30Z"
+                  },
+                  {
+                    "author": {
+                      "login": "ImTheSquid"
+                    },
+                    "authorAssociation": "COLLABORATOR",
+                    "createdAt": "2026-10-02T05:17:15Z"
+                  },
+                  {
+                    "author": {
+                      "login": "schungx"
+                    },
+                    "authorAssociation": "COLLABORATOR",
+                    "createdAt": "2026-10-02T07:39:54Z"
+                  }
+                ],
+                "totalCount": 5
+              },
+              "commits": {
+                "nodes": [
+                  {
+                    "commit": {
+                      "oid": "17feb2255c4a54409e1f34ba076da313cff832f2",
+                      "statusCheckRollup": {
+                        "state": "SUCCESS"
+                      }
+                    }
+                  }
+                ]
+              },
+              "createdAt": "2026-09-30T06:39:15Z",
+              "id": "PR_kwDOAyYOjc8AAAABF1ujZw",
+              "isDraft": false,
+              "labels": {
+                "nodes": [
+                  {
+                    "name": "enhancement"
+                  },
+                  {
+                    "name": "vm"
+                  }
+                ],
+                "totalCount": 2
+              },
+              "mergeable": "MERGEABLE",
+              "milestone": null,
+              "number": 1176,
+              "reactionGroups": [
+                {
+                  "content": "THUMBS_UP",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "THUMBS_DOWN",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "LAUGH",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "HOORAY",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "CONFUSED",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "HEART",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "ROCKET",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "EYES",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                }
+              ],
+              "repository": {
+                "nameWithOwner": "rhaiscript/rhai"
+              },
+              "reviewDecision": null,
+              "state": "CLOSED",
+              "timelineItems": {
+                "nodes": [
+                  {
+                    "id": "LE_lADOAyYOjc8AAAABUEy9Xc8AAAAHe8DQAQ"
+                  },
+                  {
+                    "id": "LE_lADOAyYOjc8AAAABUEy9Xc8AAAAHe8DQ1g"
+                  }
+                ]
+              },
+              "title": "VM: Revamp loops handling",
+              "updatedAt": "2026-10-03T03:03:41Z"
+            },
+            {
+              "assignees": {
+                "nodes": []
+              },
+              "author": {
+                "login": "schungx"
+              },
+              "authorAssociation": "COLLABORATOR",
+              "body": "# Introduction\r\n\r\nCustom syntax is a unique feature of Rhai, one used by many domain-specific applications to simplify code by providing new syntax suited to the domain usage.\r\n\r\n# Grain Support\r\nPreviously, Grain rejects all custom syntax as fragments.  This PR adds support for custom syntax that does not touch the `scope`.\r\n\r\nCustom syntax that touches the `scope`, like `eval`, remain non-lowerable. These cases are extremely rare.\r\n\r\n# Implementation\r\n\r\nGrain implements custom syntax via a new Opcode `Op::CustomSyntax` and a `custom_syntax` pool.\r\n\r\n# `no_ast`\r\n\r\nFinally, `no_ast` works with custom syntax, disabling only the parser half of it, but allows the execution part to work with Grain.",
+              "closedAt": "2026-10-03T03:00:31Z",
+              "closingIssuesReferences": {
+                "nodes": []
+              },
+              "comments": {
+                "nodes": [
+                  {
+                    "author": {
+                      "login": "schungx"
+                    },
+                    "authorAssociation": "COLLABORATOR",
+                    "createdAt": "2026-09-22T00:35:30Z"
+                  },
+                  {
+                    "author": {
+                      "login": "schungx"
+                    },
+                    "authorAssociation": "COLLABORATOR",
+                    "createdAt": "2026-09-26T07:31:28Z"
+                  },
+                  {
+                    "author": {
+                      "login": "schungx"
+                    },
+                    "authorAssociation": "COLLABORATOR",
+                    "createdAt": "2026-09-30T10:19:58Z"
+                  },
+                  {
+                    "author": {
+                      "login": "ImTheSquid"
+                    },
+                    "authorAssociation": "COLLABORATOR",
+                    "createdAt": "2026-10-02T00:40:39Z"
+                  },
+                  {
+                    "author": {
+                      "login": "schungx"
+                    },
+                    "authorAssociation": "COLLABORATOR",
+                    "createdAt": "2026-10-02T04:17:32Z"
+                  },
+                  {
+                    "author": {
+                      "login": "schungx"
+                    },
+                    "authorAssociation": "COLLABORATOR",
+                    "createdAt": "2026-10-02T07:52:25Z"
+                  }
+                ],
+                "totalCount": 6
+              },
+              "commits": {
+                "nodes": [
+                  {
+                    "commit": {
+                      "oid": "92522ddd310d500c2ea587e6a1888be5beb34de4",
+                      "statusCheckRollup": {
+                        "state": "SUCCESS"
+                      }
+                    }
+                  }
+                ]
+              },
+              "createdAt": "2026-09-21T08:48:10Z",
+              "id": "PR_kwDOAyYOjc8AAAABEY_FGA",
+              "isDraft": false,
+              "labels": {
+                "nodes": [
+                  {
+                    "name": "enhancement"
+                  },
+                  {
+                    "name": "vm"
+                  }
+                ],
+                "totalCount": 2
+              },
+              "mergeable": "UNKNOWN",
+              "milestone": null,
+              "number": 1173,
+              "reactionGroups": [
+                {
+                  "content": "THUMBS_UP",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "THUMBS_DOWN",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "LAUGH",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "HOORAY",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "CONFUSED",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "HEART",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "ROCKET",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "EYES",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                }
+              ],
+              "repository": {
+                "nameWithOwner": "rhaiscript/rhai"
+              },
+              "reviewDecision": "APPROVED",
+              "state": "MERGED",
+              "timelineItems": {
+                "nodes": [
+                  {
+                    "id": "LE_lADOAyYOjc8AAAABSUzo888AAAAHVnLvNA"
+                  },
+                  {
+                    "id": "LE_lADOAyYOjc8AAAABSUzo888AAAAHVnLwGQ"
+                  }
+                ]
+              },
+              "title": "VM: Support Custom Syntax",
+              "updatedAt": "2026-10-03T03:00:35Z"
+            },
+            {
+              "assignees": {
+                "nodes": []
+              },
+              "author": {
+                "login": "ImTheSquid"
+              },
+              "authorAssociation": "COLLABORATOR",
+              "body": "Recent changes break targets without 64 bit atomics. This PR fixes the problem by introducing a feature that is automatically toggled on for embedded targets and for testing. A new CI job also makes sure this is considered.",
+              "closedAt": "2026-10-02T01:14:27Z",
+              "closingIssuesReferences": {
+                "nodes": []
+              },
+              "comments": {
+                "nodes": [
+                  {
+                    "author": {
+                      "login": "schungx"
+                    },
+                    "authorAssociation": "COLLABORATOR",
+                    "createdAt": "2026-10-02T00:40:25Z"
+                  },
+                  {
+                    "author": {
+                      "login": "ImTheSquid"
+                    },
+                    "authorAssociation": "COLLABORATOR",
+                    "createdAt": "2026-10-02T00:42:36Z"
+                  },
+                  {
+                    "author": {
+                      "login": "schungx"
+                    },
+                    "authorAssociation": "COLLABORATOR",
+                    "createdAt": "2026-10-02T01:14:17Z"
+                  }
+                ],
+                "totalCount": 3
+              },
+              "commits": {
+                "nodes": [
+                  {
+                    "commit": {
+                      "oid": "3bfea7f353ca1309cd6a891604aadf0bab684702",
+                      "statusCheckRollup": {
+                        "state": "SUCCESS"
+                      }
+                    }
+                  }
+                ]
+              },
+              "createdAt": "2026-10-01T23:57:13Z",
+              "id": "PR_kwDOAyYOjc8AAAABGMxBUA",
+              "isDraft": false,
+              "labels": {
+                "nodes": [
+                  {
+                    "name": "bug"
+                  }
+                ],
+                "totalCount": 1
+              },
+              "mergeable": "UNKNOWN",
+              "milestone": null,
+              "number": 1177,
+              "reactionGroups": [
+                {
+                  "content": "THUMBS_UP",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "THUMBS_DOWN",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "LAUGH",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "HOORAY",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "CONFUSED",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "HEART",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "ROCKET",
+                  "reactors": {
+                    "totalCount": 1
+                  }
+                },
+                {
+                  "content": "EYES",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                }
+              ],
+              "repository": {
+                "nameWithOwner": "rhaiscript/rhai"
+              },
+              "reviewDecision": null,
+              "state": "MERGED",
+              "timelineItems": {
+                "nodes": [
+                  {
+                    "id": "LE_lADOAyYOjc8AAAABUgHuWM8AAAAHhSIF2Q"
+                  }
+                ]
+              },
+              "title": "Fix operations count on targets without 64-bit atomics",
+              "updatedAt": "2026-10-02T01:14:28Z"
+            },
+            {
+              "assignees": {
+                "nodes": []
+              },
+              "author": {
+                "login": "hoppworks"
+              },
+              "authorAssociation": "CONTRIBUTOR",
+              "body": "This PR replaces the unmaintained `smartstring` dependency with [`compact_str`](https://docs.rs/compact_str), which is actively maintained and also stores short strings inline (up to 24 bytes on 64-bit targets).\r\n\r\n## Why\r\n\r\n- **Unmaintained:** the `smartstring` repository was archived in May 2026, and RustSec published [RUSTSEC-2026-0249](https://rustsec.org/advisories/RUSTSEC-2026-0249.html) for it. Every project that depends on Rhai is now flagged by `cargo deny check advisories` (an error with the default configuration) and by `cargo audit`. The only ways around it are an ignore entry or patching Rhai locally, and #1121 was opened for exactly that.\r\n- **Soundness:** #816 reports unsoundness (possible UB) in `smartstring`, which Rhai uses for identifiers, map keys and `ImmutableString` internals. The proposed fix (bodil/smartstring#34) was never released, and now it never will be.\r\n- **License:** `smartstring` is `MPL-2.0+`, while Rhai is `MIT OR Apache-2.0` (#897). `compact_str` is `MIT`, so Rhai's dependency tree becomes permissive again.\r\n- **Same design:** `compact_str` offers the same inline small-string optimization for identifiers and map keys, supports `no_std` (`default-features = false`), and needed only one API change in Rhai (`new_const()` → `const_new(\"\")`).\r\n\r\n## Changes\r\n\r\n- `type SmartString = compact_str::CompactString;` The aliases `Identifier` and the key type of `Map` follow.\r\n- `SmartString::new_const()` / `Identifier::new_const()` → `const_new(\"\")`. These are the only API differences Rhai used; nothing else in the interpreter changes.\r\n- `compact_str = { version = \">=0.9, <0.11\", default-features = false }`, with `std` wired to `compact_str/std`. No serde feature is needed, because Rhai no longer serializes `SmartString` directly (9e5a89df).\r\n- MSRV stays at **1.66**. compact_str 0.10 requires Rust 1.71, so `Cargo.msrv.lock` pins 0.9.1 (plus `itoa 1.0.15`, the last version before 1.68). Regular builds get 0.10.\r\n- `Cargo.msrv.lock` refresh is a separate commit. The lockfile still resolved rhai 1.21.0, so it is regenerated for the current manifest first. It was regenerated with `CARGO_RESOLVER_INCOMPATIBLE_RUST_VERSIONS=fallback cargo update -p rhai`, and `cargo +1.66.0 build` leaves it unchanged afterwards.\r\n- CHANGELOG (1.27.0) and README dependency list updated.\r\n\r\n## Compatibility\r\n\r\n`rhai::Map` is public, so its key type changes from `SmartString<LazyCompact>` to `CompactString`. Code that uses `&str` lookups, `\"key\".into()` or `.as_str()` keeps compiling. Code that names `smartstring::SmartString` explicitly has to switch. The CHANGELOG lists this under *Potentially breaking changes*. If you would rather keep this for a 2.0 or behind a feature flag, I'm happy to rework it.\r\n\r\n## Testing\r\n\r\nRun locally against `main` (a6241621):\r\n\r\n- `cargo test` for every flag set of the `build` matrix in `build.yml` (29 flag sets, 15,110 test executions in total), all green\r\n- `cargo +1.66.0 build --features decimal,metadata,serde,debugging,grain` with `Cargo.msrv.lock`\r\n- no_ast (3 flag sets), all 4 WASM builds (wasm32-wasip1, wasm32-unknown-unknown), i686 cross build\r\n- `no_std/no_std_test` on nightly (`--profile unix`)\r\n- `cargo +nightly fmt --all -- --check`, the CI clippy invocation, `cargo doc` with the CI feature set\r\n- `codegen/tests/custom_root` tests. The `codegen` trybuild UI tests fail on `main` as well with current rustc (diagnostic wording changed). The set of failing UI files is identical with and without this PR.\r\n\r\nDownstream, we already carry the same change on top of 1.25.1 via `[patch.crates-io]`.",
+              "closedAt": "2026-09-29T11:48:47Z",
+              "closingIssuesReferences": {
+                "nodes": [
+                  {
+                    "id": "I_kwDOAyYOjc58Y_UU",
+                    "number": 816,
+                    "repository": {
+                      "nameWithOwner": "rhaiscript/rhai"
+                    },
+                    "state": "CLOSED"
+                  }
+                ]
+              },
+              "comments": {
+                "nodes": [
+                  {
+                    "author": {
+                      "login": "schungx"
+                    },
+                    "authorAssociation": "COLLABORATOR",
+                    "createdAt": "2026-09-27T23:02:57Z"
+                  },
+                  {
+                    "author": {
+                      "login": "schungx"
+                    },
+                    "authorAssociation": "COLLABORATOR",
+                    "createdAt": "2026-09-28T15:01:56Z"
+                  },
+                  {
+                    "author": {
+                      "login": "hoppworks"
+                    },
+                    "authorAssociation": "CONTRIBUTOR",
+                    "createdAt": "2026-09-28T15:59:05Z"
+                  }
+                ],
+                "totalCount": 3
+              },
+              "commits": {
+                "nodes": [
+                  {
+                    "commit": {
+                      "oid": "6a64e7eca3aed6ea212dfd8d538f1fd24bedc9d1",
+                      "statusCheckRollup": {
+                        "state": "SUCCESS"
+                      }
+                    }
+                  }
+                ]
+              },
+              "createdAt": "2026-09-27T17:14:48Z",
+              "id": "PR_kwDOAyYOjc8AAAABFXy5Ng",
+              "isDraft": false,
+              "labels": {
+                "nodes": [
+                  {
+                    "name": "enhancement"
+                  }
+                ],
+                "totalCount": 1
+              },
+              "mergeable": "UNKNOWN",
+              "milestone": null,
+              "number": 1175,
+              "reactionGroups": [
+                {
+                  "content": "THUMBS_UP",
+                  "reactors": {
+                    "totalCount": 1
+                  }
+                },
+                {
+                  "content": "THUMBS_DOWN",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "LAUGH",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "HOORAY",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "CONFUSED",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "HEART",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "ROCKET",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "EYES",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                }
+              ],
+              "repository": {
+                "nameWithOwner": "rhaiscript/rhai"
+              },
+              "reviewDecision": null,
+              "state": "MERGED",
+              "timelineItems": {
+                "nodes": [
+                  {
+                    "id": "LE_lADOAyYOjc8AAAABThBmV88AAAAHc4Tm1A"
+                  }
+                ]
+              },
+              "title": "Replace smartstring with compact str",
+              "updatedAt": "2026-09-30T18:45:12Z"
+            },
+            {
+              "assignees": {
+                "nodes": []
+              },
+              "author": {
+                "login": "schungx"
+              },
+              "authorAssociation": "COLLABORATOR",
+              "body": "Now that Grain is here to stay, and we're removing the _experimental_ moniker starting this version, docs and accessibilities must be cleaned up to avoid unnecessarily exposing too large an API.\r\n\r\nSome functions and/or types are exposed only under `internals` -- same treatment as other Rhai API's.\r\n\r\nAlso, Rhai source line numbers referred to in comments get out of sync very quickly, so they are mostly removed.\r\n\r\nSome relics duplicated over from the days where Grain was a separate repo with no access to Rhai's crate-internal API's are changed back to use Rhai instead.\r\n\r\nThe docs built with this PR is now clean and self-contained.  Run the following to check out the new docs:\r\n```\r\ncargo doc --no-deps --open --features bin-features,internals,grain\r\n```\r\n\r\nThis PR looks hairy but they are mostly docs and comment changes, with visibility tweaks, and some redundant helpers and types mapped back into Rhai. No material code changes.\r\n",
+              "closedAt": "2026-09-18T01:11:24Z",
+              "closingIssuesReferences": {
+                "nodes": []
+              },
+              "comments": {
+                "nodes": [],
+                "totalCount": 0
+              },
+              "commits": {
+                "nodes": [
+                  {
+                    "commit": {
+                      "oid": "9bd2bfc2ddeccbb0691da4529dc480f866b57f16",
+                      "statusCheckRollup": {
+                        "state": "SUCCESS"
+                      }
+                    }
+                  }
+                ]
+              },
+              "createdAt": "2026-09-16T06:47:03Z",
+              "id": "PR_kwDOAyYOjc8AAAABDuOmuA",
+              "isDraft": false,
+              "labels": {
+                "nodes": [
+                  {
+                    "name": "docs"
+                  },
+                  {
+                    "name": "vm"
+                  }
+                ],
+                "totalCount": 2
+              },
+              "mergeable": "UNKNOWN",
+              "milestone": null,
+              "number": 1171,
+              "reactionGroups": [
+                {
+                  "content": "THUMBS_UP",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "THUMBS_DOWN",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "LAUGH",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "HOORAY",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "CONFUSED",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "HEART",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "ROCKET",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "EYES",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                }
+              ],
+              "repository": {
+                "nameWithOwner": "rhaiscript/rhai"
+              },
+              "reviewDecision": "APPROVED",
+              "state": "MERGED",
+              "timelineItems": {
+                "nodes": [
+                  {
+                    "id": "LE_lADOAyYOjc8AAAABRhvPKM8AAAAHRS_EUw"
+                  },
+                  {
+                    "id": "LE_lADOAyYOjc8AAAABRhvPKM8AAAAHRS_E9g"
+                  }
+                ]
+              },
+              "title": "VM: Clean up docs.",
+              "updatedAt": "2026-09-18T01:12:35Z"
+            },
+            {
+              "assignees": {
+                "nodes": []
+              },
+              "author": {
+                "login": "schungx"
+              },
+              "authorAssociation": "COLLABORATOR",
+              "body": "",
+              "closedAt": "2026-09-16T02:49:43Z",
+              "closingIssuesReferences": {
+                "nodes": []
+              },
+              "comments": {
+                "nodes": [],
+                "totalCount": 0
+              },
+              "commits": {
+                "nodes": [
+                  {
+                    "commit": {
+                      "oid": "1640370a90a47c57c60d50b4000ba091a0e6e4b6",
+                      "statusCheckRollup": {
+                        "state": "SUCCESS"
+                      }
+                    }
+                  }
+                ]
+              },
+              "createdAt": "2026-09-16T02:43:29Z",
+              "id": "PR_kwDOAyYOjc8AAAABDs92QA",
+              "isDraft": false,
+              "labels": {
+                "nodes": [
+                  {
+                    "name": "enhancement"
+                  },
+                  {
+                    "name": "vm"
+                  }
+                ],
+                "totalCount": 2
+              },
+              "mergeable": "UNKNOWN",
+              "milestone": null,
+              "number": 1170,
+              "reactionGroups": [
+                {
+                  "content": "THUMBS_UP",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "THUMBS_DOWN",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "LAUGH",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "HOORAY",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "CONFUSED",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "HEART",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "ROCKET",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "EYES",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                }
+              ],
+              "repository": {
+                "nameWithOwner": "rhaiscript/rhai"
+              },
+              "reviewDecision": null,
+              "state": "MERGED",
+              "timelineItems": {
+                "nodes": [
+                  {
+                    "id": "LE_lADOAyYOjc8AAAABRgOdLc8AAAAHRKj-uA"
+                  },
+                  {
+                    "id": "LE_lADOAyYOjc8AAAABRgOdLc8AAAAHRKj_gg"
+                  }
+                ]
+              },
+              "title": "Support on_def_var on no_ast and Grain.",
+              "updatedAt": "2026-09-16T02:49:44Z"
+            },
+            {
+              "assignees": {
+                "nodes": []
+              },
+              "author": {
+                "login": "schungx"
+              },
+              "authorAssociation": "COLLABORATOR",
+              "body": "A very simple optimization for the `switch` statement.\r\n\r\nCurrently, a single `switch` statement lowers into two calls to `Op::Switch` -- one for the cases and one for the ranges.\r\n\r\nIn the predominant scenario of no range cases, there is no need to emit the dispatch to empty ranges.\r\n\r\nThis PR optimizes the lowering such that no second dispatch is emitted if there are no range cases.  It also saves the push and pop of the `Scope` by not storing the `switch` value.\r\n\r\nSpeed of the `switch` statement doubles to close to 2x the speed of the AST walker when there are no range cases.\r\n",
+              "closedAt": "2026-09-16T02:00:39Z",
+              "closingIssuesReferences": {
+                "nodes": []
+              },
+              "comments": {
+                "nodes": [
+                  {
+                    "author": {
+                      "login": "schungx"
+                    },
+                    "authorAssociation": "COLLABORATOR",
+                    "createdAt": "2026-09-14T07:27:34Z"
+                  }
+                ],
+                "totalCount": 1
+              },
+              "commits": {
+                "nodes": [
+                  {
+                    "commit": {
+                      "oid": "858ada2187547c8c45c6f0f2ef75a2fa77ebdeda",
+                      "statusCheckRollup": {
+                        "state": "SUCCESS"
+                      }
+                    }
+                  }
+                ]
+              },
+              "createdAt": "2026-09-09T15:26:38Z",
+              "id": "PR_kwDOAyYOjc8AAAABC2vWlQ",
+              "isDraft": false,
+              "labels": {
+                "nodes": [
+                  {
+                    "name": "enhancement"
+                  },
+                  {
+                    "name": "vm"
+                  }
+                ],
+                "totalCount": 2
+              },
+              "mergeable": "UNKNOWN",
+              "milestone": null,
+              "number": 1165,
+              "reactionGroups": [
+                {
+                  "content": "THUMBS_UP",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "THUMBS_DOWN",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "LAUGH",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "HOORAY",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "CONFUSED",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "HEART",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "ROCKET",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "EYES",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                }
+              ],
+              "repository": {
+                "nameWithOwner": "rhaiscript/rhai"
+              },
+              "reviewDecision": "APPROVED",
+              "state": "MERGED",
+              "timelineItems": {
+                "nodes": [
+                  {
+                    "id": "LE_lADOAyYOjc8AAAABQfNVN88AAAAHLjKRZQ"
+                  },
+                  {
+                    "id": "LE_lADOAyYOjc8AAAABQfNVN88AAAAHLjKSyA"
+                  }
+                ]
+              },
+              "title": "VM: Double switch statement speed by not emitting the ranges dispatch if there are no range cases",
+              "updatedAt": "2026-09-16T02:00:43Z"
+            },
+            {
+              "assignees": {
+                "nodes": []
+              },
+              "author": {
+                "login": "schungx"
+              },
+              "authorAssociation": "COLLABORATOR",
+              "body": "Currently, any loops (e.g. `for`, `while`, do`) emit a `()` with a `Pop` in the vast majority of cases where the loop's break value is not used.\r\n\r\nThis results with a push `()` followed by `Pop` for many loops.  Although most loops are long enough to make this immaterial, is it nevertheless not necessary.\r\n\r\nThis PR optimizes this with the `Lowered` return value just like for statement blocks.\r\n",
+              "closedAt": "2026-09-14T00:35:23Z",
+              "closingIssuesReferences": {
+                "nodes": []
+              },
+              "comments": {
+                "nodes": [
+                  {
+                    "author": {
+                      "login": "schungx"
+                    },
+                    "authorAssociation": "COLLABORATOR",
+                    "createdAt": "2026-09-13T22:05:51Z"
+                  }
+                ],
+                "totalCount": 1
+              },
+              "commits": {
+                "nodes": [
+                  {
+                    "commit": {
+                      "oid": "65350d6020951a7e88e3480e3b59ed2836426ebb",
+                      "statusCheckRollup": {
+                        "state": "SUCCESS"
+                      }
+                    }
+                  }
+                ]
+              },
+              "createdAt": "2026-09-13T14:29:44Z",
+              "id": "PR_kwDOAyYOjc8AAAABDVzmrQ",
+              "isDraft": false,
+              "labels": {
+                "nodes": [
+                  {
+                    "name": "enhancement"
+                  },
+                  {
+                    "name": "vm"
+                  }
+                ],
+                "totalCount": 2
+              },
+              "mergeable": "UNKNOWN",
+              "milestone": null,
+              "number": 1169,
+              "reactionGroups": [
+                {
+                  "content": "THUMBS_UP",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "THUMBS_DOWN",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "LAUGH",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "HOORAY",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "CONFUSED",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "HEART",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "ROCKET",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "EYES",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                }
+              ],
+              "repository": {
+                "nameWithOwner": "rhaiscript/rhai"
+              },
+              "reviewDecision": "APPROVED",
+              "state": "MERGED",
+              "timelineItems": {
+                "nodes": [
+                  {
+                    "id": "LE_lADOAyYOjc8AAAABREmhAc8AAAAHOwG9wQ"
+                  },
+                  {
+                    "id": "LE_lADOAyYOjc8AAAABREmhAc8AAAAHOwG-FA"
+                  }
+                ]
+              },
+              "title": "VM: Optimize loops by not emitting a `()` if not needed.",
+              "updatedAt": "2026-09-14T00:35:27Z"
+            },
+            {
+              "assignees": {
+                "nodes": []
+              },
+              "author": {
+                "login": "schungx"
+              },
+              "authorAssociation": "COLLABORATOR",
+              "body": "This PR speeds up chaining assignments such as `a[x] = something`.\r\n\r\nCurrently, the VM runs an assignment on a chain around 50% slower than the AST walker.\r\n\r\nThat is because it first calculates the resultant value, then pushes it into the `Scope` under a dummy name, then it processes the operands, and finally it reads the value back from the `Scope` and puts it back onto the stack.\r\n\r\nThis PR eliminates this entire process by changing the order of the stack pushes -- with the resultant value pushed first.  The whole process now operates purely on the stack without touching the `Scope`.\r\n\r\nChain assignments now run at par with the AST walker, with the `primes` bench reaching 1.0x speed.\r\n\r\nAnother minor enhancement is the use of `Scope::push_entry` which takes an `ImmutableString` which can be cloned from the strings interner.  This avoids additional allocations of the same strings over and over again.\r\n",
+              "closedAt": "2026-09-13T23:47:22Z",
+              "closingIssuesReferences": {
+                "nodes": []
+              },
+              "comments": {
+                "nodes": [],
+                "totalCount": 0
+              },
+              "commits": {
+                "nodes": [
+                  {
+                    "commit": {
+                      "oid": "1cc29d331ec6b7521c5f490c2c974e482f511cdd",
+                      "statusCheckRollup": {
+                        "state": "SUCCESS"
+                      }
+                    }
+                  }
+                ]
+              },
+              "createdAt": "2026-09-08T15:33:36Z",
+              "id": "PR_kwDOAyYOjc8AAAABCsjSAg",
+              "isDraft": false,
+              "labels": {
+                "nodes": [
+                  {
+                    "name": "regression"
+                  },
+                  {
+                    "name": "vm"
+                  }
+                ],
+                "totalCount": 2
+              },
+              "mergeable": "UNKNOWN",
+              "milestone": null,
+              "number": 1163,
+              "reactionGroups": [
+                {
+                  "content": "THUMBS_UP",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "THUMBS_DOWN",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "LAUGH",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "HOORAY",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "CONFUSED",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "HEART",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "ROCKET",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "EYES",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                }
+              ],
+              "repository": {
+                "nameWithOwner": "rhaiscript/rhai"
+              },
+              "reviewDecision": "APPROVED",
+              "state": "MERGED",
+              "timelineItems": {
+                "nodes": [
+                  {
+                    "id": "LE_lADOAyYOjc8AAAABQTGOPs8AAAAHKdaDCQ"
+                  },
+                  {
+                    "id": "LE_lADOAyYOjc8AAAABQTGOPs8AAAAHKdaD5w"
+                  }
+                ]
+              },
+              "title": "VM: Speed up chaining assign.",
+              "updatedAt": "2026-09-13T23:47:27Z"
+            },
+            {
+              "assignees": {
+                "nodes": []
+              },
+              "author": {
+                "login": "schungx"
+              },
+              "authorAssociation": "COLLABORATOR",
+              "body": "Originally, Grain rolls its own indexing and property get/set logic.\r\n\r\nThen indexing was rerouted to Rhai's standard `get_indexed_mut` function that properly handles a range of special situations, such as the `Engine::on_invalid_array_index` callback.\r\n\r\nThis PR routes also the property read/write process to Rhai, thus properly handling missing properties and the `Engine::on_map_missing_property` callback.\r\n",
+              "closedAt": "2026-09-13T23:46:01Z",
+              "closingIssuesReferences": {
+                "nodes": []
+              },
+              "comments": {
+                "nodes": [],
+                "totalCount": 0
+              },
+              "commits": {
+                "nodes": [
+                  {
+                    "commit": {
+                      "oid": "718c81d121a35e6a27f4fdf46fd20a0e435d1673",
+                      "statusCheckRollup": {
+                        "state": "SUCCESS"
+                      }
+                    }
+                  }
+                ]
+              },
+              "createdAt": "2026-09-09T13:10:30Z",
+              "id": "PR_kwDOAyYOjc8AAAABC1fFeg",
+              "isDraft": false,
+              "labels": {
+                "nodes": [
+                  {
+                    "name": "regression"
+                  },
+                  {
+                    "name": "vm"
+                  }
+                ],
+                "totalCount": 2
+              },
+              "mergeable": "UNKNOWN",
+              "milestone": null,
+              "number": 1164,
+              "reactionGroups": [
+                {
+                  "content": "THUMBS_UP",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "THUMBS_DOWN",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "LAUGH",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "HOORAY",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "CONFUSED",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "HEART",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "ROCKET",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "EYES",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                }
+              ],
+              "repository": {
+                "nameWithOwner": "rhaiscript/rhai"
+              },
+              "reviewDecision": "APPROVED",
+              "state": "MERGED",
+              "timelineItems": {
+                "nodes": [
+                  {
+                    "id": "LE_lADOAyYOjc8AAAABQdtZHM8AAAAHLaVVJQ"
+                  },
+                  {
+                    "id": "LE_lADOAyYOjc8AAAABQdtZHM8AAAAHLaVWAQ"
+                  }
+                ]
+              },
+              "title": "VM: Route map property read/write using Rhai similar to indexing.",
+              "updatedAt": "2026-09-13T23:46:06Z"
+            },
+            {
+              "assignees": {
+                "nodes": []
+              },
+              "author": {
+                "login": "schungx"
+              },
+              "authorAssociation": "COLLABORATOR",
+              "body": "`grain-dump` is a very useful tool.\r\n\r\nThis PR extends it with more information, such as constant values, variable/function names, etc. plus flushing out the display for the `Switch` and `Chain` opcodes.\r\n\r\nPrevious:\r\n\r\n```\r\n    184  56:9      Call { name: 16, argc: 2, op: Some(0), capture_parent_scope: false }\r\n    190  56:9      JumpIfFalse { target: 223 }\r\n    195            LoadLocal(9)\r\n    198  57:22     Chain(8)\r\n    201  57:13     AssignLocal { slot: 8, var_name: 14, op: Some(0) }\r\n    208            Const(9)\r\n    211  58:7      AssignLocal { slot: 9, var_name: 15, op: Some(0) }\r\n    218            Jump(177)\r\n    223            Unit\r\n    224            Pop\r\n    225            Checkpoint\r\n    226            Unit\r\n    227            DeclareLocal { name: 19, is_const: false }\r\n    230            Checkpoint\r\n    231  67:10     PushHandler { target: 296, catch_var: Some(20) }\r\n    238            LoadLocal(8)\r\n    241            Const(7)\r\n    244  63:16     Call { name: 21, argc: 2, op: Some(1), capture_parent_scope: false }\r\n    250  63:16     JumpIfTrue { target: 269 }\r\n    255  63:28     Chain(9, 0 total operands): Local { slot: 4, name: 4 }\r\n    258  63:28     JumpIfTrue { target: 269 }\r\n    263            Bool(false)\r\n    264            Jump(270)\r\n    269            Bool(true)\r\n    270  63:20     JumpIfFalse { target: 279 }\r\n    275            Const(10) = thrown\r\n    278  64:9      Throw\r\n    279            Const(11)\r\n    282  66:20     Chain(10)\r\n    285  66:12     AssignLocal { slot: 10, var_name: 19, op: None }\r\n    290            PopHandler\r\n    291            Jump(308)\r\n    296            LoadLocal(11)\r\n    299  68:12     AssignLocal { slot: 10, var_name: 19, op: None }\r\n```\r\n\r\nNow:\r\n```\r\n    184  56:9      Call { name: 16, argc: 2, op: Some(0), capture_parent_scope: false } : < (LessThan)\r\n    190  56:9      JumpIfFalse { target: 223 }\r\n    195            LoadLocal(9)\r\n    198  57:22     Chain(8, 1 total operands): Local { slot: 1, name: 1 } counts [0]\r\n    201  57:13     AssignLocal { slot: 8, var_name: 14, op: Some(0) } : doubled += (PlusAssign) / + (Plus)\r\n    208            Const(9) = 1\r\n    211  58:7      AssignLocal { slot: 9, var_name: 15, op: Some(0) } : i += (PlusAssign) / + (Plus)\r\n    218            Jump(177)\r\n    223            Unit\r\n    224            Pop\r\n    225            Checkpoint\r\n    226            Unit\r\n    227            DeclareLocal { name: 19, is_const: false } : let caught\r\n    230            Checkpoint\r\n    231  67:10     PushHandler { target: 296, catch_var: Some(20) }\r\n    238            LoadLocal(8)\r\n    241            Const(7) = 0\r\n    244  63:16     Call { name: 21, argc: 2, op: Some(1), capture_parent_scope: false } : > (GreaterThan)\r\n    250  63:16     JumpIfTrue { target: 269 }\r\n    255  63:28     Chain(9, 0 total operands): Local { slot: 4, name: 4 } flags .off\r\n    258  63:28     JumpIfTrue { target: 269 }\r\n    263            Bool(false)\r\n    264            Jump(270)\r\n    269            Bool(true)\r\n    270  63:20     JumpIfFalse { target: 279 }\r\n    275            Const(10) = thrown\r\n    278  64:9      Throw\r\n    279            Const(11) = 99\r\n    282  66:20     Chain(10, 1 total operands): Local { slot: 1, name: 1 } counts [0]\r\n    285  66:12     AssignLocal { slot: 10, var_name: 19, op: None } : caught\r\n    290            PopHandler\r\n    291            Jump(308)\r\n    296            LoadLocal(11)\r\n    299  68:12     AssignLocal { slot: 10, var_name: 19, op: None } : caught\r\n```\r\n\r\n",
+              "closedAt": "2026-09-13T23:44:31Z",
+              "closingIssuesReferences": {
+                "nodes": []
+              },
+              "comments": {
+                "nodes": [],
+                "totalCount": 0
+              },
+              "commits": {
+                "nodes": [
+                  {
+                    "commit": {
+                      "oid": "d4b792e8e66e2faa357be017813165827724d99b",
+                      "statusCheckRollup": {
+                        "state": "SUCCESS"
+                      }
+                    }
+                  }
+                ]
+              },
+              "createdAt": "2026-09-10T05:28:32Z",
+              "id": "PR_kwDOAyYOjc8AAAABC8LoYA",
+              "isDraft": false,
+              "labels": {
+                "nodes": [
+                  {
+                    "name": "enhancement"
+                  },
+                  {
+                    "name": "vm"
+                  }
+                ],
+                "totalCount": 2
+              },
+              "mergeable": "UNKNOWN",
+              "milestone": null,
+              "number": 1168,
+              "reactionGroups": [
+                {
+                  "content": "THUMBS_UP",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "THUMBS_DOWN",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "LAUGH",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "HOORAY",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "CONFUSED",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "HEART",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "ROCKET",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "EYES",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                }
+              ],
+              "repository": {
+                "nameWithOwner": "rhaiscript/rhai"
+              },
+              "reviewDecision": "APPROVED",
+              "state": "MERGED",
+              "timelineItems": {
+                "nodes": [
+                  {
+                    "id": "LE_lADOAyYOjc8AAAABQlqRSM8AAAAHMH1Big"
+                  },
+                  {
+                    "id": "LE_lADOAyYOjc8AAAABQlqRSM8AAAAHMH1CFA"
+                  }
+                ]
+              },
+              "title": "VM: Print more details with grain-dump.",
+              "updatedAt": "2026-09-13T23:44:37Z"
+            },
+            {
+              "assignees": {
+                "nodes": []
+              },
+              "author": {
+                "login": "schungx"
+              },
+              "authorAssociation": "COLLABORATOR",
+              "body": "Closes #1166.\r\n",
+              "closedAt": "2026-09-10T01:33:39Z",
+              "closingIssuesReferences": {
+                "nodes": [
+                  {
+                    "id": "I_kwDOAyYOjc8AAAABQgWMFg",
+                    "number": 1166,
+                    "repository": {
+                      "nameWithOwner": "rhaiscript/rhai"
+                    },
+                    "state": "CLOSED"
+                  }
+                ]
+              },
+              "comments": {
+                "nodes": [],
+                "totalCount": 0
+              },
+              "commits": {
+                "nodes": [
+                  {
+                    "commit": {
+                      "oid": "1b331030f18681617c4b27a01208b6cba908abe4",
+                      "statusCheckRollup": {
+                        "state": "SUCCESS"
+                      }
+                    }
+                  }
+                ]
+              },
+              "createdAt": "2026-09-10T01:28:41Z",
+              "id": "PR_kwDOAyYOjc8AAAABC67EjA",
+              "isDraft": false,
+              "labels": {
+                "nodes": [
+                  {
+                    "name": "bug"
+                  }
+                ],
+                "totalCount": 1
+              },
+              "mergeable": "CONFLICTING",
+              "milestone": null,
+              "number": 1167,
+              "reactionGroups": [
+                {
+                  "content": "THUMBS_UP",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "THUMBS_DOWN",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "LAUGH",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "HOORAY",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "CONFUSED",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "HEART",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "ROCKET",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "EYES",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                }
+              ],
+              "repository": {
+                "nameWithOwner": "rhaiscript/rhai"
+              },
+              "reviewDecision": null,
+              "state": "CLOSED",
+              "timelineItems": {
+                "nodes": [
+                  {
+                    "id": "LE_lADOAyYOjc8AAAABQkJ3sM8AAAAHL_iayQ"
+                  }
+                ]
+              },
+              "title": "Fix bug in tokenizer",
+              "updatedAt": "2026-09-10T01:33:39Z"
+            },
+            {
+              "assignees": {
+                "nodes": []
+              },
+              "author": {
+                "login": "schungx"
+              },
+              "authorAssociation": "COLLABORATOR",
+              "body": "Currently, when the `switch` statement is used, Grain requires fixing the hash seed due to Rhai's usage of hashing in the `switch` statement.  This is a limitation of the AST design, which throws away the original case value, keeping only the hash.\r\n\r\nThis PR adds back the constant value of each case for the `switch` statement into the AST, removing the need for Grain to store hashes in compiled bytecodes.\r\n\r\nNow, the case values are stored as constants and the hashes are recalculated upon load.  Therefore, there is no need to probe the hashing seed and no need to check if they match.\r\n\r\nThe `HashSeedMismatch` error is deprecated (but left there for compatibility).\r\n\r\nThe bytecodes version is bumped due to the hash now replaced by a constant index.\r\n\r\nAlso, the cases are now stored in a `HashMap` instead of an array so linear search is avoided for very large `switch` statements.  Currently it does not appear to improve performance for general use cases.",
+              "closedAt": "2026-09-08T23:58:09Z",
+              "closingIssuesReferences": {
+                "nodes": []
+              },
+              "comments": {
+                "nodes": [],
+                "totalCount": 0
+              },
+              "commits": {
+                "nodes": [
+                  {
+                    "commit": {
+                      "oid": "397ce4276682f738bffc825c3df5383f972877a5",
+                      "statusCheckRollup": {
+                        "state": "SUCCESS"
+                      }
+                    }
+                  }
+                ]
+              },
+              "createdAt": "2026-09-07T07:32:09Z",
+              "id": "PR_kwDOAyYOjc8AAAABCev3rw",
+              "isDraft": false,
+              "labels": {
+                "nodes": [
+                  {
+                    "name": "enhancement"
+                  },
+                  {
+                    "name": "vm"
+                  }
+                ],
+                "totalCount": 2
+              },
+              "mergeable": "UNKNOWN",
+              "milestone": null,
+              "number": 1162,
+              "reactionGroups": [
+                {
+                  "content": "THUMBS_UP",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "THUMBS_DOWN",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "LAUGH",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "HOORAY",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "CONFUSED",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "HEART",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "ROCKET",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "EYES",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                }
+              ],
+              "repository": {
+                "nameWithOwner": "rhaiscript/rhai"
+              },
+              "reviewDecision": "APPROVED",
+              "state": "MERGED",
+              "timelineItems": {
+                "nodes": [
+                  {
+                    "id": "LE_lADOAyYOjc8AAAABQCqles8AAAAHJEhr1Q"
+                  },
+                  {
+                    "id": "LE_lADOAyYOjc8AAAABQCqles8AAAAHJEhsjA"
+                  }
+                ]
+              },
+              "title": "VM: Simplify switch statement handling.",
+              "updatedAt": "2026-09-09T01:27:34Z"
+            },
+            {
+              "assignees": {
+                "nodes": []
+              },
+              "author": {
+                "login": "schungx"
+              },
+              "authorAssociation": "COLLABORATOR",
+              "body": "",
+              "closedAt": "2026-09-06T03:45:35Z",
+              "closingIssuesReferences": {
+                "nodes": []
+              },
+              "comments": {
+                "nodes": [],
+                "totalCount": 0
+              },
+              "commits": {
+                "nodes": [
+                  {
+                    "commit": {
+                      "oid": "9a60c693f0c69416f48c44f1fcc30910b1d2f5bf",
+                      "statusCheckRollup": {
+                        "state": "SUCCESS"
+                      }
+                    }
+                  }
+                ]
+              },
+              "createdAt": "2026-09-06T03:16:53Z",
+              "id": "PR_kwDOAyYOjc8AAAABCX7lbA",
+              "isDraft": false,
+              "labels": {
+                "nodes": [
+                  {
+                    "name": "bug"
+                  }
+                ],
+                "totalCount": 1
+              },
+              "mergeable": "UNKNOWN",
+              "milestone": null,
+              "number": 1161,
+              "reactionGroups": [
+                {
+                  "content": "THUMBS_UP",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "THUMBS_DOWN",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "LAUGH",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "HOORAY",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "CONFUSED",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "HEART",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "ROCKET",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "EYES",
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                }
+              ],
+              "repository": {
+                "nameWithOwner": "rhaiscript/rhai"
+              },
+              "reviewDecision": null,
+              "state": "MERGED",
+              "timelineItems": {
+                "nodes": [
+                  {
+                    "id": "LE_lADOAyYOjc8AAAABP6IpJs8AAAAHIZqN0w"
+                  }
+                ]
+              },
+              "title": "Fix missing data race condition.",
+              "updatedAt": "2026-09-06T03:45:35Z"
+            }
+          ],
+          "pageInfo": {
+            "endCursor": "Y3Vyc29yOnYyOpK0MjAyNi0wOS0wNlQwMzo0NTozNVrPAAAAAQl-5Ww=",
+            "hasNextPage": true
+          }
+        }
+      }
+    }
+  },
+  "variables": {
+    "after": null,
+    "first": 25,
+    "name": "rhai",
+    "owner": "rhaiscript"
+  }
+}

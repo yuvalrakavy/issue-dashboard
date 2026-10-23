@@ -1,0 +1,3105 @@
+{
+  "name": "nodes",
+  "response": {
+    "data": {
+      "nodes": [
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "## What happens\n\nWhen a reload drops a property from an object's source, the object keeps the value the source used to set. A from-scratch load of the same source has no value there.\n\nMeasured on branch `fix/347-349-stranded-sdl-values` (`probe_349`, in B and in full alike):\n\n- v1: `object E1: SkRefr { Partner: /A1 }`\n- v2: `object E1: SkRefr { }`, with `/A1` kept\n- After the v2 reload, `E1` still holds `Partner=/A1`, provenance `Tracking`.\n\n## Why\n\nA data object's SyncObject runs in merge mode. `command/sync.rs` (\"Unmentioned properties are preserved (user changes survive reconciliation)\") removes only the properties listed in `unset_properties`. Codegen does not list a property the source stopped setting.\n\nThat comment records a decision. It protects runtime changes (`Plain`/`Customized`), and it protects two sources merging onto one object, where each SyncObject leaves the other's properties alone. A `Tracking` value is neither: it came from a source and was never touched. Dropping it when no source asserts it any more would match a from-scratch load. It needs care, though, because another module's merge onto the same object may be the one that asserts it.\n\n## Why it matters now\n\nThe gh #349 fix refuses a reload that removes an object a source still references. It decides \"still references\" by what the job's real syncs asserted. A leftover like the one above, on a holder in a module the reload does not reconcile, has no sync to consult. So a later reload that removes `/A1` is refused, naming `E1.Partner`, although `E1`'s source no longer mentions it. The refusal is rare (a dropped reference, then its target removed, with the holder's module otherwise untouched) and it names the holder. But it traces back to this divergence.\n\n## Decision needed (owner)\n\nShould a real sync of an SDL object clear its `Tracking` values that no source asserts any more? The multi-merge case is the design question.\n\nFound while building gh #349; out of that fix's scope.\n",
+          "closedAt": "2026-09-27T12:23:26Z",
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-09-27T12:23:25Z"
+              }
+            ],
+            "totalCount": 1
+          },
+          "createdAt": "2026-09-26T20:27:13Z",
+          "id": "I_kwDONszNXs8AAAABTZyGxw",
+          "labels": {
+            "nodes": [],
+            "totalCount": 0
+          },
+          "milestone": null,
+          "number": 352,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "CLOSED",
+          "stateReason": "COMPLETED",
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABTZyGx88AAAAHbqKp9g"
+              },
+              {
+                "id": "UNLE_lADONszNXs8AAAABTZyGx88AAAAHbzBr7Q"
+              }
+            ]
+          },
+          "title": "A property dropped from an object's source keeps its stored value (merge mode), unlike a from-scratch load",
+          "updatedAt": "2026-09-27T12:23:28Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "## What happens\n\nA reload that deletes or retypes a property clears the value an unchanged module's object still sets, and is accepted. A from-scratch load of the same sources refuses.\n\nBoth cases were measured during the deep re-gate of gh #347/#349, on branch `fix/347-349-stranded-sdl-values`:\n\n- **Deletion.** `Mprov` deletes `SkFoo2.Quota`. `Muser`, unchanged and so not reconciled, holds `object X2: SkC { Quota: 5 }`.\n  - The reload is accepted, and `X2.Quota` is cleared by the property deletion (`schema_change.rs`, the `WriteOrigin::PropertyDeletion` loop).\n  - From scratch, `X2 { Quota: 5 }` is refused (`NoSuchProperty`).\n- **Retype.** `Mprov` changes `Quota: String?` to `Quota: Int?`. `Muser`, unchanged, holds `X2 { Quota: \"abc\" }`.\n  - The reload is accepted in B and in full, and `X2.Quota` is gone: the retype migration's best-effort unset logs `migration_value_dropped`.\n  - From scratch it is refused (`Value Str(\"abc\") is not Int`).\n\n## Why it was not fixed with #347/#349\n\n1. **Default fills cannot be told apart from stated values.** Most such values were never stated by the holder's source. They are default fills (`{ default: }`, class-level `default X = …`), which are stored as `Tracking` like a stated value. Treating every cleared `Tracking` value as owed a re-sync was tried. It forced a full replay on ordinary deletions, and refused a valid single-file reconcile for good (re-gate RG1–RG5). Two data commits in 90 days would have paid it: `5ced5ac8`, and `101d3ef9`, whose values come from class-level defaults. Telling fills apart would need a persisted \"stated by the source\" record, or a distinct provenance for fills.\n2. **The retype is a recorded decision.** The retype path's §4.3 \"best effort\" rule is a deliberate choice.\n\nThe #347 fix keeps the case where the deleted property's name re-binds: after a re-point, the holder's class still has a property of that name. That case is re-applied. See spec §8 in `docs/superpowers/specs/2026-09-26-stranded-sdl-values-design.md`.\n\n## Decision needed (owner)\n\nFor a property deleted or retyped in a reload, a value that an unchanged module states is currently silently cleared. Should it instead refuse the reload, as from scratch? If so, how should a stated value be told apart from a default fill?\n\nRelated: gh #352, where merge mode keeps a dropped property's value.\n",
+          "closedAt": "2026-09-27T12:23:29Z",
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-09-27T12:23:29Z"
+              }
+            ],
+            "totalCount": 1
+          },
+          "createdAt": "2026-09-26T22:24:45Z",
+          "id": "I_kwDONszNXs8AAAABTagM5w",
+          "labels": {
+            "nodes": [],
+            "totalCount": 0
+          },
+          "milestone": null,
+          "number": 353,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "CLOSED",
+          "stateReason": "COMPLETED",
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABTagM588AAAAHbqKsqw"
+              },
+              {
+                "id": "UNLE_lADONszNXs8AAAABTagM588AAAAHbzByTQ"
+              }
+            ]
+          },
+          "title": "Deleting or retyping a property silently clears a value an unchanged module still states (from scratch refuses)",
+          "updatedAt": "2026-09-27T12:23:31Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "Found by a survey of every `on GetDefaults` handler, done while designing gh #352 (spec `docs/superpowers/specs/2026-09-27-stated-values-design.md`). There are 13 handlers in `data/`. None of these defects is needed for #352. Each is reasoned from the code, and **UNVERIFIED by a test** unless marked otherwise.\n\n- [x] **`data/frameworks/ha/modules/site_config.sdl:54` (SiteInfo): key mismatch.** The script sets `defaults[\"Latitude\"]` and `defaults[\"Longitude\"]`, but the declared properties are `_1_Latitude` and `_2_Longitude`. The caller-wins check compares exact key strings (`create.rs:342`). The apply loop sorts keys by name, and the first key to reach a property wins (`create.rs:979-1027`). So the geolocated default may override coordinates the caller supplied. **Fixed in `ae90c2d1..031e9dbb` (gh #352):** caller-wins now compares by resolved PROPERTY, not by key string, so a caller's `_1_Latitude` beats the script's `Latitude`. Pinned by `gh354_a_stated_prefixed_value_beats_a_default_keyed_by_display_name`.\n- [x] **SiteInfo: network I/O inside the create transaction.** `get_location()` is a blocking HTTP GET with a 5 s timeout (`scripting/rhai/misc.rs:559-570`, `:968-978`). It has no `in defaults` guard, so it also runs when the caller already supplied coordinates, and it also runs in the Admin UI's defaults preview.\n- [x] **`data/frameworks/ha/schemas/HA/component/ac_control.sdl:154` (HvacMember) returns a fresh map, not `defaults`.** Codegen prepends the class's own `default HasIndependentHeating/HeatingAvailable/CoolingAvailable` lines (88-90) as `defaults += #{…};` (`codegen.rs:2898-2905`), so the fresh map throws them away. Today the property-level `default:` values at 83-85 hide this.\n- [x] **`data/frameworks/media/modules/media/air_zone_audio.sdl:978` (MixMember) scans `parent.children` without a `parent != ()` guard.** Its siblings have one. It throws when run without a parent: from `store.get_class_defaults(class_path)`, and from `GetClassDefaults` with an empty `parent_path`.\n- [x] **`store_server/src/scripting/rhai/limits.rs:208` says GetDefaults runs under the `validation` preset.** It runs under the calling engine's preset (runtime, interactive or reconcile). Only `Filter*` uses `filter_engine`.\n- [x] **gRPC `GetClassDefaults` (`services/server.rs:1221-1339`) holds `store_lock.read()` (1249) without registering it as a `CommittedViewScope`.** So a GetDefaults script there is not blocked from mutating, and its nested reads can queue behind a waiting writer.\n\n\n",
+          "closedAt": "2026-09-27T16:19:03Z",
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-09-27T16:19:03Z"
+              }
+            ],
+            "totalCount": 1
+          },
+          "createdAt": "2026-09-27T07:18:35Z",
+          "id": "I_kwDONszNXs8AAAABTdPA5Q",
+          "labels": {
+            "nodes": [],
+            "totalCount": 0
+          },
+          "milestone": null,
+          "number": 354,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "CLOSED",
+          "stateReason": "COMPLETED",
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": []
+          },
+          "title": "GetDefaults survey: SiteInfo key/transaction defects, HvacMember discards its defaults, MixMember parent guard, GetClassDefaults read lock",
+          "updatedAt": "2026-09-27T16:19:03Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "## What happened\n\nIn the pre-merge run on `031e9db` (branch `fix/352-353-stated-values`), one DSL test failed once and passed when re-run:\n\n`tests/media/renderer_e2e/audio_panel.tests:869` — \"media.panel.adversarial.e2e: a room with no audio app has no overlay and no media windows\"\n\nThe assertion that failed was `no_logs { level_min: WARN }`, with two unmatched WARNs:\n\n```\n[WARN +2.667s] server error received\n  error=\"Cannot resolve object '/Home/Apartment/Master/RoomMedia/Apps/Music': Object \"/Home/Apartment/Master/RoomMedia/Apps\" has no child named \"Music\"\"\n  file=hometouch_renderer/src/render_thread.rs line=3482 panel=pi_1 span_command_count=4\n[WARN +2.918s] ht_server could not resolve a SubscribePath — its Error carries the reason\n```\n\nRe-running with `store-test --only-failed` gave 4 passed, 0 failed. There is no earlier failure of this test in the lane's run cache.\n\n## Likely mechanism (unverified)\n\nThe test's `ap_drop_app` script deletes the room's Music app. A panel's render thread still had a batch, or a subscription, that named the old path, and it resolved that path after the deletion. The resolve failed with a WARN, which a test asserting `no_logs` counts. This is a timing race between the deletion and the panel's in-flight batch or subscription. The change under test (#352/#353, reconcile semantics) does not run on a script deletion.\n\n## To decide\n\n- Is a resolve failure for an object deleted while a batch or subscription was in flight a legitimate WARN? If it is expected, it could be demoted, or the test could opt it out.\n- Or should the renderer or ht_server drop stale paths on deletion before resolving them?\n\nFailure detail: `Store-t1/.store-test-cache/runs/20260927T122129Z-0000024114.json`, trace `2e395e23ca89463581ca0397f415c8b8`.\n",
+          "closedAt": "2026-09-28T01:27:57Z",
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-09-28T01:27:56Z"
+              }
+            ],
+            "totalCount": 1
+          },
+          "createdAt": "2026-09-27T12:22:53Z",
+          "id": "I_kwDONszNXs8AAAABTfDCMg",
+          "labels": {
+            "nodes": [
+              {
+                "name": "bug"
+              },
+              {
+                "name": "p2"
+              },
+              {
+                "name": "renderer"
+              }
+            ],
+            "totalCount": 3
+          },
+          "milestone": null,
+          "number": 355,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "CLOSED",
+          "stateReason": "COMPLETED",
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABTfDCMs8AAAAHbzAuTQ"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABTfDCMs8AAAAHbzAunA"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABTfDCMs8AAAAHbzAu1g"
+              }
+            ]
+          },
+          "title": "Flaky: a panel resolves a just-deleted app path and WARNs (audio_panel.tests:869)",
+          "updatedAt": "2026-09-28T01:27:57Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "With `STORE_PRECOMMIT_AUDIT=strict` armed, one reload test goes 17 s -> 73 s. A `sample` profile of it\n(2026-09-27) put **79% of transaction time inside the oracle's reference lanes** (`with_delegation_suppressed`),\nnearly all of it the raw walk `get_class_inheritance_chain_uncached`; `audit_chain_memo` alone was **49%** —\nit re-walks the chain on every memo HIT, not only on a fill.\n\nSince chore/gate-speed the quick gate arms this oracle only for diffs touching the class-hierarchy cache surface,\nso the cost now lands on exactly the work that needs it (and on `--full`). Armed, the store_server suite is still\n~1127 s.\n\nShape to evaluate (needs a spec — it is an oracle, and its independence is the point): cache the REFERENCE\nanswer per (class, overlay write epoch), dropped on ANY overlay write. That invalidation is coarser than the memo's\nown rule, so it stays independent of the logic it audits, and it pays one walk per key per write instead of per read.\nEstimated suite 1350 -> ~500 s armed. Measure hits-per-write on a reconcile before designing.\n\nEvidence: `store_server/src/command/precommit_store.rs` (`audit_chain_memo` ~4188, the delegation audits ~1444/1529/1553).\n",
+          "closedAt": "2026-09-27T23:18:49Z",
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-09-27T21:37:13Z"
+              },
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-09-27T23:18:49Z"
+              }
+            ],
+            "totalCount": 2
+          },
+          "createdAt": "2026-09-27T19:34:13Z",
+          "id": "I_kwDONszNXs8AAAABTh8MXw",
+          "labels": {
+            "nodes": [
+              {
+                "name": "design-question"
+              },
+              {
+                "name": "p2"
+              },
+              {
+                "name": "kernel"
+              },
+              {
+                "name": "dev-loop"
+              }
+            ],
+            "totalCount": 4
+          },
+          "milestone": null,
+          "number": 356,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "CLOSED",
+          "stateReason": "NOT_PLANNED",
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABTh8MX88AAAAHcAiB2g"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABTh8MX88AAAAHcAiCNw"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABTh8MX88AAAAHcAiCpA"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABTh8MX88AAAAHcAiC_g"
+              }
+            ]
+          },
+          "title": "perf(gate): the precommit oracle re-walks the class chain on every memo hit",
+          "updatedAt": "2026-09-27T23:18:49Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "Tests of 30 s or more are 90% of store_server's test time (163 of 2103 tests). The largest share is the\nreload/structural family: `structural_skip_tests` (91 tests, 1429 s unarmed) and `reload_atomicity_tests`\n(60, 1186 s).\n\nTheir cost is fixture setup, not assertions: `gh347_an_unchanged_module_holding_a_rebound_instance_is_pulled_in`\nruns 4 cases x 3 legs, and each leg builds a store FROM SCRATCH (`Env::new` + `create_store` — a full Std reconcile —\nthen a warm-up reload): 12 fresh stores, 150 s unarmed.\n\nIdea: build each case's settled store once and restore it per leg (the template/snapshot machinery exists), so the\nlegs differ only in the reload under test. Keep a from-scratch leg wherever `create_store` itself is what is tested.\nNot redundancy: the legs assert different engine paths; only the setup is repeated.\n",
+          "closedAt": "2026-09-27T21:37:07Z",
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-09-27T21:37:07Z"
+              }
+            ],
+            "totalCount": 1
+          },
+          "createdAt": "2026-09-27T19:34:15Z",
+          "id": "I_kwDONszNXs8AAAABTh8NDA",
+          "labels": {
+            "nodes": [
+              {
+                "name": "p3"
+              },
+              {
+                "name": "dev-loop"
+              }
+            ],
+            "totalCount": 2
+          },
+          "milestone": null,
+          "number": 357,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "CLOSED",
+          "stateReason": "COMPLETED",
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABTh8NDM8AAAAHcAiFDw"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABTh8NDM8AAAAHcAiFVQ"
+              }
+            ]
+          },
+          "title": "test(store_server): reload/structural tests rebuild a settled store per leg",
+          "updatedAt": "2026-09-27T21:37:07Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "Measured on a 2026-09 quick gate: phase 3 ran 215 smoke tests + 1 changed file in 472 s, while\n`test-body time` was 93.5 s across 241 scripts. The rest is the server restart (`--restart-if-stale`),\ntemplate rebakes and per-test store setup.\n\nProfile before designing: split the 472 s into restart, rebake, per-test reset/materialize and bodies. The\n`test-body time` line alone is not attributive (see CLAUDE.md, the perf-measurement row).\n",
+          "closedAt": "2026-09-27T21:37:06Z",
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-09-27T21:37:05Z"
+              },
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-09-27T23:58:45Z"
+              }
+            ],
+            "totalCount": 2
+          },
+          "createdAt": "2026-09-27T19:34:16Z",
+          "id": "I_kwDONszNXs8AAAABTh8NpQ",
+          "labels": {
+            "nodes": [
+              {
+                "name": "p3"
+              },
+              {
+                "name": "harness"
+              },
+              {
+                "name": "dev-loop"
+              }
+            ],
+            "totalCount": 3
+          },
+          "milestone": null,
+          "number": 358,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "CLOSED",
+          "stateReason": "COMPLETED",
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABTh8Npc8AAAAHcAiJJQ"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABTh8Npc8AAAAHcAiJfw"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABTh8Npc8AAAAHcAiJzg"
+              }
+            ]
+          },
+          "title": "perf(gate): a quick DSL phase is mostly setup — 93 s of test body in ~470 s",
+          "updatedAt": "2026-09-27T23:58:45Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "Found in the #[serial] audit (chore/gate-speed). `v13_history_covered_subscribe_returns_only_diff`\n(`command/changes_distributor.rs` ~1268-1277) sleeps 200 ms to order a subscribe after the processor task;\n`v11_…` asserts < 10 s and `a3_…` uses 10 s / 500 ms timeouts. `#[serial]` never protected them — plain tests\nalways ran alongside — and it is now gone. No failure observed in 5 full runs; filed so a first flake has\nits mechanism named. Fix shape: wait on the condition (the processor's ack), not a sleep.\n",
+          "closedAt": "2026-09-27T21:37:09Z",
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-09-27T21:37:09Z"
+              }
+            ],
+            "totalCount": 1
+          },
+          "createdAt": "2026-09-27T19:34:17Z",
+          "id": "I_kwDONszNXs8AAAABTh8ORA",
+          "labels": {
+            "nodes": [
+              {
+                "name": "p3"
+              },
+              {
+                "name": "harness"
+              }
+            ],
+            "totalCount": 2
+          },
+          "milestone": null,
+          "number": 359,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "CLOSED",
+          "stateReason": "COMPLETED",
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABTh8ORM8AAAAHcAiK0Q"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABTh8ORM8AAAAHcAiLRA"
+              }
+            ]
+          },
+          "title": "test: the distributor tests race a 200 ms sleep and 10 s bounds under load",
+          "updatedAt": "2026-09-27T21:37:09Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "`coverage_audit` FAILS when the DSL harness runs a named subset of files (seen 2026-09-27, 106 named files:\n`[ASSERTION] coverage_audit`) and passes when run alone or in the full corpus. Its catalog check depends on which\nfiles are loaded. A derived gate names files explicitly, so this is a false red on the path the process now\nprescribes. Either scope the check to the loaded set or skip it on a subset run, saying so.\n",
+          "closedAt": "2026-09-27T21:37:04Z",
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-09-27T21:37:03Z"
+              }
+            ],
+            "totalCount": 1
+          },
+          "createdAt": "2026-09-27T19:34:19Z",
+          "id": "I_kwDONszNXs8AAAABTh8PaQ",
+          "labels": {
+            "nodes": [
+              {
+                "name": "p3"
+              },
+              {
+                "name": "harness"
+              }
+            ],
+            "totalCount": 2
+          },
+          "milestone": null,
+          "number": 360,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "CLOSED",
+          "stateReason": "COMPLETED",
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABTh8Pac8AAAAHcAiPeQ"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABTh8Pac8AAAAHcAiP0w"
+              }
+            ]
+          },
+          "title": "harness: coverage_audit fails in subset DSL runs",
+          "updatedAt": "2026-09-27T21:37:04Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "store_server's 88 `#[serial]` annotations were audited on 2026-09-27: 87 protected nothing (sled-era copies)\nand were removed, cutting the suite's head-of-line blocking. `store_cli` and `store_test` still depend on\n`serial_test`. Their suites are small, so the payoff is low; check each for real shared state (fixed names, env\nvars, global latches such as `Config::ensure_init` with a temp root — five such sites were live bugs in\nstore_server) and drop what protects nothing.\n",
+          "closedAt": "2026-09-27T21:37:11Z",
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-09-27T21:37:11Z"
+              }
+            ],
+            "totalCount": 1
+          },
+          "createdAt": "2026-09-27T19:34:21Z",
+          "id": "I_kwDONszNXs8AAAABTh8QFQ",
+          "labels": {
+            "nodes": [
+              {
+                "name": "p3"
+              },
+              {
+                "name": "dev-loop"
+              }
+            ],
+            "totalCount": 2
+          },
+          "milestone": null,
+          "number": 361,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "CLOSED",
+          "stateReason": "COMPLETED",
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABTh8QFc8AAAAHcAiRig"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABTh8QFc8AAAAHcAiR3Q"
+              }
+            ]
+          },
+          "title": "test(store_cli, store_test): audit their #[serial] tests too",
+          "updatedAt": "2026-09-27T21:37:11Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "## Observed\n\nWhen a parent is deleted, its children are cascade-deleted in the order `delete_object_by_id` (`store_server/src/command/delete.rs`) walks `get_object_references(object_id, …)`, which is backed by a std `HashSet` (`store_layer/memory.rs`, `ObjectData::references`). So sibling `Deleted` / `DescendantDeleted` events arrive in a different order from run to run.\n\nFound while building SDL tree events (`feat/sdl-tree-events`): the phase-1 cascade test (T9) depended on that order and failed 2 of 3 runs; it was changed (`c2ce06fb`) to compare each child's entries as a unit. The nondeterminism itself is still in the code.\n\n## Why it matters\n\nHandler order is now a documented guarantee within one event (spec `docs/superpowers/specs/2026-09-28-sdl-tree-events-design.md` §2.7), but ACROSS the events of one cascade the order is whatever the hash seed says — a handler that accumulates into `event_state` or writes a log sees a different sequence each run, and a test that asserts on sibling order is flaky.\n\n## Expected\n\nA deterministic cascade order (e.g. sorted by name, matching `get_object_children`'s name-sorted order, or by id).\n\n## Not verified\n\nWhether any existing handler or test other than T9 depends on sibling delete order.",
+          "closedAt": "2026-09-29T16:52:17Z",
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-09-28T10:24:42Z"
+              },
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-09-29T16:52:16Z"
+              }
+            ],
+            "totalCount": 2
+          },
+          "createdAt": "2026-09-28T10:16:59Z",
+          "id": "I_kwDONszNXs8AAAABTo7kow",
+          "labels": {
+            "nodes": [
+              {
+                "name": "bug"
+              },
+              {
+                "name": "p3"
+              },
+              {
+                "name": "kernel"
+              }
+            ],
+            "totalCount": 3
+          },
+          "milestone": null,
+          "number": 362,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "CLOSED",
+          "stateReason": "COMPLETED",
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABTo7ko88AAAAHclCeQA"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABTo7ko88AAAAHclCe1Q"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABTo7ko88AAAAHclCfnA"
+              }
+            ]
+          },
+          "title": "Cascade delete visits a parent's children in HashSet order, so sibling delete events are nondeterministic",
+          "updatedAt": "2026-09-29T16:52:17Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "## Observed (by code reading and tracing — no test run yet)\n\n`SlotManager::free` moves a slot to Retiring without touching `navigation_stack` (`hometouch_renderer/src/slots.rs:182-191`); `flush_unsubscribes` finalises it to Free (`render_thread.rs:1046-1080`); `allocate` hands out the lowest Free index (`slots.rs:136`). `pop_screen` skips a stale entry only while its slot is still Free/Retiring (`slots.rs:254-258`) — once the index is REUSED, Back reactivates the new occupant.\n\nThree producers:\n- a `Cached=false` screen covered by a push (`slots.rs:171-172,233-235`);\n- `InvalidateCache` freeing stacked Cached slots (`slots.rs:340-359`) — reachable in production via `MediaButton.reload_screen` → `MediaPanel::invalidate_runtime_cache` (`media_panel.sdl:241-255,654`) whenever a room's audio apps are added/removed/renamed;\n- pool eviction of the oldest Cached slot (`slots.rs:142-145`).\n\nSame class: a child's `^` parent pointer to a freed index (`variables.rs:381-391,401-421`); the Version SubscribeReply binding to whoever now holds the index (`render_thread.rs:2443-2446`, unlike the redirect arm at `:2447-2470`). Related: a Version change on an off-stack Cached slot leaks it as Used (`render_thread.rs:1637-1642`); the Commands temp slot `MAX_SLOTS-1` can be allocated to a real screen (`render_thread.rs:836,884`).\n\n## Expected\n\nBack never reaches a screen that was not at that stack position.\n\n## Reproduction idea\n\nUnit (slots.rs, today's API): allocate+push Home; allocate(W, no_cache=true)+push; push X (frees W); take_pending_unsubscribes + finalize_retiring; push Y (gets W's index); pop twice → the second pop returns Y's index instead of Home. Renderer-E2E: Home → Workflow screen → any → any → Back → Back lands on the third screen, not Home. Prove the test with `scripts/negative-control.py --at <base>` (RED-AT-BASE).\n\n## Fix design\n\n`docs/superpowers/specs/2026-09-28-content-keyed-panel-caches-design.md` §6.2 R3 / phase 1 (branch `docs/part-a-content-keyed-caches`): tombstone freed entries, drop parent mappings in `clear_slot`, an occupant check on the Version reply, eviction preferring unstacked slots, reserve the temp slot. Found by the Part A design review (2026-09-28).",
+          "closedAt": "2026-09-28T23:04:53Z",
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-09-28T18:16:35Z"
+              },
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-09-28T23:04:52Z"
+              }
+            ],
+            "totalCount": 2
+          },
+          "createdAt": "2026-09-28T16:20:07Z",
+          "id": "I_kwDONszNXs8AAAABTthrkA",
+          "labels": {
+            "nodes": [
+              {
+                "name": "bug"
+              },
+              {
+                "name": "p1"
+              },
+              {
+                "name": "renderer"
+              }
+            ],
+            "totalCount": 3
+          },
+          "milestone": null,
+          "number": 363,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "CLOSED",
+          "stateReason": "COMPLETED",
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABTthrkM8AAAAHc-tlGg"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABTthrkM8AAAAHc-tmGw"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABTthrkM8AAAAHc-tm1A"
+              }
+            ]
+          },
+          "title": "Renderer: a freed slot's index stays on the navigation stack and is reused, so Back can land on an unrelated screen",
+          "updatedAt": "2026-09-28T23:04:53Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "Split from the original Part A by the owner (2026-09-28). Design: `docs/superpowers/specs/2026-09-28-content-keyed-panel-caches-design.md` (branch `docs/part-a-content-keyed-caches`) — the ht_server half of it.\n\n**Why:** with Part B (panels follow the store) the user-visible stale-panel problem is solved by rebuild + restart. What remains is content that changes WITHOUT a model change — above all a developer editing a store-side generator or its Rhai: the XML changes under the same `script_path`, and ht_server keeps serving the old compile until something invalidates it. That is what `DisableServerSideCache` (\"useful for debugging schema changes\") and `ServerCached` exist to paper over.\n\n**Scope:**\n- compile key = `(form_factor, size, script_path, blake3(XML))`;\n- every resolver answer recorded per variant (path→id, is-image, provider-ref, DisplayName adopter — errors included) and re-checked in `CompiledPanelScript::serves`;\n- bounded LRU with an atomic hit tick (no write lock on a hit; never the cache lock under the proxy guard);\n- debug builds recompile on every hit and log ERROR on a difference (owner Q4);\n- `DebugScripts=true` forces a compile (Q5);\n- remove `DisableServerSideCache` (all consumers in ONE commit — the spec's list: 29 store.toml lines, 5 template-build scripts, CLI, config known-key filter, login allowlist, tests, docs, skills; a leftover key WARNs and is ignored, Q8) and `ServerCached` / `ServerCache=\"false\"` / `xml_declares_no_server_cache` after the content key lands; retire the staleness-only `InvalidateCache` fires (Q9).\n\n**Owner questions for this half:** Q4, Q5, Q8, Q9, Q11 (spec §3).\n**Not in scope:** the renderer (A2, deferred), `Cached` → `Lifetime` and the `*` definition-name prefix (A2).",
+          "closedAt": "2026-09-29T01:53:25Z",
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-09-29T01:53:24Z"
+              }
+            ],
+            "totalCount": 1
+          },
+          "createdAt": "2026-09-28T16:20:09Z",
+          "id": "I_kwDONszNXs8AAAABTths_A",
+          "labels": {
+            "nodes": [
+              {
+                "name": "todo"
+              },
+              {
+                "name": "p2"
+              },
+              {
+                "name": "renderer"
+              },
+              {
+                "name": "hometouch"
+              }
+            ],
+            "totalCount": 4
+          },
+          "milestone": null,
+          "number": 364,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "CLOSED",
+          "stateReason": "COMPLETED",
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABTths_M8AAAAHc-tr0A"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABTths_M8AAAAHc-ts5w"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABTths_M8AAAAHc-ttvw"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABTths_M8AAAAHc-tuvg"
+              }
+            ]
+          },
+          "title": "Part A1: ht_server compile cache keyed by content; DisableServerSideCache and ServerCached removed",
+          "updatedAt": "2026-09-29T01:53:25Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "Split from the original Part A by the owner (2026-09-28) and **deferred**: do it only when a concrete staleness case appears that `Cached` (or `Lifetime`) cannot handle. Design: `docs/superpowers/specs/2026-09-28-content-keyed-panel-caches-design.md` (branch `docs/part-a-content-keyed-caches`) — the renderer half; its §6 changed most in review and must be re-derived against `render_thread.rs` before coding (the design's self-review blind spot was event/timing semantics).\n\n**What it would do:** renderer slot reuse only on equal screen identity (request minus `Method`) AND equal bytes+resource-map digest; supersede-and-reload-with-state for stale stacked instances (parent, locals, `Reloaded`); a pending top entry guarding re-requests (input paused, late replies dropped, 2 s fallback); `Version` reloading the visible screen in place instead of going home; `Cached` → `Lifetime` (`Retained` | `PerVisit`) with the stored-value scan; the `*`/`&`/`$` definition-name prefix convention retired.\n\n**Why deferred:** transparency, not correctness — screens whose content changes between visits are handled today by `Cached=false`, which works; the change rewrites navigation and event timing, the riskiest area of the renderer.\n\n**Owner questions:** Q1, Q2, Q3, Q6, Q7 (spec §3). **Depends on:** #363 (navigation-stack integrity) and #364 (A1).",
+          "closedAt": null,
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-09-29T01:53:26Z"
+              }
+            ],
+            "totalCount": 1
+          },
+          "createdAt": "2026-09-28T18:16:34Z",
+          "id": "I_kwDONszNXs8AAAABTu4tMQ",
+          "labels": {
+            "nodes": [
+              {
+                "name": "todo"
+              },
+              {
+                "name": "p3"
+              },
+              {
+                "name": "renderer"
+              },
+              {
+                "name": "hometouch"
+              }
+            ],
+            "totalCount": 4
+          },
+          "milestone": null,
+          "number": 365,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "OPEN",
+          "stateReason": null,
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABTu4tMc8AAAAHdGJV9A"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABTu4tMc8AAAAHdGJWsQ"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABTu4tMc8AAAAHdGJXyQ"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABTu4tMc8AAAAHdGJYrw"
+              }
+            ]
+          },
+          "title": "Part A2 (deferred): renderer slot identity by content, supersede-and-reload, Version in place, Cached → Lifetime",
+          "updatedAt": "2026-09-29T01:53:26Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "## Observed (2026-09-28, Part B of 'panels follow the store')\n\nEvery DSL row in a controls table makes `scripts/negative-control.py` rebuild and cycle the lane server (`restart_lane` → `store-cli restart --wait`) before running its one test — ~2–4 min per row, so a Part-B-sized table (15–20 rows) is ~45–60 min of wall clock on the critical path. Most of those mutations were in SDL under `data/`, not Rust, so the rebuild was wasted: nothing compiled changed.\n\n## Why controls stay\n\nThey are the only proof a test can fail: on spec 1 (SDL tree events) the first pass left 4 of 17 controls GREEN — tests whose body ended on a runtime error rather than their assertion, or whose shape could not see the mutation.\n\n## Proposed\n\n1. **SDL-only rows reconcile, not rebuild.** When a row's `file` is SDL under `data/` (no Rust in the mutation), apply it by reconciling into the running server (the `reload-config` / module reconcile path) and restore the same way; keep the rebuild for Rust rows. Watch for template staleness: an SDL change restales templates, and an auto-rebake per row would eat the saving — decide whether controls run with `--no-auto-rebake` plus a reconcile of the harness store, and prove it with a row whose mutation only shows through a template.\n2. **A row budget.** One control per GUARD (mechanism), not per test; say in the TOML which guard a row proves. Several Part B rows guarded the same mechanism.\n3. Report per-row wall clock in the runner's summary, so the cost is visible.\n\n## Also noted\n\nControls and the deep review do not need to be serialized: the review reads the committed diff (`git show`/`git diff`), so it can run while the controls mutate the working tree.",
+          "closedAt": "2026-09-28T20:59:49Z",
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-09-28T20:59:48Z"
+              }
+            ],
+            "totalCount": 1
+          },
+          "createdAt": "2026-09-28T19:01:25Z",
+          "id": "I_kwDONszNXs8AAAABTvYvxg",
+          "labels": {
+            "nodes": [
+              {
+                "name": "todo"
+              },
+              {
+                "name": "p2"
+              },
+              {
+                "name": "harness"
+              },
+              {
+                "name": "dev-loop"
+              }
+            ],
+            "totalCount": 4
+          },
+          "milestone": null,
+          "number": 366,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "CLOSED",
+          "stateReason": "COMPLETED",
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABTvYvxs8AAAAHdI6G-A"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABTvYvxs8AAAAHdI6JrA"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABTvYvxs8AAAAHdI6Krw"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABTvYvxs8AAAAHdI6Lmg"
+              }
+            ]
+          },
+          "title": "negative-control.py: SDL-only DSL rows rebuild and restart the server; reconcile instead, and budget rows per guard",
+          "updatedAt": "2026-09-28T20:59:49Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "## Observed\n\n`shared/src/iterators.rs:166-198` — the `SubclassesIterator` special case for `Object` drops the second root class of an inheritance chain. Found while building usage-check rule 1e (descendant filters, SDL tree events / panels-follow-the-store, 2026-09-28), which works around it locally instead of relying on the iterator.\n\n## Expected\n\nEnumerating the subclasses of `Object` yields every class, including both roots of a multi-root chain.\n\n## Confirmed\n\nReported by the implementing agent from code reading and the rule 1e workaround; not yet pinned by a test.\n\n## To do\n\nA unit test on a multi-root chain, then the fix; remove rule 1e's workaround after.",
+          "closedAt": "2026-09-28T22:29:53Z",
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-09-28T22:29:53Z"
+              }
+            ],
+            "totalCount": 1
+          },
+          "createdAt": "2026-09-28T20:59:28Z",
+          "id": "I_kwDONszNXs8AAAABTwv_Vw",
+          "labels": {
+            "nodes": [
+              {
+                "name": "bug"
+              },
+              {
+                "name": "p3"
+              },
+              {
+                "name": "kernel"
+              }
+            ],
+            "totalCount": 3
+          },
+          "milestone": null,
+          "number": 367,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "CLOSED",
+          "stateReason": "COMPLETED",
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABTwv_V88AAAAHdQcgMg"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABTwv_V88AAAAHdQcg3w"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABTwv_V88AAAAHdQchrw"
+              }
+            ]
+          },
+          "title": "SubclassesIterator's Object special case drops the second root class of an inheritance chain",
+          "updatedAt": "2026-09-28T22:29:53Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "## Observed (lane t1, 2026-09-28)\n\nOne full-corpus `store-test tests/` run in lane t1 had 28 failures — `Class not found`, `Invalid store token`, `Object / has no child named …` — all of which passed in isolation, and the next full run had none. The failure texts look like one test's store being swapped/reset under another under parallel load. Separately, in one run B17's store-command window records came out of order (the test now pairs them by panel).\n\n## Why it matters\n\nA 28-failure flake burst is a gate rerun at best and a mis-diagnosis at worst.\n\n## Not verified\n\nThe mechanism. First step: capture the run cache of the next occurrence (`.store-test-cache/runs/`) and the store names involved; check whether two tests resolved the same harness store name or template scratch.",
+          "closedAt": "2026-09-29T18:32:35Z",
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-09-29T18:32:35Z"
+              }
+            ],
+            "totalCount": 1
+          },
+          "createdAt": "2026-09-28T20:59:29Z",
+          "id": "I_kwDONszNXs8AAAABTwwA-g",
+          "labels": {
+            "nodes": [
+              {
+                "name": "bug"
+              },
+              {
+                "name": "p2"
+              },
+              {
+                "name": "harness"
+              }
+            ],
+            "totalCount": 3
+          },
+          "milestone": null,
+          "number": 368,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "CLOSED",
+          "stateReason": "COMPLETED",
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABTwwA-s8AAAAHdQcrZA"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABTwwA-s8AAAAHdQcsTA"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABTwwA-s8AAAAHdQctHg"
+              }
+            ]
+          },
+          "title": "Transient mass DSL failures under parallel load: 'Class not found', 'Invalid store token', 'Object / has no child'",
+          "updatedAt": "2026-09-29T18:32:35Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "Two small things found building panels-follow-the-store (2026-09-28):\n\n1. `store-test --test <name>` cannot select a test that depends on another via `after` — the negative-control driver reported such a row UNKNOWN until the test was restructured. Expected: selecting a chained test pulls in (or runs) its prerequisite, or refuses with a message naming it.\n2. CLAUDE.md's Events list says ConfigReload's variable is `event.is_startup`; the handler actually gets a plain `is_startup` (`store_server/src/manager.rs` ~7373). Fix the doc.",
+          "closedAt": "2026-09-29T18:32:40Z",
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-09-29T18:32:39Z"
+              }
+            ],
+            "totalCount": 1
+          },
+          "createdAt": "2026-09-28T20:59:31Z",
+          "id": "I_kwDONszNXs8AAAABTwwCmg",
+          "labels": {
+            "nodes": [
+              {
+                "name": "bug"
+              },
+              {
+                "name": "p3"
+              },
+              {
+                "name": "harness"
+              }
+            ],
+            "totalCount": 3
+          },
+          "milestone": null,
+          "number": 369,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "CLOSED",
+          "stateReason": "COMPLETED",
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABTwwCms8AAAAHdQcu_g"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABTwwCms8AAAAHdQcv_A"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABTwwCms8AAAAHdQcw0A"
+              }
+            ]
+          },
+          "title": "store-test --test cannot select a test chained with `after`; CLAUDE.md names ConfigReload's variable wrongly",
+          "updatedAt": "2026-09-29T18:32:40Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "Found by gh #364's phase-0 probes (2026-09-29, lane t1). None is in #364's scope; each is small.\n\n1. **A parameter named after the wrong attribute (likely typo), two sites.** `data/frameworks/hometouch/panel_scripts/Include/WindowLayout.xml:157` and `…/Subsystem/OnScreenObjects.xml:106`:\n   ```\n   <Border Color=\"`BorderColor=[DialogWindowColor:Border]`\" RadiusX=\"`BorderColor=[DialogWindow:Radius]`\" />\n   ```\n   `RadiusX`'s default is declared under the name `BorderColor`, so a caller passing `BorderColor` would set the RADIUS too. Latent today (no caller passes it, no bare reader in scope). Probably `BorderRadius=[DialogWindow:Radius]` was meant. (The same pair was also the only real instance of two conflicting backtick defaults on one element — the expander nondeterminism #364 fixed in `panelscript_expand/src/params.rs`.)\n\n2. **A stray debug print on every call:** `data/frameworks/hometouch/modules/hometouch/buttons/light_button.sdl:~150` prints `GetLightOptionsOpWindow parameters: …`. Delete it (or make it a hunt-tagged log if someone is still hunting).\n\n3. **`DynamicListScreen.GetButtonDialog` refused by visibility (possibly broken, not investigated).** `GenerateScript` → `DynamicListScreen.GetButtonDialog` was rejected: `visibility: call to GetButtonDialog (declared protected) rejected — caller object #167`. The dialog path (`DialogDef` nav param → `GetButtonDialog`, `dynamic_list_screen.sdl:84,142,149`) has no test. First step: reproduce from a panel press (the dynamic list's button dialog) — if it fails there, `GetButtonDialog` must be callable by `GenerateScript` (public, or the call made from the owning object).\n",
+          "closedAt": "2026-09-29T02:12:14Z",
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-09-29T02:12:13Z"
+              }
+            ],
+            "totalCount": 1
+          },
+          "createdAt": "2026-09-29T00:56:10Z",
+          "id": "I_kwDONszNXs8AAAABTy4JSA",
+          "labels": {
+            "nodes": [
+              {
+                "name": "bug"
+              },
+              {
+                "name": "p3"
+              },
+              {
+                "name": "hometouch"
+              }
+            ],
+            "totalCount": 3
+          },
+          "milestone": null,
+          "number": 372,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "CLOSED",
+          "stateReason": "COMPLETED",
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABTy4JSM8AAAAHdcJxYg"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABTy4JSM8AAAAHdcJyrA"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABTy4JSM8AAAAHdcJzEg"
+              }
+            ]
+          },
+          "title": "Small findings from #364 phase 0: RadiusX/BorderColor parameter typo, a stray print, GetButtonDialog refused by visibility",
+          "updatedAt": "2026-09-29T02:12:14Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "Split from gh #266 (closed 2026-09-29): the bug #266 names is fixed on main; this is the rest of the instrumentation-volume spec, **re-scoped by the owner on 2026-09-29**.\n\nSpec: `docs/superpowers/specs/2026-09-15-instrumentation-volume-policy-design.md` (§12 phasing; §14 as-built for phases 1–5a). Skill: `instrumentation`. Policy doc: `docs/guides/logging-policy.md`.\n\n## Landed (orientation)\n\nPhases 1–3 (measurement, the #266 span trims, field and repetition fixes), 4a (tracing-init loss latch consumed), 5a (telemetry loss fails the RUN, both arms). Last commit 749494f3, 2026-09-16.\n\n## State of the tree, 2026-09-29 (why each item is in or out)\n\n| Surface | Finding |\n|---|---|\n| `kind` registry | 155 distinct `kind` literals in code; **110 are not named in `logging-policy.md`** |\n| Reserved event-field names | **4 real hits**: `line =` at `store_server/src/import/xml.rs:635` and `import/sdl/codegen.rs:3845`; `file =` at `import/sdl/codegen.rs:1311` and `store_test/src/test/panel_drive.rs:664` — GELF writes `file`/`line` itself, so these records' location fields are wrong in every query |\n| DEBUG/TRACE call sites | ~124 outside a Detail family; 22 already carry a `detail.*` target |\n| Hunt markers | 0 in code |\n\n## Scope\n\n**0. Re-measure first** (spec §8.1 on a claimed lane). Hot sites move with the workload, and SDL tree events and panels-follow-the-store landed since phase 1. The result decides items 5 and 6.\n\n**Implement**\n\n1. **Reserved event-field lint + fix the 4 hits.** Both gate modes. The tree is nearly clean, so the lint is seconds and the fixes are real query bugs.\n2. **`kind` registry reconcile + a both-direction lint**: every `kind` literal in code has a registry row, every row has a call site. Write the 110 missing rows (mechanical). The registry is how an agent querying logmon learns what a kind means; without the lint it drifts again.\n3. **Invariance budgets for store load and command** (spec §7.1) — the two measured offenders (`script_compile` per store load, `validate` per value). Reconcile only if item 0 shows it scales with store size. 5a already fails a run on overflow; these catch per-item growth BEFORE it overflows.\n4. **Classify-and-delete sweep of DEBUG/TRACE (code cleanup), with its lint.** Each of the ~124 sites becomes one of: a member of a **registered Detail family** (target, what it shows, why reproducing is expensive — hardware, timing, remote devices), a site carrying a **hunt marker** for an open issue, or **deleted as Noise**. Expect many deletions — most unregistered DEBUG lines are leftover hunts. The lint: every call site below INFO is in a registered family or carries a hunt marker. Hunt markers are the lint's escape hatch for temporary instrumentation; the marker format stays.\n\n**Decide from item 0's measurement**\n\n5. **Idle census**: one report-only check that WARN+ over an idle window is empty. The enforced idle-budget framework, the home tripwire and the phase-8 switch to enforcement only if item 0 finds idle noise.\n6. **ht_server / renderer loss collector**: only if item 0 shows drops there (5a's arms cover store_server and store-test only).\n\n**Cancelled**\n\n- **The \"hunt marker names a closed issue\" merge check.** It would put a GitHub network call in the gate. Covered instead by the issue-closing habit the skill already states (remove or promote a hunt's instrumentation when its issue closes).\n- **The renderer busy budget** — no evidence of a problem.\n- **Phase 9 as a separate phase** — docs, skill and guide changes travel with the commit that changes the behaviour (Store rule); the retro entry and memory note come at the end as usual.\n",
+          "closedAt": "2026-09-29T07:21:47Z",
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-09-29T07:21:46Z"
+              }
+            ],
+            "totalCount": 1
+          },
+          "createdAt": "2026-09-28T23:44:40Z",
+          "id": "I_kwDONszNXs8AAAABTyUv7A",
+          "labels": {
+            "nodes": [
+              {
+                "name": "todo"
+              },
+              {
+                "name": "p3"
+              },
+              {
+                "name": "harness"
+              }
+            ],
+            "totalCount": 3
+          },
+          "milestone": null,
+          "number": 370,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "CLOSED",
+          "stateReason": "COMPLETED",
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABTyUv7M8AAAAHdZHP1Q"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABTyUv7M8AAAAHdZHQRw"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABTyUv7M8AAAAHdZHQyA"
+              }
+            ]
+          },
+          "title": "Instrumentation volume, re-scoped: field + kind lints, store-load/command budgets, DEBUG classify-and-delete sweep",
+          "updatedAt": "2026-09-29T07:21:47Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "Owner decision 2026-09-29: the source lints over `data/` move out of the test crates into one lint library with a thin CLI (shape B below). Pairs naturally with gh #370 (cleanup-and-guard work) on the same lane.\n\n## Why\n\n| Cost today | Evidence |\n|---|---|\n| Slow loop | running `lang_pair_lint` alone took **>10 min** wall clock on 2026-09-29 (compiling the store_test test binary) for a **1.3 s** test |\n| Gate blind spot | the derived pre-merge gate selects suites by crate, so an SDL-only change never ran these — Part B (9b1d0064) landed with `lang_pair_lint` red; only the full gate on t0 caught it (fixed b58ada52) |\n| Exceptions are Rust constants | acknowledging a site (e.g. `LANGUAGE_SITES` in `lang_pair_lint.rs`) is a Rust edit + recompile for a data decision |\n| Six output shapes | each lint has its own message and ledger form |\n\n## Shape (chosen: B)\n\n- One library of rules; each rule returns findings `{rule id, file, line, message, fix hint}`.\n- A thin CLI (`store-cli lint data`, or its own binary — decide in the design) that runs in seconds and exits non-zero on a finding.\n- Exceptions move to a data file (e.g. `data/lint-ledger.toml`), each with a required reason; a ledger row that no longer matches anything is itself a finding (as rule 3 does today).\n- ONE Rust test runs the whole set, so the gates and `scripts/negative-control.py` keep working unchanged; the derived gate runs the CLI whenever the diff touches `data/`.\n- Rejected: A (keep as tests, fix gate selection only — keeps the slow loop and the Rust ledgers); C (lint at server load — these are repo conventions, not facts about a running store).\n\nThe rule-id / ledger format is a small contract: short T2 design (Store ways-of-working) before code.\n\n## The rules to move\n\n| Lint (today) | Scans | Rule |\n|---|---|---|\n| `store_test/src/test/lang_pair_lint.rs` | SDL | (1) a hand-rolled per-language property group must cover every declared language — inert at two languages, names every incomplete group the day a third is declared; (2) the hand-rolled groups are exactly the acknowledged ones (ledger, empty today); (3) every SDL file naming a language in code (`\"HebrewName\"`, `.EnglishName`) is in the ledger with a kind (`NeedsTranslation` = work when a language is added, `EnglishFallbackProbe` = correct as is) and a reason |\n| `store_test/src/test/lang_direction_lint.rs` | PanelScript | no `Lang(` test outside a comment (direction comes from `#LanguageRtl`); pins the count of `#LanguageRtl` reads (82) |\n| `store_test/src/test/lang_fallback_lint.rs` | PanelScript | no condition compares one language's name to another's (the untranslated-proxy pattern, gh #227 item 10) |\n| `store_test/src/test/panel_variable_lint.rs` | PanelScript + SDL | every language panel variable a script reads (`#Language…`, case-insensitive) is one the store's projection writes — a misspelled `#X` silently creates an empty Setting |\n| `store_test/src/test/panel_xml_lint.rs` | PanelScript | no `--` inside an XML comment (XML 1.0 §2.5); our expander tolerates it. **Owner to confirm retirement** — no consumer in the tree uses a strict parser |\n| `store_server/src/ui_builder_read_set_tests.rs` (B15) | SDL | `UiBuilder::read_set()` (helpers.sdl) equals the `on DescendantPropertyChanged(P)` handlers in pending.sdl; every display language is in it; every property a builder reads is watched or classified |\n\nOut of scope: the `.tests`-file lints (`tag_lint`, `press_lint`, `result_key_lint`) — a different corpus. `tag_lint` already runs at store-test load.\n",
+          "closedAt": "2026-09-29T02:46:54Z",
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-09-29T00:17:45Z"
+              },
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-09-29T02:46:53Z"
+              }
+            ],
+            "totalCount": 2
+          },
+          "createdAt": "2026-09-29T00:11:23Z",
+          "id": "I_kwDONszNXs8AAAABTyiJ6w",
+          "labels": {
+            "nodes": [
+              {
+                "name": "todo"
+              },
+              {
+                "name": "p3"
+              },
+              {
+                "name": "harness"
+              },
+              {
+                "name": "dev-loop"
+              }
+            ],
+            "totalCount": 4
+          },
+          "milestone": null,
+          "number": 371,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "CLOSED",
+          "stateReason": "COMPLETED",
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABTyiJ688AAAAHdaTf8A"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABTyiJ688AAAAHdaThzw"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABTyiJ688AAAAHdaTiiA"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABTyiJ688AAAAHdaTjaA"
+              }
+            ]
+          },
+          "title": "Data lints out of the test crates: one lint library + CLI over data/ (SDL and PanelScript), ledgers as data",
+          "updatedAt": "2026-09-29T02:46:54Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "## Observed\n\n`scripts/pre-merge-check.sh --quick` on lane t1 (branch `fix/build-cache-independence`, commit `2c8c6522`, 2026-10-03 ~12:11 UTC), phase 3 (`--tag \"smoke or harness\"`):\n\n```\nresult: 363 passed, 17 failed, 8 blocked, 354 skipped\nFAILURES (25 of 388)   [RUNTIME] (24)   [ASSERTION] (1)\n```\n\nEvery failure has the same shape: the test's own scripts pass, and the implicit WARN baseline cannot be evaluated:\n\n```\nASSERTION FAILED  no_logs { level_min: WARN }\n  baseline COULD NOT BE EVALUATED — the log bucket is incomplete — a drain either gave up\n  before its barrier arrived or ran out of tail-sweep budget …\n```\n\nThe 8 blocked are `after` chains under the failed `filter_events.qualifier.class_filter_create`. The one `[ASSERTION]` is `tests/integration/logmon/command_trace_id.tests::command_warn_lands_in_test_bucket`, itself a log-delivery test. The failing tests span unrelated subsystems: climate, filter_events, permissions, seed, uibuilder, wave2b_smoke, transaction/precommit_overlay, integration/logmon.\n\nThe same selection was green one commit earlier on the same lane and server, ~20 minutes before (`592098ae`: 388 passed, 0 failed). The delta `592098ae..2c8c6522` touches only test files, `scripts/cargo-test.sh`, `scripts/test-cargo-test.sh`, a self-test call in `pre-merge-check.sh` before phase 1, and a docs TOML. Nothing phase 3 executes changed: the only `store_test/src` change is inside a `#[cfg(test)]` module.\n\nFailure artifact: `Store-t1/.store-test-cache/runs/20261003T121139Z-0000019141.json`, and `store-test --show-failure <name>` in that lane.\n\n## Expected\n\nA test whose scripts pass, and which emitted no WARN, passes. A harness drain should not fail an unrelated test because a record is late.\n\n## Confirmed\n\n- For `climate.smoke.plant_defaults` (trace `e2d51e3f829a476798b8e65ee9b3a4d8`), the barrier record `__store_test_barrier_f648712b…` **reached the broker**: logmon domain t1, seq 5948447, emitted 12:11:13. It came directly after the 9 records the drain did collect. The harness then logged at 12:11:17 (seq 5950800): `drain_lane_until_marker: barrier … did not arrive within 2s; returning 9 entries collected so far`. Nothing was lost; the drain stopped waiting.\n- The budget is a fixed constant: `BARRIER_TIMEOUT = Duration::from_millis(2000)` at `store_test/src/test/log_broker.rs:17`, used at `:224`. It does not scale with test parallelism.\n- Since gh #215, a missed barrier marks the bucket incomplete and FAILS the baseline instead of passing vacuously. These failures are that designed loud outcome.\n\n## Hypotheses — UNVERIFIED, do not trust\n\n- **Machine load pushed the barrier past 2 s.** During this run a reviewer agent was cold-compiling `store_cli` in another worktree, on top of the 20-lane phase 3 and other lanes (t3 was live). The earlier green run also overlapped agent builds, so load alone is not separated. The probe that would separate it: rerun the same selection with an idle machine and with a forced concurrent `cargo build`, and count `did not arrive within` WARNs in the t1 domain for each.\n- If load is the mechanism, CLAUDE.md's flake rule names the remedy: scale the named budget the way the harness-side panel budgets scale (by `max_parallel_tests`), rather than isolating tests. Whether the delay is in broker ingestion or in the drain's own polling task (`BARRIER_POLL_INTERVAL` 10 ms, `traces.logs` round trips) is not known.\n",
+          "closedAt": "2026-10-03T18:24:25Z",
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-10-03T12:29:52Z"
+              },
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-10-03T12:44:04Z"
+              },
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-10-03T12:52:48Z"
+              },
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-10-03T13:07:30Z"
+              },
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-10-03T18:24:22Z"
+              }
+            ],
+            "totalCount": 5
+          },
+          "createdAt": "2026-10-03T12:14:20Z",
+          "id": "I_kwDONszNXs8AAAABUx70GQ",
+          "labels": {
+            "nodes": [
+              {
+                "name": "bug"
+              },
+              {
+                "name": "p2"
+              },
+              {
+                "name": "harness"
+              }
+            ],
+            "totalCount": 3
+          },
+          "milestone": null,
+          "number": 375,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "CLOSED",
+          "stateReason": "COMPLETED",
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABUx70Gc8AAAAHivRSsQ"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABUx70Gc8AAAAHivRTGg"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABUx70Gc8AAAAHivRTbA"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABUx70Gc8AAAAHiwesEA"
+              },
+              {
+                "id": "UNLE_lADONszNXs8AAAABUx70Gc8AAAAHi7w0vQ"
+              }
+            ]
+          },
+          "title": "A 2 s log-drain barrier budget fails unrelated DSL tests under load (baseline COULD NOT BE EVALUATED)",
+          "updatedAt": "2026-10-03T18:24:25Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "## Observed\n\nA post-merge `store-cli restart --wait` at home (t0), 2026-10-03 ~12:51 UTC, took home DOWN and left it down:\n\n```\nrestart: pre-build 145 s, partial (44 units compiled) … pre-build ok — cycling the server now\nrestart: touched …/Store/cargo-watch-trigger\nrestart: waiting for server to go down — down\nError: the rebuild FINISHED (no compiler running) and cargo-watch IS running, yet no store_server\nprocess was ever seen and nothing is serving after 120s.\n```\n\nThe watcher's own build, in `target/dev-server.log`:\n\n```\nerror: failed to link or copy `…/target/debug/build/proc-macro2-b750a89f3c35b104/build_script_build-b750a89f3c35b104`\n       to `…/target/debug/build/proc-macro2-b750a89f3c35b104/build-script-build`\nCaused by:\n  Operation not permitted (os error 1)\n[Finished running. Exit status: 101]\n```\n\n**The identical error, on the same file and the same hash, is in the same log on 2026-09-25 ~19:31 UTC**, followed by a new watcher started at 22:39:21 local. So this has happened twice, and both times a routine restart left home serving nothing.\n\nRecovered by the recipe the restart prints: unsandboxed `pkill` scoped to home's sentinel, then `scripts/dev-server.sh --detach`. Home was listening ~10 s later; `store-cli status` reported fresh/current/reachable, and the new log has no `failed to link or copy`.\n\n## Expected\n\nThe restart builds before it shuts down so a broken build leaves the OLD server running (store-cli.md, using-dev-tracks). Here the restart's pre-build passed while the WATCHER's build failed, so the server was already down when the failure surfaced. A restart should not leave home down over a build step that worked moments earlier in another process.\n\n## Confirmed\n\n- The restart's pre-build (an unsandboxed agent shell) succeeded; the watcher's build of the same tree failed on one file op.\n- **Refuted: \"the watcher inherited a Seatbelt sandbox from the agent shell that launched it.\"** That watcher (pid 80491, started 2026-09-25 22:39:21, `CLAUDECODE=1` in its env) relaunched the server successfully **44 times** between the two failures (`Running target/debug/store_server` ×44 in `dev-server.log.1` after the first failure), so it could build.\n- The directory and all three files (`build-script-build`, `build_script_build-b750a89f3c35b104`, its `.d`) are owned by `yuval`, carry no file flags, and all carry `com.apple.provenance`. Their mtimes are 2026-10-01 18:26, not today.\n\n## Hypotheses — UNVERIFIED, do not trust\n\n- **macOS provenance / App Management protection.** Recent macOS refuses to modify or replace an executable written by a different \"responsible process\". The failing op replaces an EXECUTABLE (a build script) that some other process wrote on Oct 1. A rebuild of proc-macro2's build script is rare, which would explain 44 successes and 2 failures. Unchecked. The probe: in a scratch target, have process A build a crate with a build script, then have a process started differently (detached, ppid 1) force that build script to relink, and see whether it gets EPERM.\n- **Whatever the cause, the restart could be made to detect it**: build in the watcher's own environment, or relaunch the watcher when its build fails. Then the failure leaves the old server up, as the restart already promises. That is a design decision, not a fix to apply blind.\n",
+          "closedAt": null,
+          "comments": {
+            "nodes": [],
+            "totalCount": 0
+          },
+          "createdAt": "2026-10-03T12:56:16Z",
+          "id": "I_kwDONszNXs8AAAABUyO5oQ",
+          "labels": {
+            "nodes": [
+              {
+                "name": "bug"
+              },
+              {
+                "name": "p1"
+              },
+              {
+                "name": "dev-loop"
+              }
+            ],
+            "totalCount": 3
+          },
+          "milestone": null,
+          "number": 376,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "OPEN",
+          "stateReason": null,
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABUyO5oc8AAAAHiwm6qA"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABUyO5oc8AAAAHiwm7Tg"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABUyO5oc8AAAAHiwm7-A"
+              }
+            ]
+          },
+          "title": "Home restart left home DOWN: the watcher's rebuild fails with 'Operation not permitted' linking proc-macro2's build script (twice)",
+          "updatedAt": "2026-10-03T12:56:16Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "## Observed\n\n`next_numeric_suffix` in `store_server/src/command/validate.rs` (the `#` name placeholder) returns\n`Ok(max_numeric_suffix + 1)` on a `u32`. `get_numeric_suffix` parses a sibling's trailing digits as a\n`u32`, so a sibling named `Foo4294967295` yields `u32::MAX`, and any `X#` name written under the same\nparent computes `u32::MAX + 1`.\n\nFound by a code read during the deep gate of the `#?` placeholder (branch\n`feat/hash-question-placeholder`). Not reproduced.\n\n## Expected\n\nA `#` write beside such a sibling is refused with a reason (or the suffix is computed in a wider type),\nnever a panic and never a wrapped `X0`.\n\n## Confirmed\n\n- The workspace `Cargo.toml` sets no `overflow-checks`, so the dev profile has them ON and the release\n  profile has them OFF.\n- `validate.rs`: `fn get_numeric_suffix(s: &str) -> Option<u32>`, and `Ok(max_numeric_suffix + 1)` in\n  `next_numeric_suffix`.\n\n## Hypotheses — UNVERIFIED, do not trust\n\n- In a debug build the addition panics inside the command processor during `validate_name`. Whether\n  that takes down only the transaction or the processor task (the gh #319 shape, where a panic in name\n  validation left the store refusing every write until restart) has not been checked.\n- In a release build it wraps, so `Foo#` stores `Foo0`.\n\nFix sketch: `checked_add` and refuse with `InvalidName`, plus a test with a `…4294967295` sibling and its\nnegative control.\n",
+          "closedAt": null,
+          "comments": {
+            "nodes": [],
+            "totalCount": 0
+          },
+          "createdAt": "2026-10-13T10:19:40Z",
+          "id": "I_kwDONszNXs8AAAABW2kR4A",
+          "labels": {
+            "nodes": [
+              {
+                "name": "bug"
+              },
+              {
+                "name": "p2"
+              },
+              {
+                "name": "kernel"
+              },
+              {
+                "name": "self-contained"
+              }
+            ],
+            "totalCount": 4
+          },
+          "milestone": null,
+          "number": 377,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "OPEN",
+          "stateReason": null,
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABW2kR4M8AAAAHtkkaAg"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABW2kR4M8AAAAHtkkazg"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABW2kR4M8AAAAHtkkbkg"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABW2kR4M8AAAAHtkkcZA"
+              }
+            ]
+          },
+          "title": "The # name placeholder overflows u32 beside a sibling named ...4294967295",
+          "updatedAt": "2026-10-13T10:19:40Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "## Observed\n\n`dev-track claim feat/x` failed at store seeding: home's server did not answer `ServerInfo` within\n20 s. The claim's rollback cleared the claim marker and disarmed the armed seeds, but the lane was\nleft switched onto `feat/x` rather than detached at main. Recovery was a re-run with `claim --no-seed`,\nwhich re-cut the branch (~10 min, mostly working out what state the lane was in). Recorded in\n`docs/process/retro-log.md`, entry \"2026-10-03 — build-cache independence\".\n\n## Expected\n\nA failed claim leaves the lane as it found it: detached at main, without the branch the claim created,\nand one line saying so.\n\n## Confirmed\n\n- `store_cli/src/bin/dev_track.rs::cmd_claim`: everything after `write_claim` runs in `claim_setup`;\n  on error the rollback clears the claim marker and, if the claim grew the pool, removes the lane.\n- `claim_setup` switches the branch (`switch_lane_to_branch`) before seeding (`seed_lane`), and a\n  seeding failure disarms the seeds it armed. Nothing in the rollback undoes the branch switch.\n\n## Hypotheses — UNVERIFIED, do not trust\n\n- The leftover branch has no commits beyond main, so nothing can be lost and a re-claim re-cuts it;\n  the cost is confusion, not data. Not checked: how `dev-track list` classifies such a lane.\n\nFix sketch: on rollback, if this claim created or re-cut the branch, detach the lane at main and\ndelete that branch (only when it carries no commits main lacks), with a test that injects a seeding\nfailure and asserts the lane's HEAD and branch list afterwards, plus its negative control.\n",
+          "closedAt": null,
+          "comments": {
+            "nodes": [],
+            "totalCount": 0
+          },
+          "createdAt": "2026-10-13T12:28:04Z",
+          "id": "I_kwDONszNXs8AAAABW4ND2w",
+          "labels": {
+            "nodes": [
+              {
+                "name": "bug"
+              },
+              {
+                "name": "p3"
+              },
+              {
+                "name": "dev-loop"
+              },
+              {
+                "name": "self-contained"
+              }
+            ],
+            "totalCount": 4
+          },
+          "milestone": null,
+          "number": 378,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "OPEN",
+          "stateReason": null,
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABW4ND288AAAAHttPEIg"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABW4ND288AAAAHttPFtg"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABW4ND288AAAAHttPHZA"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABW4ND288AAAAHttPIwA"
+              }
+            ]
+          },
+          "title": "A failed dev-track claim leaves the lane on the new branch",
+          "updatedAt": "2026-10-13T12:28:04Z"
+        }
+      ]
+    }
+  },
+  "variables": {
+    "ids": [
+      "I_kwDONszNXs8AAAABTZyGxw",
+      "I_kwDONszNXs8AAAABTagM5w",
+      "I_kwDONszNXs8AAAABTdPA5Q",
+      "I_kwDONszNXs8AAAABTfDCMg",
+      "I_kwDONszNXs8AAAABTh8MXw",
+      "I_kwDONszNXs8AAAABTh8NDA",
+      "I_kwDONszNXs8AAAABTh8NpQ",
+      "I_kwDONszNXs8AAAABTh8ORA",
+      "I_kwDONszNXs8AAAABTh8PaQ",
+      "I_kwDONszNXs8AAAABTh8QFQ",
+      "I_kwDONszNXs8AAAABTo7kow",
+      "I_kwDONszNXs8AAAABTthrkA",
+      "I_kwDONszNXs8AAAABTths_A",
+      "I_kwDONszNXs8AAAABTu4tMQ",
+      "I_kwDONszNXs8AAAABTvYvxg",
+      "I_kwDONszNXs8AAAABTwv_Vw",
+      "I_kwDONszNXs8AAAABTwwA-g",
+      "I_kwDONszNXs8AAAABTwwCmg",
+      "I_kwDONszNXs8AAAABTy4JSA",
+      "I_kwDONszNXs8AAAABTyUv7A",
+      "I_kwDONszNXs8AAAABTyiJ6w",
+      "I_kwDONszNXs8AAAABUx70GQ",
+      "I_kwDONszNXs8AAAABUyO5oQ",
+      "I_kwDONszNXs8AAAABW2kR4A",
+      "I_kwDONszNXs8AAAABW4ND2w"
+    ]
+  }
+}

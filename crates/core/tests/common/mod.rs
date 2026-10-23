@@ -2,6 +2,8 @@
 //! JSON Schema validator over `schemas/`.
 #![allow(dead_code)]
 
+pub mod fixture;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 

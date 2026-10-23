@@ -1,0 +1,94 @@
+{
+  "name": "repo",
+  "response": {
+    "data": {
+      "repository": {
+        "defaultBranchRef": {
+          "name": "main"
+        },
+        "id": "R_kgDONszNXg",
+        "labels": {
+          "nodes": [
+            {
+              "name": "bug"
+            },
+            {
+              "name": "docs"
+            },
+            {
+              "name": "design-question"
+            },
+            {
+              "name": "todo"
+            },
+            {
+              "name": "p0"
+            },
+            {
+              "name": "p1"
+            },
+            {
+              "name": "kernel"
+            },
+            {
+              "name": "p2"
+            },
+            {
+              "name": "p3"
+            },
+            {
+              "name": "renderer"
+            },
+            {
+              "name": "sdl"
+            },
+            {
+              "name": "admin-ui"
+            },
+            {
+              "name": "drivers"
+            },
+            {
+              "name": "hometouch"
+            },
+            {
+              "name": "dev-loop"
+            },
+            {
+              "name": "harness"
+            },
+            {
+              "name": "needs-decision"
+            },
+            {
+              "name": "process"
+            },
+            {
+              "name": "self-contained"
+            },
+            {
+              "name": "InProgress"
+            },
+            {
+              "name": "media-port"
+            },
+            {
+              "name": "partial"
+            },
+            {
+              "name": "behaviors"
+            }
+          ],
+          "totalCount": 23
+        },
+        "nameWithOwner": "yuvalrakavy/Store",
+        "viewerPermission": "ADMIN",
+        "visibility": "PRIVATE"
+      }
+    }
+  },
+  "variables": {
+    "name": "Store",
+    "owner": "yuvalrakavy"
+  }
+}

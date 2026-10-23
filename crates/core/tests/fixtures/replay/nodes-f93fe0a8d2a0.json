@@ -1,0 +1,1435 @@
+{
+  "name": "nodes",
+  "response": {
+    "data": {
+      "nodes": [
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "## Observed\n\nThe daemon cannot tell whether a receiver is ACTUALLY RENDERING. Every local stage can look\nperfectly healthy — RTSP socket ESTABLISHED, send loop encoding on schedule, ring full, member\njoined — while the room is silent.\n\nThis is not hypothetical: it is what made the mid-fade wedge (#2) take four hardware A/B arms and a\nlistener to isolate. Throughout every silent arm the Store-side observed `Transport` read \"Playing\".\n\n## What was tried, and what it does NOT cover\n\n2ae3113 added a receiver heartbeat: `timing_loop` records when the receiver last asked us for\ntiming, and a member that goes quiet past `TIMING_SILENCE_UNHEALTHY_MS` (8 s, chosen from a measured\n~2.0–2.5 s request period) publishes observed `Failed`.\n\nThat catches a receiver that is GONE — powered off, standby, off the network, crashed — which was\npreviously invisible and is a real gain.\n\n**It does not catch a receiver that is present but not rendering.** Established by experiment, not\nassumed: the wedge was deliberately re-induced by disabling the fade-wait, the room was silent for\n30 s, and the timing requests kept arriving the whole time. The threshold was never crossed. A\nheartbeat proves liveness; liveness is not playback.\n\n## Expected\n\nA signal that distinguishes \"rendering\" from \"connected but silent\", so this failure class is\ndiagnosable from the logs and the Store instead of from a person in the room. Spec section 11.1\nrequires honest transport feedback and is currently only partly met.\n\n## Hypotheses — UNVERIFIED\n\n* **RTSP `GET_PARAMETER progress`** is the most promising: RAOP receivers report a playback position\n  for scrub bars. Polling it and checking that it ADVANCES would answer the question directly.\n  Unverified: whether this particular Yamaha implements it, what it returns while wedged (it may\n  report a frozen position, which is exactly the signal we want — or it may not respond at all), and\n  what the polling cost is.\n* Retransmit requests are NOT a candidate: they only appear on packet loss, so their absence proves\n  nothing.\n\nVerify against real hardware before designing around any of this — the heartbeat idea looked\nobviously right too, and was wrong.\n\n## Why it matters beyond debugging\n\nOnce this exists, the wedge class (and any future variant) fails LOUDLY. The panel can then honour\nthe section 11.1 contract — \"never a blank now-playing screen\" — and offer a recovery instead of\nshowing \"Playing\" over silence.\n\n---\n\n<!-- media-port-dag:relationships -->\n### Position in the media-port DAG\n\n**Depends on** — must land first\n- yuvalrakavy/Store#72 — **MP-004** · ✔ done\n\n**Blocks** — waiting on this\n- _nothing_\n\n<sub>Generated from [`docs/media-port-dag.md`](https://github.com/yuvalrakavy/Store/blob/main/docs/media-port-dag.md) — the DAG is the source of truth; edit it there and re-run <code>scripts/dag-sync-issues.py</code>. Edges point from dependency to dependent.</sub>\n<!-- /media-port-dag:relationships -->\n",
+          "closedAt": null,
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-08-02T21:31:27Z"
+              },
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-08-03T10:23:49Z"
+              }
+            ],
+            "totalCount": 2
+          },
+          "createdAt": "2026-08-02T16:36:57Z",
+          "id": "I_kwDOTBQnEM8AAAABLJzwTg",
+          "labels": {
+            "nodes": [
+              {
+                "name": "enhancement"
+              }
+            ],
+            "totalCount": 1
+          },
+          "milestone": null,
+          "number": 4,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/airzoned"
+          },
+          "state": "OPEN",
+          "stateReason": null,
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADOTBQnEM8AAAABLJzwTs8AAAAGt8jnQQ"
+              }
+            ]
+          },
+          "title": "No signal for 'the receiver is actually rendering' — heartbeat proves liveness, not playback",
+          "updatedAt": "2026-08-25T22:13:01Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "Found by the pre-merge deep gate on `feat/m3-streaming-sources` (three cold-context finders; two reached this independently).\n\n## The residual\n\n`RetiringPool` maps one receiver IP to ONE slot, which is either a parked member or a teardown-in-flight marker. Two members can legitimately exist on one receiver — `reap`'s documented give-up path (`retire.rs`, \"connecting anyway (the receiver may refuse)\") lets a caller connect while the pool still owns the receiver — and that state is **not representable**.\n\nThe catastrophic consequence is fixed (commit `658aee7`): a reservation now removes only its own token'd marker, so a member parked over a `TearingDown` slot is no longer silently evicted. Two residuals remain, both narrow:\n\n1. **Transient double-attribution.** After `park` inserts over a `TearingDown` marker, the slot reads `Retiring(B)` while A's RTSP TEARDOWN is still in flight. A concurrent `reap` can take B and report the receiver free while A's TEARDOWN has not landed — so a SETUP can race it. Given that #5 is about exactly this kind of race, it is worth closing properly.\n\n2. **The displaced member drains unreserved.** `park`'s displacement path drops the incumbent outside the lock. The drain rule is preserved (`MemberSender::drop` enforces it), but for the duration the member is alive and holding an RTSP session while the pool attributes that receiver to someone else. This is the \"absent but alive\" condition `Slot::TearingDown` was introduced to make impossible.\n\n## Shape worth considering\n\nReplace the enum with a per-receiver entry that can hold both, e.g.\n\n```rust\nstruct SlotEntry {\n    parked: Vec<Retiring>,   // draining, takeable\n    in_flight: usize,        // teardowns owning this receiver right now\n}\n```\n\n\"Free\" becomes `parked.is_empty() && in_flight == 0`. That **deletes** the displacement concept and the single-owner limitation rather than guarding them, which is the direction this repo prefers. It touches ~7 call sites in one file (`park`, `step`, `sweep`, `drain`, `is_empty`, `reap_all`, `Reservation::drop`).\n\n## Do not do this in isolation\n\nThis is the third pass over the teardown surface, which by the repo's own rule means the shape is wrong rather than the details. **Warm reuse (M1) removes the TEARDOWN→SETUP sequence from the replay path entirely** — a parked member is FLUSHed and re-fed instead of destroyed and rebuilt — which demotes this whole path from load-bearing to a shutdown-only concern. Decide warm reuse first; this may become much cheaper or moot.\n\n---\n\n<!-- media-port-dag:relationships -->\n### Position in the media-port DAG\n\n**Depends on** — must land first\n- **MP-009** — done · _no issue yet_\n\n**Blocks** — waiting on this\n- yuvalrakavy/Store#83 — **MP-102** · blocked\n\n<sub>Generated from [`docs/media-port-dag.md`](https://github.com/yuvalrakavy/Store/blob/main/docs/media-port-dag.md) — the DAG is the source of truth; edit it there and re-run <code>scripts/dag-sync-issues.py</code>. Edges point from dependency to dependent.</sub>\n<!-- /media-port-dag:relationships -->\n",
+          "closedAt": null,
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-08-03T10:23:46Z"
+              },
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-08-09T10:20:52Z"
+              },
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-09-16T22:53:15Z"
+              }
+            ],
+            "totalCount": 3
+          },
+          "createdAt": "2026-08-02T21:30:53Z",
+          "id": "I_kwDOTBQnEM8AAAABLK3ELA",
+          "labels": {
+            "nodes": [
+              {
+                "name": "bug"
+              }
+            ],
+            "totalCount": 1
+          },
+          "milestone": null,
+          "number": 13,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/airzoned"
+          },
+          "state": "OPEN",
+          "stateReason": null,
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADOTBQnEM8AAAABLK3ELM8AAAAGuBrmAQ"
+              }
+            ]
+          },
+          "title": "Retiring pool: one slot per receiver cannot represent two members on it",
+          "updatedAt": "2026-09-16T22:53:15Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "<!-- triage-2026-09-17 -->\n> **Correction, triaged 2026-09-17 — the stall and the retirement wedge below are real; the \"room reports Playing\" paragraph is fixed.**\n>\n> Fixed by `74ed31e` (`SourceEnd` on the wire): the producer's silence meter counts `Starved` on a thread that is not the one blocked in the read, so a room whose fetch hangs now publishes `Failed` with `SourceEnd: \"Broken\"` once it has been silent past the 30 s ceiling, instead of claiming `Playing`. Observed on 2026-09-16.\n>\n> Still open, and the reason to keep this: `fetch_track_bytes` has no aggregate deadline — the final `read_to_end` is unbounded — and a stalled fetch wedges retirement, because `PlaylistSource::drop` joins both threads (`src/playlist.rs`) on the single serial `source-reaper` (`src/engine/switch.rs`). A `take()` adapter with an elapsed budget would bound it; estimated hours. Triage recommendation: fix before deploy if time allows, else first after.\n\n---\n\n## The claim, and why it is wrong\n\n`fetch_track_bytes` carries this comment:\n\n> Bounded without a wall clock: every `AudioFile::read` either makes progress or fails on librespot's own download timeout, so there is no state in which this waits forever.\n\nThe **liveness** half holds — `position` advances and terminates at `file_size`, so `read_to_end` cannot loop forever. The **bound** does not.\n\nChecked against `librespot-audio-0.8.0/src/fetch/mod.rs:552-625`:\n\n- `download_timeout` = `minimum_download_size / minimum_throughput` = 64 KiB / 8 KiB = **8 s per condvar wait**, not per fetch. A 320 kbps track is ~8 MB in >=64 KiB chunks, so ~128 reads: worst case ~17 minutes.\n- Worse, on the branch that matters the 8 s **never fires at all**. `Condvar::wait_timeout` reports `timed_out()` only after a full interval with no notification, and `receive_data` notifies on every chunk. On a degraded-but-alive link (2 KB/s — a saturated uplink, a bad wifi channel) every read makes progress, so nothing times out and the read waits ~65 minutes for one track.\n\nTwo independent gate reviewers reached this conclusion separately.\n\n## What the listener gets\n\nThe producer holds the whole current track, so the stall surfaces at the *next* transition: `run_playlist` reaches `remaining == 0`, finds no prefetched `next`, and blocks in `track_rx.recv()` (`src/playlist.rs:631`). The packetiser stops, `pull()` returns `Starved`, `engine/switch.rs` mixes silence — with `Transport: Playing` and `StatusReason: null`. That is verbatim the failure `switch.rs:398-400` exists to prevent: *\"a silent room with nothing able to report it.\"*\n\n## And it wedges teardown\n\nA blocked producer cannot observe `skip` (the swap is above where it blocks), so **Skip does nothing**. `PlaylistSource::drop` sets `running = false` then joins the producer, which only unblocks when the fetcher drops `tx`, which only happens when the network read returns. That drop runs on the **single, serial** source-reaper thread (`engine/switch.rs:110-143`), so every subsequent retirement queues behind it, each still pinning two threads and up to ~3 decoded tracks.\n\nThis is the shape `CALL_TIMEOUT`'s own doc names — *\"a fetcher that never returns is the shape that wedged the house once already\"* — reintroduced through the one call `CALL_TIMEOUT` does not wrap.\n\n## Fix\n\nA size/time-limited `Read` adapter around the decrypted stream, or `take()` plus a checked elapsed budget, sized against `READY_GRACE_BOUNDED_PKTS` (~120 s). A timeout must be an item failure, which the rotation already handles.\n",
+          "closedAt": null,
+          "comments": {
+            "nodes": [],
+            "totalCount": 0
+          },
+          "createdAt": "2026-08-15T04:26:19Z",
+          "id": "I_kwDOTBQnEM8AAAABM2tFFw",
+          "labels": {
+            "nodes": [],
+            "totalCount": 0
+          },
+          "milestone": null,
+          "number": 28,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/airzoned"
+          },
+          "state": "OPEN",
+          "stateReason": null,
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": []
+          },
+          "title": "fetch_track_bytes has no aggregate deadline; a slow link stalls the room and wedges retirement",
+          "updatedAt": "2026-09-16T22:47:47Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "## The mismatch\n\n`Rotation::next_with` (`src/playlist.rs:300-371`) deliberately **stays inside a failing collection** until it succeeds or exhausts its budget, so one bad file does not cost a collection its airtime. That is correct when a failure costs milliseconds — a local decode error.\n\nA Spotify failure does not. It costs 20 s (metadata timeout), or 20 s + `alternatives.len() x 20 s`, or a whole slow-link read. And `SpotifyCollection::failure_budget()` is `tracks.len().max(3)`.\n\n## Scenario\n\nA Mix of `[spotify:playlist:200-tracks, /music/jazz.m3u]`. The enrolment is revoked overnight. On the Spotify slot's turn the budget is **200**, and each failed item costs a `shared_session()` -> `connect()` -> `oauth.refresh_token` (reqwest blocking, 30 s default timeout, verified at `reqwest-0.12.28/src/blocking/client.rs:1498`).\n\n200 x 30 s is **~100 minutes** during which the inner loop never breaks, so **the jazz collection never gets a turn** and the room is silent with `Transport: Playing`.\n\nThe comment at `src/playlist.rs:688-691` claims the opposite — that a Mix \"keeps playing its other collections\". That is only true *after* the budget is spent.\n\n## Compounding\n\nEvery one of those attempts holds the global `SHARED_SESSION` mutex across the whole connect, so a second room attempting Spotify serialises behind it.\n\n## Fix, two parts\n\n1. **Cap the budget in time as well as items** for network-backed collections.\n2. **Treat \"cannot get a session at all\" as a COLLECTION-level fault** — retire immediately — rather than as N item-level ones. The rotation already draws that distinction; it just cannot see through the `decode` closure.\n\nPart 2 is the important one: a dead account is fully determined on attempt one, and paying for it 200 times is the actual defect.\n",
+          "closedAt": null,
+          "comments": {
+            "nodes": [],
+            "totalCount": 0
+          },
+          "createdAt": "2026-08-15T04:26:19Z",
+          "id": "I_kwDOTBQnEM8AAAABM2tFRg",
+          "labels": {
+            "nodes": [],
+            "totalCount": 0
+          },
+          "milestone": null,
+          "number": 29,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/airzoned"
+          },
+          "state": "OPEN",
+          "stateReason": null,
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": []
+          },
+          "title": "The failure budget is counted in items but paid in seconds, so a dead Spotify account silences a Mix for ~100 minutes",
+          "updatedAt": "2026-08-15T04:26:19Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "<!-- triage-2026-09-17 -->\n> **Correction, triaged 2026-09-17 — the two main defects below still hold; §3 refers to code that no longer exists.**\n>\n> Still valid: the alternatives fallback applies no `availability` filter (`src/spotify.rs` `fetch_track_bytes`; the field exists at `librespot-metadata` `track.rs:43` and is used nowhere in `src/`); the audio key uses the **alternative's** id (`id` is rebound, then consumed by the key request); the walk has no cap; and a `map_err(…)?` aborts the whole fetch where it should `continue`.\n>\n> §3 below is stale: `name_tracks` was removed on 2026-09-16 (`bca5b32`) — a program is now resolved to ids alone, and a track is named lazily by the fetch that plays it. That change introduced a small related regression worth fixing alongside this: `track_refs` does `uri.to_id().unwrap_or_default()`, so an unparseable URI yields an **empty** id, and because the playout log now falls back to the id until the track is fetched (`src/playlist.rs` `Item::describe`), such a track logs as nothing where it used to log a title.\n\n---\n\n## Two defects in the same loop (`src/spotify.rs`, the `alternatives` fallback)\n\nSpotify models regional licensing by publishing the same recording several times; when the named copy has no playable file we walk `track.alternatives`. Both problems below live only on that path, which is why a probe run on one account in one region never enters it.\n\n### 1. `availability` is ignored, where librespot filters on it\n\nWe take the **first** alternative that has a Vorbis file. librespot takes the first that is *available to this user*:\n\n```rust\n// librespot player.rs:906-926, find_available_alternative\nalternatives\n    .filter_map(|x| future::ready(x.ok()))\n    .filter(|x| future::ready(x.availability.is_ok()))   // <-- this\n    .next()\n```\n\n`availability` is computed by `available_for_user` (embargo + `countries_allowed`/`countries_forbidden` against `user_data.country`). airzoned reads neither `track.availability` nor `track.restrictions` anywhere — both are on the struct (`librespot-metadata/src/track.rs:33-34`), grep finds zero uses.\n\n**Failure:** primary copy region-gated; alt-A licensed US-only, alt-B licensed IL; account is IL. We pick alt-A because it is first and has a file. The key request or CDN open refuses it, the track is skipped and charged to the budget, and alt-B — the copy we could actually stream — is never tried. Across a playlist of regionally-split tracks the collection retires on a source librespot plays fine.\n\n### 2. The audio key uses the ALTERNATIVE's track id; librespot uses the ORIGINAL's\n\nlibrespot binds `track_id` from the originally requested URI **before** `find_available_alternative` may swap in an alternative, and never reassigns it — then requests `audio_key().request(track_id, file_id)`: original track id, alternative's file id. We pass `(alt_id, alt_file_id)`.\n\n`AudioKeyManager::request(&self, track: SpotifyId, file: FileId)` takes both and the **pair** is what the key server validates.\n\n**UNCONFIRMED which side is right** — it needs a live account holding a region-split track, and both are defensible readings of a pair-keyed API. But the divergence from the reference implementation is a fact, it sits on the one path a probe never exercises, and if librespot is right then every alternative-sourced track gets a refused key.\n\n### 3. Minor, same loop\n\n- No cap on iteration: each alternative costs up to `CALL_TIMEOUT` (20 s), and catalogue titles routinely carry 10-40. Feeds directly into the unbounded-fetch and budget-in-seconds issues.\n- `SpotifyId::from_base62(&alt_uri.to_id().unwrap_or_default())` uses `?`, so one alternative with an id that will not round-trip **aborts the whole fetch** instead of `continue`-ing to the next.\n- The same `unwrap_or_default()` in `name_tracks` mints a `TrackRef` with an empty id and a real display name — a program slot that fails every cycle forever while looking normal in the playout log.\n\n## Fix\n\nFilter on `availability` like librespot does; decide the track-id question against a real region-split track and match the reference; cap the walk; `continue` instead of `?`.\n",
+          "closedAt": null,
+          "comments": {
+            "nodes": [],
+            "totalCount": 0
+          },
+          "createdAt": "2026-08-15T04:26:20Z",
+          "id": "I_kwDOTBQnEM8AAAABM2tFag",
+          "labels": {
+            "nodes": [],
+            "totalCount": 0
+          },
+          "milestone": null,
+          "number": 30,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/airzoned"
+          },
+          "state": "OPEN",
+          "stateReason": null,
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": []
+          },
+          "title": "The alternatives fallback ignores availability, and uses the alternative's track id for the audio key",
+          "updatedAt": "2026-09-16T22:47:45Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "<!-- triage-2026-09-17 -->\n> **Correction, triaged 2026-09-17 — the central hypothesis below is now false. Re-measure before working this.**\n>\n> This issue says no timer emits anything on the RTSP control connection once RECORD has been sent. That stopped being true when the now-playing lane landed: `push_progress` sends `SET_PARAMETER progress` every `PROGRESS_INTERVAL` (5 s) to every audibly-playing member (`src/player.rs` `publish_progress`, `src/engine/member.rs:404-413`, `src/rtsp.rs:366-377`). \"Does not notice for 11 s\" is also wrong in the daemon's favour — a closed control connection now fails the next progress push within 5 s (`src/rtsp.rs:447`).\n>\n> What IS still true: that failure is only `eprintln!`ed (`src/engine/member.rs:409-411`), not acted on. So the open question is no longer \"nothing keeps the connection alive\" but \"does macOS still drop it at ~31 s, and should a failed progress push trigger reconnect\". Severity: serious for a Mac receiver, theoretical for the Yamahas.\n\n---\n\n## Symptom\n\nA macOS AirPlay receiver (System Settings -> General -> AirDrop & Handoff -> AirPlay Receiver)\nplays for ~39 s, then stops requesting timing. Eight seconds later the daemon's\n`TIMING_SILENCE_UNHEALTHY_MS` watchdog declares the member silent, tears the session down and\nreconnects. The listener hears the music stop abruptly and resume ~10 s later, in a loop.\n\nObserved live 2026-08-15 on `Yuval's Mac Studio (10)` (10.0.2.35:7000, macOS Control Center),\nconfirmed by ear by the user three times (\"Mac stopped abruptly\" / \"Resumed\" / \"Stopped again\").\n\n```\n[player] session=macstudio FAILED: m1 stopped responding (8s of silence)\n[engine] member m1 SILENT too long — tearing down and re-establishing\n[engine] add_member m1: the speaker stopped responding; reconnecting (WentSilent); will retry\n```\n\n## Why this is not load, not the network, and not the loopback\n\n**A Yamaha receiver was playing a second session from the same daemon, in the same run, the whole\ntime, and never dropped once.** That is the control that makes this conclusive:\n\n| receiver | JOINs | silent teardowns |\n|---|---|---|\n| Yamaha RX-V673 `BZm Yuval O` (10.0.2.158:1024) | 1 | **0** |\n| macOS Control Center (10.0.2.35:7000) | 4 | **3** |\n\n## The interval is deterministic\n\nTwo clean measurements, from `live_seq` deltas between `JOINED` and `REMOVED` (352 frames/packet\nat 44100 Hz):\n\n| run | packets | playing | last timing request |\n|---|---|---|---|\n| 1 | 4905 | 39.2 s | ~31.2 s in |\n| 2 | 4904 | 39.1 s | ~31.1 s in |\n\n**One packet apart out of ~4905 — 0.02%.** Nothing stochastic repeats that precisely, so this is a\ndeterministic timeout on the receiver side, not congestion or scheduling. ~31 s is the number to\nexplain; 30 s is a very common RTSP session timeout.\n\n## Hypothesis (NOT yet verified)\n\n**The daemon sends no periodic RTSP traffic, and macOS expires the session for it.** The documented\nflow in `src/rtsp.rs:4` is:\n\n```\nPOST /auth-setup -> ANNOUNCE (SDP) -> SETUP -> RECORD -> SET_PARAMETER (volume) -> TEARDOWN\n```\n\nThere is no `OPTIONS` keepalive, no `GET_PARAMETER` poll, and no timer that emits anything on the\nRTSP control connection once `RECORD` has been sent — only the UDP audio flow continues. The same\nmodule comment notes the design was validated against \"the same MusicCast hardware\", i.e. against\nreceivers that tolerate the absence. A ~30 s server-side session timeout with a keepalive\nrequirement would produce exactly the observed constant.\n\n**What would confirm it:** packet-capture the RTSP control connection to the Mac for 45 s and\nconfirm the receiver sends nothing after ~31 s and that we send nothing at all after `RECORD`; then\nadd a periodic `OPTIONS` (or `GET_PARAMETER`) every ~10-15 s and re-measure. **Do not implement the\nkeepalive on the strength of this issue alone** — the interval is strong evidence of *a* timeout,\nbut not of *which* keepalive satisfies it.\n\n## Why it matters\n\nTwo reasons beyond this one receiver:\n\n1. macOS is not exotic. Any AirPlay 2 era receiver may share the requirement, so this could be a\n   whole class of receiver the daemon cannot hold for more than ~39 s.\n2. **The recovery worked**, which is the good news buried here: the watchdog detected the silence,\n   tore down cleanly, reconnected, and audio resumed without intervention. The defect is the\n   30-second cycle, not a wedge.\n\n## Not the same as the 403\n\nSeparately resolved during the same session and worth recording so it is not re-diagnosed: the Mac\ninitially refused every request with `403 Forbidden` on both `/auth-setup` and `ANNOUNCE`. That was\n**\"Require Password\" being enabled** on the receiver, not a protocol gap. With it off, `/auth-setup`\nreturns 404 (tolerated) and the connection succeeds in ~69 ms. An earlier guess in that session that\nthis was an AirPlay 2 pairing gap was **wrong** — the receiver was answering us fine and declining\non policy.\n",
+          "closedAt": null,
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-08-15T09:37:53Z"
+              },
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-08-15T09:44:43Z"
+              }
+            ],
+            "totalCount": 2
+          },
+          "createdAt": "2026-08-15T09:26:48Z",
+          "id": "I_kwDOTBQnEM8AAAABM3vAPA",
+          "labels": {
+            "nodes": [],
+            "totalCount": 0
+          },
+          "milestone": null,
+          "number": 33,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/airzoned"
+          },
+          "state": "OPEN",
+          "stateReason": null,
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": []
+          },
+          "title": "macOS closes the RTSP control connection every 30s; the daemon does not notice for 11s",
+          "updatedAt": "2026-09-16T22:47:42Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "<!-- triage-2026-09-17 -->\n> **Correction, triaged 2026-09-17 — \"observed live\" below refers to a different client.**\n>\n> The librespot behaviour this issue describes is real and code-proven in the pinned crate: `RATE_LIMIT_MAX_WAIT = 10s` (`librespot-core` `http_client.rs:40`), a `Retry-After` above it returns `None` (`:262-300`) and is not slept on (`:203-211`), a 429 becomes `resource_exhausted` (`:86`), and `spclient.rs:534-543` breaks out on it.\n>\n> But what was actually *observed* live was airzoned's OWN reqwest call to `api.spotify.com/v1/me` — the account-type re-check (`src/spotify.rs` `query_product`, ~404-430) — getting 429 with `Retry-After` climbing 1 s → 26 s → 38 s during repeated failed starts on 2026-09-16. That is a different client on a different host from the librespot path.\n>\n> This issue pairs with #29: each failed Spotify item re-connects and re-runs that `/v1/me` GET, which is what drove the Retry-After up. Fix both at the Spotify boundary — treat \"cannot get a session at all\" as a collection-level fault, and honour the server's `Retry-After` rather than the local backoff ladder. Triage recommendation: fix before deploy.\n\n---\n\n## A `Retry-After` above 10 s becomes a PERMANENT error inside librespot 0.8.0\n\nFound during prior-art research for #32, verified against the vendored crate we actually pin\n(`~/.cargo/registry/.../librespot-core-0.8.0`), not the `dev` branch.\n\n### The mechanism\n\n`HttpClient::request` handles 429 by sleeping `Retry-After` and looping — **unbounded**, which is\ncorrect. But it only does so if `get_retry_after` returns `Some`, and that function caps at\n`RATE_LIMIT_MAX_WAIT = 10 s` (`http_client.rs:40`). A `Retry-After` **above 10 s returns `None`**,\nso the request falls through to `Err(StatusCode(429))` -> `TOO_MANY_REQUESTS => Error::resource_exhausted`\n-> and `spclient`'s retry loop has `_ => break`, because it retries only `Unavailable` and\n`DeadlineExceeded`.\n\n**Net: a server saying \"wait 30 s\" is converted into a permanent failure, while a server saying\n\"wait 5 s\" is retried forever.** A capped wait overflowing into \"fatal\" inverts the server's meaning\n— the longer the backoff Spotify asks for, the more likely we treat it as unrecoverable.\n\n### It is live on this branch\n\nObserved today, twice, in `/tmp/airzone-daemon.log` during ordinary startup:\n\n```\n[spotify] could not re-check the account type (Spotify is rate-limiting this host (HTTP 429) —\n          Spotify says retry after 20s); proceeding on the last confirmed value (premium)\n[spotify] ... Spotify says retry after 21s ...\n```\n\nBoth **above the 10 s cap**. Our premium re-check survived it only because that call site was\ndeliberately written to fall back to the cached verdict on a could-not-ask (see the account-check\nsplit). **Every other spclient call has no such fallback** — metadata resolution and audio-key\nrequests included, i.e. exactly the calls behind `SpotifyCollection`'s resolve and fetch.\n\n### Why it matters more after #32\n\nUnder the pre-#32 design a hard resolve error retired the collection permanently, so this trap was\ninvisible behind a larger one. With `Turn::Unavailable` the daemon now retries a failed resolve, so\nthe librespot-level permanence becomes the binding constraint: we retry, librespot re-issues, gets\n429 with a >10 s `Retry-After` again, and hard-errors again. Our own backoff (1/2/4/8/16 s) is also\n*shorter* than the wait Spotify is asking for, so a retry ladder inside a rate-limit window makes\nthe rate limiting worse, not better.\n\n### Options (not yet decided)\n\n1. **Respect the server's number ourselves.** Parse `Retry-After` at our layer and let it set the\n   next attempt time, rather than using a fixed local ladder that can undercut it. Spotify's own\n   guidance is explicit: *\"Implement exponential backoff and respect the Retry-After header. Do not\n   retry immediately or in tight loops.\"*\n2. **Patch/fork the cap.** `RATE_LIMIT_MAX_WAIT` is a const; upstreaming a fix (return the real\n   value, let the caller decide) is the clean version.\n3. **Classify at our boundary.** `ResourceExhausted` is transient BY DEFINITION and should never be\n   treated as fatal. librespot ships a 17-variant gRPC-shaped `ErrorKind` with **no**\n   `is_retryable` predicate anywhere in the crate, so the rule got re-invented at five call sites\n   with five different answers. Deciding it once at our boundary is the durable fix.\n\nRelated: #32 (transient vs exhausted), #33 (macOS RTSP keepalive).\n",
+          "closedAt": null,
+          "comments": {
+            "nodes": [],
+            "totalCount": 0
+          },
+          "createdAt": "2026-08-15T09:45:57Z",
+          "id": "I_kwDOTBQnEM8AAAABM3zGPw",
+          "labels": {
+            "nodes": [],
+            "totalCount": 0
+          },
+          "milestone": null,
+          "number": 34,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/airzoned"
+          },
+          "state": "OPEN",
+          "stateReason": null,
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": []
+          },
+          "title": "librespot 0.8.0: a Retry-After above 10s becomes a permanent ResourceExhausted (observed live)",
+          "updatedAt": "2026-09-16T22:47:44Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "Found by a pre-merge gate while reviewing airzoned#32 rev 4. Pre-existing, not introduced there —\nbut rev 4 fixed the same shape of bug on the *source* axis and left this one, so the asymmetry is\nnow the odd thing rather than the status quo.\n\n## What happens\n\n`reconcile`, the abandon arm of `commit_or_abandon_switch`, and `retry_unresolved` all compose their\npublished state with `member_reason: None`. They consult the SOURCE verdict (rev 4) but nothing\nabout member health. So a redelivered retained desired doc — an MQTT broker reconnect, no user\naction — republishes `Playing` over a member-caused `Failed`:\n\n```json\n{\"Transport\":\"Playing\",\"StatusReason\":null,\"MemberStates\":{\"live\":{\"Health\":\"silent\",\"Reason\":\"...\"}}}\n```\n\n`check_health`'s transition gate then has no edge to report, because neither axis moved.\n\n## Why it is not urgent\n\nMeasured by the gate: `demote_persistently_silent` sets `force_republish` and the truth returns\nafter **2 health ticks**. So it is a brief lie, not a permanent one — unlike the source-axis version,\nwhich had no such rescue and is what made rev 4's A0 fix load-bearing.\n\n## Why it is still worth closing\n\n`source_aware_state` already takes a `member_reason` parameter and already implements the\nprecedence (member wins while `Producing`). The three sites pass `None` only because computing it\nneeds `classify_session`, which borrows the session immutably while those sites hold it mutably.\nThat is a plumbing problem, not a design one.\n\nUntil it is fixed, `source_aware_state`'s doc claim that \"every site that could publish a false\n`Playing` routes through here\" is true only of the source axis. The doc has been corrected to say\nso; this issue is the other half.\n\n## Acceptance\n\nA test in the shape of `reconcile_does_not_republish_playing_over_a_dead_source`, but with a silent\nmember instead of a dead source, asserting the redelivered doc does not publish `Playing`.\n",
+          "closedAt": null,
+          "comments": {
+            "nodes": [],
+            "totalCount": 0
+          },
+          "createdAt": "2026-08-15T12:19:57Z",
+          "id": "I_kwDOTBQnEM8AAAABM4UcXw",
+          "labels": {
+            "nodes": [],
+            "totalCount": 0
+          },
+          "milestone": null,
+          "number": 35,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/airzoned"
+          },
+          "state": "OPEN",
+          "stateReason": null,
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": []
+          },
+          "title": "Unsolicited publishes assert Playing over a MEMBER-caused Failed",
+          "updatedAt": "2026-08-15T12:19:57Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "Found by a pre-merge gate while reviewing airzoned#32 rev 4. Pre-existing.\n\n## What happens\n\nNothing polls `producer_handle.is_finished()`. If the producer thread panics, the session stays\nalive with its members connected and its ring frozen — and every instrument agrees it is healthy:\n\n* member health is fine (the receivers are connected and asking for timing);\n* `silent_packets` is FROZEN, not climbing, because the thread that increments it is the one that\n  died — so the rev 4 silence verdict cannot fire either.\n\nThe room is silent and the retained State topic says `Playing`, forever.\n\n## Why it matters more after rev 4\n\nRev 4's whole argument for metering silence at the producer is that *\"every way a source can fail\narrives at this one point identically — including ways nobody has thought of.\"* A dead producer is\nthe counterexample: it is not a way the SOURCE fails, it is the meter itself going away. The doc\nhas been corrected to name this limit; this issue is the fix.\n\nSame class as the renderer wedge-watchdog in the Store repo: a component that stops reporting is\nindistinguishable from one reporting \"fine\", unless something outside it checks liveness.\n\n## Sketch\n\n`check_health` already runs per session per tick and already reads `producer_ctl`. Adding a\n`producer_handle.is_finished()` check there costs nothing and gives an unambiguous verdict —\n`Failed` with a reason naming the producer rather than the source, since the music is not the thing\nthat broke. The handle is `Option<JoinHandle<()>>` on `ActiveSession` and is only taken by\n`stop_producer`, so \"finished while we still hold it\" is exactly the abnormal case.\n\nWorth also asking whether the thread should be RESTARTED rather than only reported: the source is\nmoved into it and is unreachable afterwards, so a restart means rebuilding the source, which is the\nsame work as a fresh open. Reporting first is the smaller, safer step.\n",
+          "closedAt": null,
+          "comments": {
+            "nodes": [],
+            "totalCount": 0
+          },
+          "createdAt": "2026-08-15T12:19:58Z",
+          "id": "I_kwDOTBQnEM8AAAABM4Ucjw",
+          "labels": {
+            "nodes": [],
+            "totalCount": 0
+          },
+          "milestone": null,
+          "number": 36,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/airzoned"
+          },
+          "state": "OPEN",
+          "stateReason": null,
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": []
+          },
+          "title": "A dead producer thread is indistinguishable from a healthy one",
+          "updatedAt": "2026-08-15T12:19:58Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "Raised by the depth round of the receiver placeholder-art change (branch merged as `e075329`; spec `Store/docs/superpowers/specs/2026-09-07-receiver-now-playing-dmap-design.md` §12). Recorded as a residual there; this is the tracker entry.\n\n## The gap\n\nThe now-playing sweep pushes metadata and artwork to members SERIALLY, and the RTSP budget (`with_budget(2s)`) re-arms per exchange rather than bounding the whole push. A receiver that accepts the write and never answers therefore costs about two seconds per exchange, and N such receivers block the worker for roughly 2N seconds per track generation — about 16 s at eight rooms — with commands queued behind the sweep.\n\n## Why it is newly exposed\n\nBefore the placeholder every coverless track wrote NO artwork, so radio and untagged libraries never took the artwork exchange at all. Now every track writes one, which puts those sources on the same path as tagged ones and doubles the exchanges per generation. The pre-existing partial-write desync (#39) sits on the same path.\n\n## Two independent fixes, either one enough\n\n- One deadline shared across a member's metadata + artwork exchanges, so a stalled member costs at most one budget per generation.\n- An aggregate sweep deadline with deferred members: a member that does not answer inside the sweep's budget is skipped this generation and retried on the next, so the worker never blocks for the sum.\n\nNeither is the placeholder branch's size; both want a test on the fake rig with a receiver that stalls after accepting the header.\n",
+          "closedAt": null,
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-09-16T22:47:07Z"
+              }
+            ],
+            "totalCount": 1
+          },
+          "createdAt": "2026-09-07T20:04:49Z",
+          "id": "I_kwDOTBQnEM8AAAABQJcVNg",
+          "labels": {
+            "nodes": [],
+            "totalCount": 0
+          },
+          "milestone": null,
+          "number": 40,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/airzoned"
+          },
+          "state": "OPEN",
+          "stateReason": null,
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": []
+          },
+          "title": "Serial now-playing sweep with a per-exchange RTSP budget can block the worker ~2N seconds when N receivers stall",
+          "updatedAt": "2026-09-16T22:47:07Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "A mutation gate (2026-09-11) measured the exit-handshake test net and found this path with a\nliterally empty net: **deleting it leaves all 478 tests green.**\n\n## The mechanism\n\n`Engine::remove` pushes a `Departed` record before parking the member, because the `silent` and\n`drain` flags can only be sampled while we still hold the sender. There is a second path for the\ncase where there is **no sender at all** — it pushes an already-silent, zero-drain entry, which is\nwhat makes the contract *total*: every removal owes exactly one `Quiet`.\n\n## Why it matters\n\nThe code comment states the stake itself: without it \"the room holds its hardware up until a\nbackstop that was never armed\". The orchestrator carries **no timeout by design** (Store#288), so\nthis is not a slow exit, it is a permanent one.\n\n## What the gate measured\n\n- Mutation: delete the no-sender path. Result: **478 passed, 0 failed.**\n- The tests that drive exactly this state — `a_rejected_arrival_does_not_claim_its_receiver_on_a_redelivered_document`,\n  `after_a_held_failure_a_source_change_does_not_readd_the_rejected_arrival`,\n  `deadline_with_nothing_heard_fails_holds_and_stops_retrying_the_arrivals` — all release\n  unconnected members and **none of them looks at `published_quiet`.**\n\n## The fix\n\nAdd an assertion to one of those three (or a new test): release a member that never connected, and\nassert a `Quiet` is published for it. The rig already has everything needed.\n\nDeferred from the gate-2 test-net repair, which closed the wire-topic and duplicate-ack holes.\nReport: `gate2-mutation-report.md`.\n",
+          "closedAt": null,
+          "comments": {
+            "nodes": [],
+            "totalCount": 0
+          },
+          "createdAt": "2026-09-11T09:53:52Z",
+          "id": "I_kwDOTBQnEM8AAAABQzuQzQ",
+          "labels": {
+            "nodes": [
+              {
+                "name": "bug"
+              }
+            ],
+            "totalCount": 1
+          },
+          "milestone": null,
+          "number": 41,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/airzoned"
+          },
+          "state": "OPEN",
+          "stateReason": null,
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADOTBQnEM8AAAABQzuQzc8AAAAHNZN7HA"
+              }
+            ]
+          },
+          "title": "The no-sender removal path has a literally empty test net, and it is a permanent-wedge path",
+          "updatedAt": "2026-09-11T09:53:52Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "A mutation gate (2026-09-11) found the post-teardown settle is **bounded above but not below**:\nsetting `SETTLE_MS` to 0 is silently green across all 478 tests.\n\n## Why that is the wrong way round\n\nThe settle exists because the receiver has a physical **relay**, and a SETUP arriving hard on the\nheels of a TEARDOWN is the condition most associated with a wedged receiver. It is a deliberate\n500 ms default, chosen by the user with the reasoning recorded verbatim:\n\n> \"Since (by the noise) there is a relay in the receiver, a non zero settle time makes sense, 500ms\n> seems to be a good value. I would set this to be the default; finding the minimum value is a call\n> for flakey behaviour.\"\n\nSo \"not zero\" is the decision, and right now it is protected by a comment and nothing else.\nDeleting the mechanism is a silent, green change.\n\n## What the gate measured\n\n- `SETTLE_MS = 0` → **478 passed** (suite time 37.4s → 33.7s, so the settle is genuinely being paid,\n  just never asserted).\n- `SETTLE_MS = 5000` → **1 failed**: `a_reap_meeting_an_in_flight_teardown_waits_it_out_without_giving_up`,\n  with \"the second reap took 5.2s, most of MAX_TEARDOWN_WAIT (10s)\". The upper bound IS defended.\n- `a_torn_down_receiver_is_left_alone_for_the_settle` is named for this mechanism and **cannot test\n  it**: it injects its own 300 ms via `RetiringPool { settle, ..without_settle() }`, never reads\n  `SETTLE_MS`, and never constructs `RetiringPool::new()`. Sixteen other tests DO call\n  `RetiringPool::new()` and pay the real settle; none assert it.\n\n## The fix\n\nAssert that a pool built by `RetiringPool::new()` carries a non-zero settle, and that a\nreap-before-connect actually waits it. Also untested: the `AIRZONED_SETTLE_MS` override, whose\n`OnceLock` means a test that set it would leak into the whole binary — worth noting in whatever\ntest is added.\n\nReport: `gate2-mutation-report.md`.\n",
+          "closedAt": null,
+          "comments": {
+            "nodes": [],
+            "totalCount": 0
+          },
+          "createdAt": "2026-09-11T09:53:53Z",
+          "id": "I_kwDOTBQnEM8AAAABQzuRnw",
+          "labels": {
+            "nodes": [
+              {
+                "name": "bug"
+              }
+            ],
+            "totalCount": 1
+          },
+          "milestone": null,
+          "number": 42,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/airzoned"
+          },
+          "state": "OPEN",
+          "stateReason": null,
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADOTBQnEM8AAAABQzuRn88AAAAHNZOBMQ"
+              }
+            ]
+          },
+          "title": "The settle is bounded above but not below: SETTLE_MS = 0 is silently green",
+          "updatedAt": "2026-09-11T09:53:53Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "Re-filed from #14 (triaged 2026-09-17), which had four bullets of which two have landed.\n\n## The defect\n\nAt shutdown, `RetiringPool::reap_all` (`src/engine/retire.rs`, ~540-580) is already partly parallel: it cuts every member to silence up front so their drains overlap, and since `f1aa278` it pays the settle once for the batch rather than once per receiver. But the TEARDOWNs themselves are still sent in a plain serial loop:\n\n```rust\nfor ip in ips {\n    self.reap_inner(*ip, false);\n}\n```\n\nSo each receiver's RTSP TEARDOWN exchange waits for the previous one. A single receiver that is slow to answer — asleep, on a flaky link, mid-reboot — delays every teardown behind it.\n\n## Why it matters\n\nShutdown is bounded by `SHUTDOWN_GRACE = 20s` (`src/worker.rs:25`), and that bound works **by abandonment**: past it the worker is left mid-teardown, and the receivers not yet reached are left un-torn-down — which is the un-drained teardown this whole mechanism exists to prevent. With a serial loop, one stalled receiver early in the list can push the rest past the grace window.\n\n## Scope\n\nSend the TEARDOWNs concurrently (or at least bound each one and keep going), preserving the two properties the current code already protects: drains overlap, and no receiver gets its next SETUP sooner than its own settle allows. Severity at the current install size is an annoyance; it grows with the number of receivers.\n",
+          "closedAt": null,
+          "comments": {
+            "nodes": [],
+            "totalCount": 0
+          },
+          "createdAt": "2026-09-16T22:46:50Z",
+          "id": "I_kwDOTBQnEM8AAAABRq0NOA",
+          "labels": {
+            "nodes": [],
+            "totalCount": 0
+          },
+          "milestone": null,
+          "number": 43,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/airzoned"
+          },
+          "state": "OPEN",
+          "stateReason": null,
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": []
+          },
+          "title": "Shutdown sends TEARDOWN serially: one slow receiver delays the rest past SHUTDOWN_GRACE",
+          "updatedAt": "2026-09-16T22:46:50Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "Re-filed from #14 (triaged 2026-09-17).\n\n## The defect\n\nThe daemon registers SIGTERM and SIGINT onto a single shutdown flag (`src/mqtt.rs:175-178`):\n\n```rust\nfor sig in [signal_hook::consts::SIGTERM, signal_hook::consts::SIGINT] {\n    if let Err(e) = signal_hook::flag::register(sig, Arc::clone(&shutdown)) { … }\n}\n```\n\nA second Ctrl-C just sets the same flag again, so an operator who has decided not to wait for a graceful shutdown has no way to say so short of `SIGKILL` — which skips every RTSP TEARDOWN, the worst outcome for the receivers.\n\n## The fix already exists in this repo\n\nThe one-shot `airzoned play` path handles exactly this correctly (`src/main.rs` ~246-270): the first signal starts a graceful stop, and a second one is taken as an explicit \"I do not want to wait\" — honoured, with a message saying what is being skipped. The daemon should do the same. Estimated as a small change: copy that pattern into the daemon's signal setup.\n\n## Why it is worth doing\n\nShutdown is bounded by `SHUTDOWN_GRACE = 20s` (`src/worker.rs:25`), so a hung shutdown does end — but twenty seconds is long when someone is at the terminal during development, and the practical alternative people reach for is `kill -9`, which is precisely the un-drained teardown the retire machinery exists to prevent. A second-signal escape hatch keeps the operator on the path that still tries to tear down cleanly.\n",
+          "closedAt": null,
+          "comments": {
+            "nodes": [],
+            "totalCount": 0
+          },
+          "createdAt": "2026-09-16T22:46:51Z",
+          "id": "I_kwDOTBQnEM8AAAABRq0Nog",
+          "labels": {
+            "nodes": [],
+            "totalCount": 0
+          },
+          "milestone": null,
+          "number": 44,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/airzoned"
+          },
+          "state": "OPEN",
+          "stateReason": null,
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": []
+          },
+          "title": "A second Ctrl-C cannot abort the daemon's graceful shutdown",
+          "updatedAt": "2026-09-16T22:46:51Z"
+        }
+      ]
+    }
+  },
+  "variables": {
+    "ids": [
+      "I_kwDOTBQnEM8AAAABLJzwTg",
+      "I_kwDOTBQnEM8AAAABLK3ELA",
+      "I_kwDOTBQnEM8AAAABM2tFFw",
+      "I_kwDOTBQnEM8AAAABM2tFRg",
+      "I_kwDOTBQnEM8AAAABM2tFag",
+      "I_kwDOTBQnEM8AAAABM3vAPA",
+      "I_kwDOTBQnEM8AAAABM3zGPw",
+      "I_kwDOTBQnEM8AAAABM4UcXw",
+      "I_kwDOTBQnEM8AAAABM4Ucjw",
+      "I_kwDOTBQnEM8AAAABQJcVNg",
+      "I_kwDOTBQnEM8AAAABQzuQzQ",
+      "I_kwDOTBQnEM8AAAABQzuRnw",
+      "I_kwDOTBQnEM8AAAABRq0NOA",
+      "I_kwDOTBQnEM8AAAABRq0Nog"
+    ]
+  }
+}
