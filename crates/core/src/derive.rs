@@ -21,9 +21,10 @@ use crate::docs::{Action, Decision, DecisionValue, Priority};
 use crate::event::Kind;
 use crate::launch::{self, State};
 use crate::ledger;
-use crate::observe::ObservedData;
+use crate::observe::{ItemKind, ObservedData};
 use crate::root::{format_time, parse_time};
 use crate::schema;
+use crate::sessions;
 use crate::snapshot::{self, DEFAULT_HISTORY_DAYS};
 use crate::translate::Translation;
 use crate::write;
@@ -346,8 +347,9 @@ fn repo_meta(
         None => json!({"value": false, "why": null}),
     };
     let visibility = match &node {
-        Some(n) => observed(conn, n)?
-            .and_then(|o| o.content.get("visibility").and_then(Value::as_str).map(str::to_string)),
+        Some(n) => {
+            observed(conn, n)?.and_then(|o| o.content.get("visibility").and_then(Value::as_str).map(str::to_string))
+        }
         None => None,
     };
     let mut m = json!({
@@ -395,24 +397,26 @@ fn acks(conn: &Connection, project: &str, taken_at: DateTime<Utc>) -> Result<Vec
             Some(None) => continue,
             Some(Some((result, reason))) => (result, reason),
             None => match status {
-            Status::Applied if d.action == Action::CancelLaunch => {
-                let target = d.target.launch.clone().unwrap_or_default();
-                match launches.get(&target) {
-                    Some(l) if withdrawn_by(&target)?.as_deref() != Some(d.id.as_str()) => (
-                        "refused",
-                        Some(match l.state {
-                            State::Withdrawn => format!("launch {target} was already withdrawn by another decision"),
-                            other => format!(
-                                "launch {target} is {other}; only a requested or queued launch can be cancelled"
-                            ),
-                        }),
-                    ),
-                    _ => ("applied", None),
+                Status::Applied if d.action == Action::CancelLaunch => {
+                    let target = d.target.launch.clone().unwrap_or_default();
+                    match launches.get(&target) {
+                        Some(l) if withdrawn_by(&target)?.as_deref() != Some(d.id.as_str()) => (
+                            "refused",
+                            Some(match l.state {
+                                State::Withdrawn => {
+                                    format!("launch {target} was already withdrawn by another decision")
+                                }
+                                other => format!(
+                                    "launch {target} is {other}; only a requested or queued launch can be cancelled"
+                                ),
+                            }),
+                        ),
+                        _ => ("applied", None),
+                    }
                 }
-            }
-            Status::Applied => ("applied", None),
-            Status::Refused { reason } => ("refused", Some(reason)),
-            Status::Cancelled { by } => ("cancelled", Some(format!("undone by {by}"))),
+                Status::Applied => ("applied", None),
+                Status::Refused { reason } => ("refused", Some(reason)),
+                Status::Cancelled { by } => ("cancelled", Some(format!("undone by {by}"))),
             },
         };
         let mut ack = json!({"id": d.id, "decision": d.id, "cycle": cycle, "result": result});
@@ -465,6 +469,39 @@ fn groups(config: &ConfigSet, project: &str) -> Result<BTreeMap<String, Vec<Stri
         out.insert(group.to_string(), tracked);
     }
     Ok(out)
+}
+
+/// Puts each item's matched live sessions on its document (10.10); a ready or blocked issue
+/// with one is in progress (2.3).
+fn attach_sessions(conn: &Connection, config: &ConfigSet, project: &str, issues: &mut [Value]) -> Result<()> {
+    let mut tracked = BTreeMap::new();
+    for i in issues.iter() {
+        let id = i["id"].as_str().unwrap_or_default().to_string();
+        let kind = if i["kind"] == "pull_request" {
+            ItemKind::PullRequest
+        } else {
+            ItemKind::Issue
+        };
+        let closes = match kind {
+            ItemKind::PullRequest => observed(conn, &id)?
+                .map(|o| strings(o.content.get("pull_request").unwrap_or(&Value::Null), "closes"))
+                .unwrap_or_default(),
+            _ => Vec::new(),
+        };
+        tracked.insert(
+            i["alias"].as_str().unwrap_or_default().to_string(),
+            sessions::Tracked { id, kind, closes },
+        );
+    }
+    let mut matched = sessions::matches(conn, config, project, &tracked)?;
+    for i in issues.iter_mut() {
+        let shown = matched.remove(i["id"].as_str().unwrap_or_default()).unwrap_or_default();
+        if !shown.is_empty() && i["kind"] == "issue" && matches!(i["status"].as_str(), Some("ready" | "blocked")) {
+            i["status"] = json!("in-progress");
+        }
+        i["sessions"] = json!(shown);
+    }
+    Ok(())
 }
 
 /// Builds the outbox of `project` for the cycle whose `outbox` event has sequence `seq`.
@@ -521,6 +558,7 @@ pub fn derive(
         }
     }
     issues.sort_by(|a, b| a["alias"].as_str().cmp(&b["alias"].as_str()));
+    attach_sessions(conn, config, project, &mut issues)?;
 
     let open: Vec<&Value> = issues.iter().filter(|i| i["state"] == "open").collect();
     let count = |f: &dyn Fn(&Value) -> bool| open.iter().filter(|i| f(i)).count();

@@ -15,13 +15,14 @@ use issue_dashboard_core::config::ConfigSet;
 use issue_dashboard_core::cycle;
 use issue_dashboard_core::docs::LaunchRequest;
 use issue_dashboard_core::github::{GhCli, GitHub, Recorder, Replay};
-use issue_dashboard_core::write::{GhIssues, IssueWriter};
 use issue_dashboard_core::ingest::{self, Pages};
 use issue_dashboard_core::launch::{self, EndState, Via};
 use issue_dashboard_core::outcome::{self, GateRuns, Outcome, RecordedBy};
 use issue_dashboard_core::publish::{self, Active};
 use issue_dashboard_core::read;
 use issue_dashboard_core::root::{Options, parse_time};
+use issue_dashboard_core::sessions::SessionList;
+use issue_dashboard_core::write::{GhIssues, IssueWriter};
 use issue_dashboard_core::{Error, Root};
 use serde_json::{Value, json};
 
@@ -106,6 +107,10 @@ enum Command {
         /// {"decisions": [], "launches": [], "views": [], "requests": []}.
         #[arg(long)]
         pages: Option<PathBuf>,
+        /// The app's session list the sync job wrote, as JSON
+        /// {"listed_at": "...", "limit": N, "sessions": [rows as list_sessions returns them]}.
+        #[arg(long)]
+        sessions: Option<PathBuf>,
     },
     /// Only the read of GitHub (chapter 2): record what changed; no ingest, no outbox.
     Snapshot {
@@ -476,7 +481,11 @@ fn run(cli: Cli) -> anyhow::Result<Value> {
             let r = root.mutate_with_clock(now, |tx| outcome::record(tx, &o))?;
             json!({"launch": o.launch, "seq": r.event().seq, "repeat": !r.is_new(), "missing": o.missing})
         }
-        Command::Cycle { project, pages } => {
+        Command::Cycle {
+            project,
+            pages,
+            sessions,
+        } => {
             let pages: Pages = match &pages {
                 Some(path) => {
                     let text = std::fs::read_to_string(path).with_context(|| path.display().to_string())?;
@@ -485,15 +494,28 @@ fn run(cli: Cli) -> anyhow::Result<Value> {
                 }
                 None => Pages::default(),
             };
+            let sessions: Option<SessionList> = match &sessions {
+                Some(path) => {
+                    let text = std::fs::read_to_string(path).with_context(|| path.display().to_string())?;
+                    Some(
+                        serde_json::from_str(&text)
+                            .map_err(|e| Error::refused(format!("{}: not a session list: {e}", path.display())))?,
+                    )
+                }
+                None => None,
+            };
             let gh = github()?;
             // A replayed GitHub is never written to: a close then stays pending.
-            let writer = std::env::var(ENV_REPLAY).is_err().then_some(&GhIssues as &dyn IssueWriter);
-            serde_json::to_value(cycle::cycle_with_writes(
+            let writer = std::env::var(ENV_REPLAY)
+                .is_err()
+                .then_some(&GhIssues as &dyn IssueWriter);
+            serde_json::to_value(cycle::cycle_full(
                 &root,
                 gh.as_ref(),
                 writer,
                 &project,
                 &pages,
+                sessions.as_ref(),
                 &now,
                 page_size()?,
             )?)?

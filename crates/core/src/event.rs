@@ -30,6 +30,10 @@ pub enum Kind {
     WriteApplied,
     /// A GitHub write was refused before it was attempted, or failed.
     WriteFailed,
+    /// The app's session list showed a session, unarchived, with new content (10.10).
+    SessionSeen,
+    /// A session seen before was archived, or left the list (10.10).
+    SessionGone,
 }
 
 impl Kind {
@@ -50,6 +54,8 @@ impl Kind {
             Kind::WriteIntended => "write_intended",
             Kind::WriteApplied => "write_applied",
             Kind::WriteFailed => "write_failed",
+            Kind::SessionSeen => "session_seen",
+            Kind::SessionGone => "session_gone",
         }
     }
 
