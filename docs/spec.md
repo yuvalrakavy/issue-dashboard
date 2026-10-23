@@ -1,6 +1,6 @@
 # issue-dashboard — design spec
 
-Status: **chapters 1-7 approved; chapters 8-9 drafts for review.** Tier T2: a generic tool whose
+Status: **all chapters approved by the owner (2026-10-23); in T2 design verification.** Tier T2: a generic tool whose
 config format is a contract that several repos and projects depend on.
 
 ## Intent
