@@ -27,6 +27,12 @@ struct FakeGh {
     fail_close: Mutex<Option<String>>,
     /// The time GitHub stamps on what it does.
     now: Mutex<String>,
+    /// How many reads after a close still show the issue as it was before it, as a lagging
+    /// GitHub read would.
+    stale_reads: Mutex<u32>,
+    before_close: Mutex<HashMap<(String, u64), IssueNow>>,
+    /// The pauses the write step asked for between reads.
+    waits: Mutex<Vec<u64>>,
 }
 
 impl FakeGh {
@@ -36,6 +42,9 @@ impl FakeGh {
             calls: Mutex::new(Vec::new()),
             fail_close: Mutex::new(None),
             now: Mutex::new(format_time(at(0))),
+            stale_reads: Mutex::new(0),
+            before_close: Mutex::new(HashMap::new()),
+            waits: Mutex::new(Vec::new()),
         }
     }
 
@@ -82,12 +91,24 @@ fn split(alias: &str) -> (String, u64) {
 impl IssueWriter for FakeGh {
     fn issue_now(&self, repo: &str, number: u64) -> Result<IssueNow> {
         self.calls.lock().unwrap().push(format!("view {repo}#{number}"));
+        let key = (repo.to_string(), number);
+        let mut stale = self.stale_reads.lock().unwrap();
+        if *stale > 0
+            && let Some(before) = self.before_close.lock().unwrap().get(&key)
+        {
+            *stale -= 1;
+            return Ok(before.clone());
+        }
         self.issues
             .lock()
             .unwrap()
-            .get(&(repo.to_string(), number))
+            .get(&key)
             .cloned()
             .ok_or_else(|| Error::GitHub(format!("no issue {repo}#{number}")))
+    }
+
+    fn wait(&self, d: std::time::Duration) {
+        self.waits.lock().unwrap().push(d.as_millis() as u64);
     }
 
     fn close(&self, repo: &str, number: u64, reason: CloseReason, duplicate_of: Option<u64>, comment: Option<&str>) -> Result<()> {
@@ -100,6 +121,7 @@ impl IssueWriter for FakeGh {
         let now = self.now.lock().unwrap().clone();
         let mut issues = self.issues.lock().unwrap();
         let i = issues.get_mut(&(repo.to_string(), number)).unwrap();
+        self.before_close.lock().unwrap().insert((repo.to_string(), number), i.clone());
         if let Some(c) = comment {
             i.comments.push(CommentNow {
                 author: "yuvalrakavy".into(),
@@ -475,6 +497,41 @@ fn an_undo_after_the_close_reopens_the_issue() {
     assert_eq!(ack(&d, "D_undo")["result"], "applied");
     assert_eq!(ack(&d, "D_close")["result"], "cancelled");
     assert!(issue(&d, &x)["dashboard_close"].is_null());
+}
+
+#[test]
+fn a_read_that_lags_the_close_is_read_again_so_undo_still_reopens() {
+    let t = fixture_root();
+    let w = FakeGh::new();
+    let (x, alias) = tracked(&t, &w, STORE, "issue");
+    let c = close("D_close", &x, &alias, CloseReason::NotPlanned, None, NOT_PLANNED);
+    *w.stale_reads.lock().unwrap() = 2;
+    run(&t, &w, &pages(&[c.clone()]), 10).unwrap();
+    assert_eq!(*w.waits.lock().unwrap(), vec![1000, 2000]);
+    assert_eq!(write_events(&t, "D_close")[1].1["closed_at"], format_time(at(0)));
+    // The reopen's own precondition read lags too.
+    w.waits.lock().unwrap().clear();
+    *w.stale_reads.lock().unwrap() = 1;
+    let r = run(&t, &w, &pages(&[c, undo("D_undo", "D_close")]), 20).unwrap();
+    assert_eq!(*w.waits.lock().unwrap(), vec![1000]);
+    assert_eq!(w.get(&alias).state, "OPEN");
+    assert_eq!(ack(&doc(&r), "D_undo")["result"], "applied");
+}
+
+#[test]
+fn a_read_that_never_shows_the_close_leaves_its_time_unknown_after_the_last_pause() {
+    let t = fixture_root();
+    let w = FakeGh::new();
+    let (x, alias) = tracked(&t, &w, STORE, "issue");
+    // Closed once before and reopened: GitHub keeps that earlier closedAt on the open issue.
+    w.set(&alias, |i| i.closed_at = Some(format_time(at(-100))));
+    let c = close("D_close", &x, &alias, CloseReason::Completed, None, "");
+    *w.stale_reads.lock().unwrap() = 99;
+    run(&t, &w, &pages(&[c]), 10).unwrap();
+    assert_eq!(*w.waits.lock().unwrap(), vec![1000, 2000, 4000]);
+    let applied = &write_events(&t, "D_close")[1].1;
+    assert_eq!(applied["result"], "closed");
+    assert!(applied.get("closed_at").is_none_or(Value::is_null), "{applied}");
 }
 
 #[test]

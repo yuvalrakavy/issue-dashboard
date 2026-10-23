@@ -9,6 +9,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::process::{Command, Stdio};
+use std::time::Duration;
 
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
@@ -47,7 +48,15 @@ pub trait IssueWriter {
     /// Closes the issue, posting `comment` first when there is one.
     fn close(&self, repo: &str, number: u64, reason: CloseReason, duplicate_of: Option<u64>, comment: Option<&str>) -> Result<()>;
     fn reopen(&self, repo: &str, number: u64) -> Result<()>;
+    /// The pause between reads in [`READ_BACK_MS`].
+    fn wait(&self, d: Duration) {
+        std::thread::sleep(d);
+    }
 }
+
+/// The pauses before each read that follows a write: GitHub's read can lag its own write, so a
+/// read that does not show it yet is tried again, about 7 s in all.
+pub const READ_BACK_MS: [u64; 4] = [0, 1000, 2000, 4000];
 
 /// The real writes, through the `gh` CLI and its stored authentication.
 #[derive(Debug, Clone, Default)]
@@ -270,6 +279,22 @@ fn same_time(a: Option<&str>, b: Option<&str>) -> Result<bool> {
     })
 }
 
+/// Reads the issue until `settled` holds, pausing between reads ([`READ_BACK_MS`]). Returns the
+/// last read.
+fn read_back(writer: &dyn IssueWriter, repo: &str, number: u64, settled: impl Fn(&IssueNow) -> bool) -> Result<IssueNow> {
+    let mut last = Err(Error::GitHub("not read".into()));
+    for ms in READ_BACK_MS {
+        if ms > 0 {
+            writer.wait(Duration::from_millis(ms));
+        }
+        last = writer.issue_now(repo, number);
+        if matches!(&last, Ok(n) if settled(n)) {
+            break;
+        }
+    }
+    last
+}
+
 const SOMEONE_ELSES: &str =
     "the issue was already closed when the dashboard came to close it, so Undo would reopen someone else's close";
 
@@ -430,12 +455,13 @@ impl Step<'_, '_, '_> {
             return self.failed(Op::Close, "apply", &e.to_string());
         }
         self.session.failpoint(Failpoint::AfterWriteCall)?;
-        // The time it closed, for Undo; a failed read leaves it unknown.
-        let closed_at = self
-            .writer
-            .issue_now(&issue.repo, issue.number)
-            .ok()
-            .and_then(|n| n.closed_at);
+        // The time it closed, for Undo; a read that never shows the close leaves it unknown.
+        let closed_at = read_back(self.writer, &issue.repo, issue.number, |n| {
+            n.state == "CLOSED" && n.closed_at.is_some()
+        })
+        .ok()
+        .filter(|n| n.state == "CLOSED")
+        .and_then(|n| n.closed_at);
         self.applied(Op::Close, "closed", closed_at, reconciled)
     }
 
@@ -489,7 +515,10 @@ impl Step<'_, '_, '_> {
             close_intent.data["number"].as_u64().unwrap_or(0),
         );
         let own = close_intent.data["comment"].as_str().unwrap_or("").to_string();
-        let now = match self.writer.issue_now(&repo, number) {
+        // A refusal is final, so one seen on a read that may still lag the close is read again.
+        let now = match read_back(self.writer, &repo, number, |n| {
+            matches!(reopen_refusal(n, closed, &own), Ok(None))
+        }) {
             Ok(n) => n,
             Err(e) => {
                 self.note(Op::Reopen, "deferred", Some(e.to_string()));
