@@ -625,7 +625,11 @@ repeated in the level lists.
 - **A decision shows that it is pending.** Decisions are applied on the next tracker run
   (5.3), so an acted-on card collapses to "Decided · applied on the next run (in N min)" with
   **Undo**, until the run consumes it.
-- **Reject asks why**, with one-tap reasons fitting the suggestion (5.7) and "Other…".
+- **Buttons say what they do.** A suggestion's buttons name the outcome ("Set bug · p1",
+  "Label as todo", "Check and close…", "Close as duplicate…") and "Not this"; never a bare
+  Accept / Reject. A trailing `…` means the button leads to a further step instead of acting
+  at once. What each kind of suggestion does is fixed in 5.8.
+- **"Not this" asks why**, with one-tap reasons fitting the suggestion (5.7) and "Other…".
 - **Launch opens a sheet**, not an immediate action: the suggested model, effort and
   workspace (editable, with the reason they were suggested), "Preview brief", and Launch.
   After launch the row shows the launch state (`requested`, `queued`, `started`, `landed`).
@@ -634,7 +638,7 @@ repeated in the level lists.
   within a level (6.1), so they are not shown as a column beside the level.
 - **Phone width:** queue rows become cards with one action; nothing scrolls sideways;
   touch targets are at least 40 px high.
-- **Keyboard:** `j`/`k` move, `a` main action, `r` reject, `u` undo, `/` filter.
+- **Keyboard:** `j`/`k` move, `a` main action, `n` not this, `u` undo, `/` filter.
 - **States:** an empty inbox says "Nothing waiting on you"; a stale repo's rows carry
   "read HH:MM, stale"; a panel whose data is loading says so.
 - **Contrast:** every text colour meets WCAG 4.5:1 in both themes; priority levels are
@@ -738,6 +742,26 @@ three jobs:
   visible without running an evaluation;
 - **examples for the triage session**: recent corrections are included in its brief, so it
   stops repeating a mistake you have already corrected.
+
+### 5.8 What a suggestion's main action does
+
+A suggestion changes nothing until the owner acts. **"Not this"** never writes to GitHub: it
+records the reason (5.7), and the triage session does not repeat that suggestion for that
+issue unless its facts change (a new commit, comment or label). The main action depends on
+the kind:
+
+| Suggestion | Main action | What happens |
+|---|---|---|
+| type or area | "Label as todo", "Set area: vm" | the label is written on the next run (1.7 still applies: a forced dry run or the per-run cap can hold it as a plan) |
+| priority | "Set p1" | becomes this project's priority and is written back as the label under 1.5's rules (shared repos, read-only repos) |
+| likely fixed | "Check and close…" | starts a short check that the fix is present on the default branch; if it holds, a plan to close the issue with a comment naming the commit goes to the Inbox for approval |
+| duplicate | "Close as duplicate…" | a plan to close the issue as a duplicate, linking the other, goes to the Inbox for approval |
+| combined (type and priority together) | "Set bug · p1" | both, as the rows above |
+
+**The rule behind the table:** accepting a label change is approval enough to write it;
+anything that closes an issue or posts a comment is visible to others and harder to undo, so
+it comes back once more as a plan. "Apply all labels at or above a confidence" acts only on
+label and priority suggestions, never on closes.
 
 ---
 
