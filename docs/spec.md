@@ -387,6 +387,7 @@ appears with its details at once.
 | canonical type, areas, modifiers | translation (1.3), with untranslated labels listed per repo |
 | priority and its source | the three sources in order (1.5), plus every source's value for `explain` |
 | status | `untriaged` (an axis missing), `needs-decision`, `in-progress`, `blocked` (an open blocker), else `ready`; `umbrella` issues carry `umbrella` instead |
+| sessions working on it | the app's sessions matched to the item (7.2, 10.10 "Session tracking"): exact by launch or by pull request, probable by an issue reference in the title or branch; an item that would be `ready` or `blocked` is `in-progress` while one is matched |
 | age and idle time | from created and updated times |
 | time-limit breach | idle time against the project's limit for the issue's priority |
 | link graph | native relationships first, text links second, with the source of each edge recorded |
@@ -723,6 +724,11 @@ repeated in the level lists.
   the next sync" with Undo until the ack. Undo of a close already applied reopens the issue,
   offered only while it is still closed by that close and nobody has commented since; the
   Inbox lists the last 7 days' dashboard closes for that.
+- **A session working on an issue shows on it.** A card, a row and Details carry "In
+  progress" with each matched session: its title, running or idle, when it was last active,
+  and "probably" when the match is by an issue reference rather than exact (10.10). The
+  session's link is shown as copyable text beside a link to it, since a `claude://` link may
+  not open from inside the page. Sessions matching no item are not listed in phase 1.
 - **Rows show the level and idle time; the score is in `explain`.** Scores only compare
   within a level (6.1), so they are not shown as a column beside the level.
 - **Phone width:** queue rows become cards with one action; nothing scrolls sideways;
@@ -1015,9 +1021,15 @@ does not go through this seam.
 
 | Job | What it is | When |
 |---|---|---|
-| **Sync** | a scheduled Claude task on the smallest model: reads the page documents from the dashboard database, runs `issue-dashboard cycle` on them (10.4), then publishes the cycle's outbox as a new generation (10.6) | every `sync_interval` (default 5 min); this is the cycle that applies your decisions |
+| **Sync** | a scheduled Claude task on the smallest model: reads the page documents from the dashboard database and the app's session list, runs `issue-dashboard cycle` on them (10.4), then publishes the cycle's outbox as a new generation (10.6) | every `sync_interval` (default 5 min); this is the cycle that applies your decisions |
 | **Triage** | a Claude session: reads the snapshot, makes suggestions through the decision seam, checks claims against the code, groups defect classes and batches, and records all of it with `record-suggestions`; it applies nothing (10.4) | daily, and on demand from the dashboard |
 | **Dispatcher** | a long-lived Claude session watching each project's dashboard | always on while you want launches to work |
+
+**The session list.** The sync job is a Claude session, so it can read the app's session
+list (`list_sessions`, archived ones included) and hand it to the cycle as a file
+(`cycle --sessions <file>`, 10.10); the CLI never calls the app, so 10.1's rule holds. The
+file holds each session's id, title, working directory, branch, pull-request number, whether
+it runs, whether it is archived, when it was last active and its link; never a transcript.
 
 **Why a sync job exists.** The dashboard's database is reachable through Claude's artifact
 tools; no route from a plain program to it is known (**unverified**: it is the first probe
@@ -1272,6 +1284,7 @@ dashboard says it is not written to GitHub yet.
 | tracker documents (everything else in the database) | the sync job, carrying an outbox | the page | an outbox is written only if its sequence is newer than the published one (10.6) | the page shows the previous outbox |
 | sessions (fix, review, triage) | the dispatcher, through `start_session` | the dispatcher | a launch holds a reservation first (10.7) | the reservation stays held until the dispatcher reconciles it (10.7) |
 | comments in the launch thread | the page (requests) and the dispatcher (replies) | the dispatcher, you | replies carry the launch id | none; the thread is a notification channel, not state |
+| the app's session list | the app | the sync job (`list_sessions`), then the CLI (`cycle --sessions`) | a session whose content is unchanged records nothing (10.3) | nothing is recorded; the next cycle reads a newer list |
 | GitHub | **nobody, in phase 1**; the write engine, in phase 2 (10.9) | the snapshot | — | — |
 
 **The rule:** no ledger state changes except through a CLI command. The triage session and
@@ -1337,6 +1350,8 @@ stays unique per event and is what the backup and `rebuild` verify.
 | `launch` | launch id + transition (`requested`, `reserved`, `queued`, `started`, `ended`, `released`, `unconfirmed`, `withdrawn`, `orphan`, `orphan_settled`) + token (+ the session, for `started` and the orphan transitions) | 10.7; only the transitions in 10.7's table are legal, and a command refuses any other |
 | `outcome` | launch id | a session records its outcome |
 | `exported` | the export cursor's new value | 10.2 |
+| `session_seen` | session id + a hash of the observed fields (title, working directory, branch, pull-request number, running, the hour of the last activity) | a cycle's session list shows a session unarchived whose content differs from its latest `session_seen`, or which was gone since |
+| `session_gone` | session id + the `session_seen` it ends | a session seen before is archived, or is missing from a list that would have shown it (10.10) |
 
 Phase 2 adds the write events (10.9). The full field list per kind is the build's first
 artifact: JSON Schema files in `schemas/`, which the CLI, the sync job and the page validate
@@ -1754,6 +1769,31 @@ them rather than refusing.
   conditional close); a crash after `gh` posted the comment and before it closed is caught by
   the comment-text match, but a person posting the same text in that window would make it
   skip the comment. The per-run cap of 1.7 does not apply: each close is one explicit decision.
+- **Session tracking** (slice 3, owner-directed). `cycle --sessions <file>` takes
+  `{"listed_at", "limit", "sessions": [...]}`, the rows exactly as `list_sessions` returns them
+  (`sessionId`, `title`, `cwd`, `branch`, `prNumber`, `isRunning`, `isArchived`,
+  `lastActivityAt`, `link`; other fields are dropped, and a row that does not validate is
+  skipped with its reason). Ingest, in the cycle's first transaction: an unarchived row records
+  `session_seen` unless the session's latest session event is a `session_seen` with the same
+  content; an archived row, and a seen session missing from the list, record `session_gone`
+  when its latest session event is a `session_seen`. The list is sorted by last activity and
+  cut at `limit`, so a missing session is gone only when the list is complete (fewer rows than
+  `limit`) or its last seen activity is no older than the oldest listed row: a session that
+  only fell off the end stays as it was. The hash takes the last activity to the hour, so a
+  running session records at most about one event an hour, not one a sync. Matching is in
+  derive, so a change of config re-matches every session, and it is deterministic. A session's
+  **repo** is the project member whose `local_path` is its working directory or a parent of it
+  (a worktree under the checkout); the longest such path wins. **Exact:** the session is a
+  launch's (its id is the launch's `started` session, or its title holds the launch's token):
+  the launch's items; or its `prNumber` is a pull request of its repo in the project: that pull
+  request and the issues it closes. **Probable** (only when there is no exact match): the title
+  and branch name one item: `owner/repo#N` (a member repo), and against the session's repo
+  `#N`, `gh #N`, `issue N`, and `issue-N` or `gh-N` in a branch name; two different items, a
+  reference with no repo to resolve against, or a number not in the project match nothing.
+  Each issue document carries `sessions`: id, title, running, last active, link, and the match
+  (`exact` via `launch` or `pull_request`, `probable` via `title` or `branch`), newest first.
+  As built, the working directory is kept in the ledger for matching (the page never gets it);
+  the rest is the list above.
 - *Corrections from slice 3's gate (round 1).* A refused send's `not_sent` outranks the
   tracker's `requested` (every ingested launch is `requested`, heard or not); only a later
   transition supersedes it. Each launch thread gets its own thread record (`T_…`, written once;
@@ -1764,6 +1804,14 @@ them rather than refusing.
   no ack is settled, not pending: its ack has aged out. A generation announced while the page
   loads another is loaded after it. Page ids carry 8 random base-36 characters (there is no
   create-only write, so the randomness keeps two writes in one second apart).
+- *Corrections from slice 3's gate (round 2).* A close older than the ack window is refused,
+  not made: the page stopped showing it as pending. A crash's dangling close intent on an issue
+  still open is closed only if the decision still stands and its preconditions still hold (an
+  undo since, or a repo made read-only since, records the close refused). Of two closes of one
+  issue, the one that closed it stays the one shown, with its Undo, over a later one that found
+  it already closed. Left open (S1): a close by someone else inside the moment between the
+  fresh read and `gh issue close` is recorded as ours, as is a close inside a crash's gap; the
+  intent's time is the local clock, compared with GitHub's.
 - **Open (for the owner):** found by the gate and left for after landing: an upload abandoned
   for over an hour and resumed after a cleanup leaves documents no marker names, which no later
   cleanup finds; the page's own collections (`decisions`, `launches`, `views`) are read to
