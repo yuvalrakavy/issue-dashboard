@@ -21,6 +21,7 @@ pub mod ledger;
 pub mod lock;
 pub mod observe;
 pub mod outcome;
+pub mod publish;
 pub mod read;
 pub mod root;
 pub mod schema;

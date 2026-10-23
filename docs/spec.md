@@ -1681,6 +1681,28 @@ them rather than refusing.
   holds) and the effective `sync_interval_minutes` (default 5), which the page uses for
   "applied on the next run (in N min)". The page shows a body as plain text, never as HTML
   (4.2).
+- *The page database layout and publish (slice 3).* A program cannot write the artifact's
+  database (claims table), so the sync job is a skill (`skills/issue-dashboard-sync`) that
+  performs, with `ArtifactData`, what three CLI helpers plan, none of which needs a root:
+  `pages` (the four page collections, listed with `out_dir`, into the `--pages` file),
+  `publish-plan` and `cleanup-plan`. A generation is a marker `gens/gen-<seq>` (sequence,
+  project, `created_at`, per-collection `counts`), written in the first batch, then every
+  outbox document at `gens/gen-<seq>/<collection>/<id>`, in batches of at most 50 entries and
+  900 KiB of files; then the switch: `meta/active` set to the outbox's meta, pinned to the
+  version the skill read (unpinned on the first publish, which the database refuses if the
+  document exists). An outbox no newer than the active generation is a stop that writes
+  nothing; a marker for the outbox's own generation is refused (a name is never reused: a run
+  that failed after its first batch is abandoned, and the next cycle has a new sequence).
+  Probed on the page (2026-10-23): an unpinned write to an existing document is refused, an
+  `out_dir` file holds only the document (its version comes in the tool's reply), and a pinned
+  delete of a missing document fails its whole batch. So generation documents, created once
+  and never edited, are deleted pinned to version 1, and cleanup is planned from a listing of
+  what is there, which finishes a cleanup that stopped part way. Cleanup runs only after a
+  successful switch and keeps the new generation and the previous active one; it deletes a
+  generation older than the previous active one, or one whose marker is more than an hour old
+  (abandoned), each generation's documents before its marker. A younger generation newer than
+  the active one may be another run's and is kept. Access rule: everyone who can open the page
+  reads, only the owner writes (`[{path: "", read: "view", write: "owner"}]`).
 - **Open (for the owner):** "new" is approximated as open, with no comment by an inside author
   and no labels; a closed or merged pull request still gets a pull-request status (e.g.
   `needs-review`); `commits`, `rank` and `score` are empty; the `flow` and history snapshot files
