@@ -12,10 +12,10 @@ use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
+use crate::Result;
 use crate::docs::{Action, Decision, Priority};
 use crate::event::Kind;
 use crate::ledger::{self, Dedupe, Recorded, Tx};
-use crate::Result;
 
 /// The `data` of a `decided` event. Its schema is `schemas/event-decided.schema.json`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -33,7 +33,10 @@ pub struct DecidedData {
 /// the same document again is a no-op.
 pub fn ingest(tx: &mut Tx<'_>, project: &str, owner_id: &str, doc: &Decision) -> Result<Recorded> {
     let refusal = if doc.project != project {
-        Some(format!("decision {} belongs to project {}, not {project}", doc.id, doc.project))
+        Some(format!(
+            "decision {} belongs to project {}, not {project}",
+            doc.id, doc.project
+        ))
     } else if doc.author != owner_id {
         Some(format!("author {} is not the project's owner_id", doc.author))
     } else {
@@ -46,7 +49,13 @@ pub fn ingest(tx: &mut Tx<'_>, project: &str, owner_id: &str, doc: &Decision) ->
         refusal,
         document: doc.clone(),
     };
-    tx.record(Kind::Decided, &doc.id, json!({}), serde_json::to_value(data)?, Dedupe::Any)
+    tx.record(
+        Kind::Decided,
+        &doc.id,
+        json!({}),
+        serde_json::to_value(data)?,
+        Dedupe::Any,
+    )
 }
 
 /// What became of one ingested decision.
@@ -88,7 +97,10 @@ fn cancelled_by(id: &str, undos: &HashMap<String, Vec<String>>, visiting: &mut H
 
 fn resolve(decided: &[DecidedData]) -> Vec<(Decision, Status)> {
     let mut undos: HashMap<String, Vec<String>> = HashMap::new();
-    for d in decided.iter().filter(|d| d.accepted && d.document.action == Action::Undo) {
+    for d in decided
+        .iter()
+        .filter(|d| d.accepted && d.document.action == Action::Undo)
+    {
         if let Some(target) = &d.document.target.decision {
             undos.entry(target.clone()).or_default().push(d.document.id.clone());
         }
@@ -97,7 +109,9 @@ fn resolve(decided: &[DecidedData]) -> Vec<(Decision, Status)> {
         .iter()
         .map(|d| {
             let status = if !d.accepted {
-                Status::Refused { reason: d.refusal.clone().unwrap_or_default() }
+                Status::Refused {
+                    reason: d.refusal.clone().unwrap_or_default(),
+                }
             } else if let Some(by) = cancelled_by(&d.document.id, &undos, &mut HashSet::new()) {
                 Status::Cancelled { by }
             } else {
@@ -110,7 +124,10 @@ fn resolve(decided: &[DecidedData]) -> Vec<(Decision, Status)> {
 
 /// The status of every ingested decision of `project`, by decision id.
 pub fn statuses(conn: &Connection, project: &str) -> Result<BTreeMap<String, Status>> {
-    Ok(resolve(&decided(conn, project)?).into_iter().map(|(d, s)| (d.id, s)).collect())
+    Ok(resolve(&decided(conn, project)?)
+        .into_iter()
+        .map(|(d, s)| (d.id, s))
+        .collect())
 }
 
 /// The decisions of `project` that take effect, in sequence order: accepted, not cancelled,

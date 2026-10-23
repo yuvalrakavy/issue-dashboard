@@ -52,7 +52,10 @@ fn a_stale_observation_arriving_after_a_fresher_one_is_discarded() {
     let fresh = obs(&["bug", "p1"], t(10), t(12));
     let stale = obs(&["bug"], t(5), t(11));
     assert!(matches!(record(&r.root, &fresh), Observed::Recorded(_)));
-    assert!(matches!(record(&r.root, &stale), Observed::Stale { .. }), "the stale fetch was recorded");
+    assert!(
+        matches!(record(&r.root, &stale), Observed::Stale { .. }),
+        "the stale fetch was recorded"
+    );
     assert_eq!(recorded_labels(&r.root), [json!(["bug", "p1"])]);
 }
 
@@ -71,7 +74,10 @@ fn with_equal_update_times_the_earlier_read_is_the_stale_one() {
 fn a_change_that_does_not_move_updated_at_is_still_recorded() {
     let r = temp_root();
     record(&r.root, &obs(&["bug"], t(5), t(10)));
-    assert!(matches!(record(&r.root, &obs(&["bug", "renamed"], t(5), t(20))), Observed::Recorded(_)));
+    assert!(matches!(
+        record(&r.root, &obs(&["bug", "renamed"], t(5), t(20))),
+        Observed::Recorded(_)
+    ));
     assert_eq!(recorded_labels(&r.root).len(), 2);
 }
 
@@ -79,18 +85,33 @@ fn a_change_that_does_not_move_updated_at_is_still_recorded() {
 fn an_unchanged_observation_is_not_recorded_but_a_to_b_to_a_is() {
     let r = temp_root();
     record(&r.root, &obs(&["bug"], t(1), t(2)));
-    assert!(matches!(record(&r.root, &obs(&["bug"], t(1), t(3))), Observed::Unchanged(_)));
-    assert!(matches!(record(&r.root, &obs(&["bug", "p0"], t(4), t(5))), Observed::Recorded(_)));
+    assert!(matches!(
+        record(&r.root, &obs(&["bug"], t(1), t(3))),
+        Observed::Unchanged(_)
+    ));
+    assert!(matches!(
+        record(&r.root, &obs(&["bug", "p0"], t(4), t(5))),
+        Observed::Recorded(_)
+    ));
     // The label is removed again: the content returns to an earlier state.
-    assert!(matches!(record(&r.root, &obs(&["bug"], t(6), t(7))), Observed::Recorded(_)));
-    assert_eq!(recorded_labels(&r.root), [json!(["bug"]), json!(["bug", "p0"]), json!(["bug"])]);
+    assert!(matches!(
+        record(&r.root, &obs(&["bug"], t(6), t(7))),
+        Observed::Recorded(_)
+    ));
+    assert_eq!(
+        recorded_labels(&r.root),
+        [json!(["bug"]), json!(["bug", "p0"]), json!(["bug"])]
+    );
 }
 
 #[test]
 fn observed_events_validate_against_their_schema() {
     let r = temp_root();
     record(&r.root, &obs(&["bug"], t(1), t(2)));
-    let events = r.root.read(|l| ledger::events_by_kind(l.conn(), Kind::Observed)).unwrap();
+    let events = r
+        .root
+        .read(|l| ledger::events_by_kind(l.conn(), Kind::Observed))
+        .unwrap();
     assert_eq!(events.len(), 1);
     common::assert_valid("event-observed", &serde_json::to_value(&events[0]).unwrap());
 }
@@ -100,13 +121,18 @@ fn item_gone_is_recorded_once_per_confirming_read() {
     let r = temp_root();
     let gone = |read_id: &str| {
         r.root
-            .mutate(t(0), |tx| observe::item_gone(tx, ISSUE_A, "example-org/server#403", read_id, t(0)))
+            .mutate(t(0), |tx| {
+                observe::item_gone(tx, ISSUE_A, "example-org/server#403", read_id, t(0))
+            })
             .unwrap()
             .is_new()
     };
     assert!(gone("full-1"));
     assert!(!gone("full-1"));
     assert!(gone("full-2"));
-    let events = r.root.read(|l| ledger::events_by_kind(l.conn(), Kind::ItemGone)).unwrap();
+    let events = r
+        .root
+        .read(|l| ledger::events_by_kind(l.conn(), Kind::ItemGone))
+        .unwrap();
     common::assert_valid("event-item-gone", &serde_json::to_value(&events[0]).unwrap());
 }

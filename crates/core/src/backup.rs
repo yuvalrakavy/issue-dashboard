@@ -32,7 +32,10 @@ pub struct Line {
 
 impl Line {
     pub fn of(event: &Event) -> Line {
-        Line { checksum: checksum(event), event: event.clone() }
+        Line {
+            checksum: checksum(event),
+            event: event.clone(),
+        }
     }
 
     /// The line's text, without the trailing newline.
@@ -43,7 +46,9 @@ impl Line {
 
 /// sha256 of the event's canonical JSON.
 pub fn checksum(event: &Event) -> String {
-    sha256_hex(&canonical_json(&serde_json::to_value(event).expect("an event serialises")))
+    sha256_hex(&canonical_json(
+        &serde_json::to_value(event).expect("an event serialises"),
+    ))
 }
 
 /// Parses and verifies one line: its checksum, and the event's identity.
@@ -205,7 +210,11 @@ impl Backup {
         if report.cut_lines > 0 && remaining > 0 {
             let last = lines[remaining - 1];
             if let Err(reason) = parse_line(last) {
-                return Err(Error::CorruptBackup { file: path, line: remaining, reason });
+                return Err(Error::CorruptBackup {
+                    file: path,
+                    line: remaining,
+                    reason,
+                });
             }
         }
         if keep < bytes.len() {
@@ -223,9 +232,11 @@ impl Backup {
             let bytes = fs::read(path)?;
             let (lines, _) = split_lines(&bytes);
             if let Some(last) = lines.last() {
-                return parse_line(last)
-                    .map(Some)
-                    .map_err(|reason| Error::CorruptBackup { file: path.clone(), line: lines.len(), reason });
+                return parse_line(last).map(Some).map_err(|reason| Error::CorruptBackup {
+                    file: path.clone(),
+                    line: lines.len(),
+                    reason,
+                });
             }
         }
         Ok(None)
@@ -240,7 +251,10 @@ impl Backup {
         now: &str,
         failpoint: &mut dyn FnMut(Failpoint) -> Result<()>,
     ) -> Result<ExportReport> {
-        let mut report = ExportReport { repair: self.repair_tail()?, ..ExportReport::default() };
+        let mut report = ExportReport {
+            repair: self.repair_tail()?,
+            ..ExportReport::default()
+        };
 
         let mut last = self.last_event()?;
         if let Some(in_file) = &last
@@ -266,7 +280,13 @@ impl Backup {
         )?;
         if unmarked > 0 {
             let mut tx = ledger.begin(now)?;
-            tx.record(Kind::Exported, "ledger", json!({"cursor": new_cursor}), json!({"cursor": new_cursor}), Dedupe::Latest)?;
+            tx.record(
+                Kind::Exported,
+                "ledger",
+                json!({"cursor": new_cursor}),
+                json!({"cursor": new_cursor}),
+                Dedupe::Latest,
+            )?;
             tx.commit()?;
             report.cursor = Some(new_cursor);
         }
@@ -316,7 +336,10 @@ impl Backup {
 
     /// Moves every month file into a new `diverged-<time>` directory.
     fn move_aside(&self, now: &str) -> Result<PathBuf> {
-        let stamp: String = now.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).collect();
+        let stamp: String = now
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+            .collect();
         let mut dir = self.dir.join(format!("diverged-{stamp}"));
         let mut n = 1;
         while dir.exists() {
@@ -346,7 +369,11 @@ impl Backup {
             let last_file = fi + 1 == files.len();
             for (li, line) in lines.iter().enumerate() {
                 let final_line = last_file && li + 1 == lines.len();
-                let corrupt = |reason: String| Error::CorruptBackup { file: path.clone(), line: li + 1, reason };
+                let corrupt = |reason: String| Error::CorruptBackup {
+                    file: path.clone(),
+                    line: li + 1,
+                    reason,
+                };
                 let event = match parse_line(line) {
                     Ok(e) => e,
                     Err(_) if final_line => {
@@ -358,12 +385,19 @@ impl Backup {
                 };
                 let expected = events.last().map_or(1, |e| e.seq + 1);
                 if event.seq != expected {
-                    return Err(corrupt(format!("expected sequence number {expected}, found {}", event.seq)));
+                    return Err(corrupt(format!(
+                        "expected sequence number {expected}, found {}",
+                        event.seq
+                    )));
                 }
                 let key = (event.subject.clone(), event.kind);
                 let pred = last_of.get(&key).copied().unwrap_or(0);
                 if event.pred != pred {
-                    return Err(corrupt(format!("predecessor is {}, but the subject's previous {} event is {pred}", event.pred, event.kind.as_str())));
+                    return Err(corrupt(format!(
+                        "predecessor is {}, but the subject's previous {} event is {pred}",
+                        event.pred,
+                        event.kind.as_str()
+                    )));
                 }
                 last_of.insert(key, event.seq);
                 events.push(event);

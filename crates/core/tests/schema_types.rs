@@ -21,8 +21,8 @@ use serde_json::Value;
 
 /// Deserialises `value` into `T` and checks it serialises back to the same JSON.
 fn round_trip<T: DeserializeOwned + Serialize>(what: &str, value: &Value) {
-    let typed: T = serde_json::from_value(value.clone())
-        .unwrap_or_else(|e| panic!("{what} does not deserialise: {e}\n{value:#}"));
+    let typed: T =
+        serde_json::from_value(value.clone()).unwrap_or_else(|e| panic!("{what} does not deserialise: {e}\n{value:#}"));
     let back = serde_json::to_value(&typed).unwrap();
     assert_eq!(&back, value, "{what} does not round-trip");
 }
@@ -42,7 +42,10 @@ fn config_examples_parse_into_the_config_types() {
 
 #[test]
 fn bad_config_examples_with_unknown_keys_are_refused_by_the_types_too() {
-    for (stem, file) in [("config-registry", "bad-unknown-key.toml"), ("config-repo-file", "bad-unknown-key.toml")] {
+    for (stem, file) in [
+        ("config-registry", "bad-unknown-key.toml"),
+        ("config-repo-file", "bad-unknown-key.toml"),
+    ] {
         let path = common::schemas_dir().join("examples").join(stem).join(file);
         let text = std::fs::read_to_string(&path).unwrap();
         let refused = if stem == "config-registry" {

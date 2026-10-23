@@ -13,7 +13,11 @@ pub enum Error {
 
     /// The root lock was not free within the wait (10.4).
     #[error("the root lock {} is held by {}; gave up after {}s", .path.display(), .holder.as_deref().unwrap_or("an unknown holder"), .waited.as_secs())]
-    LockTimeout { path: PathBuf, holder: Option<String>, waited: Duration },
+    LockTimeout {
+        path: PathBuf,
+        holder: Option<String>,
+        waited: Duration,
+    },
 
     /// A line of the JSON Lines backup that is not a torn final line failed to parse or
     /// verify (10.2).

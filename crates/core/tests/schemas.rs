@@ -21,8 +21,7 @@ fn load_schemas() -> BTreeMap<String, Value> {
         let name = path.file_name().unwrap().to_string_lossy().into_owned();
         if let Some(stem) = name.strip_suffix(".schema.json") {
             let text = fs::read_to_string(&path).unwrap();
-            let value: Value = serde_json::from_str(&text)
-                .unwrap_or_else(|e| panic!("{name} is not JSON: {e}"));
+            let value: Value = serde_json::from_str(&text).unwrap_or_else(|e| panic!("{name} is not JSON: {e}"));
             out.insert(stem.to_string(), value);
         }
     }
@@ -32,11 +31,10 @@ fn load_schemas() -> BTreeMap<String, Value> {
 fn load_example(path: &Path) -> Value {
     let text = fs::read_to_string(path).unwrap();
     match path.extension().and_then(|e| e.to_str()) {
-        Some("json") => serde_json::from_str(&text)
-            .unwrap_or_else(|e| panic!("{} is not JSON: {e}", path.display())),
+        Some("json") => serde_json::from_str(&text).unwrap_or_else(|e| panic!("{} is not JSON: {e}", path.display())),
         Some("toml") => {
-            let table: toml::Table = toml::from_str(&text)
-                .unwrap_or_else(|e| panic!("{} is not TOML: {e}", path.display()));
+            let table: toml::Table =
+                toml::from_str(&text).unwrap_or_else(|e| panic!("{} is not TOML: {e}", path.display()));
             serde_json::to_value(table).unwrap()
         }
         other => panic!("{}: unexpected example extension {other:?}", path.display()),
@@ -46,15 +44,22 @@ fn load_example(path: &Path) -> Value {
 #[test]
 fn every_schema_is_a_valid_draft_2020_12_schema_with_its_id() {
     let schemas = load_schemas();
-    assert!(schemas.len() >= 27, "expected every schema of the phase-1 surface, found {}", schemas.len());
+    assert!(
+        schemas.len() >= 27,
+        "expected every schema of the phase-1 surface, found {}",
+        schemas.len()
+    );
     for (stem, schema) in &schemas {
         assert_eq!(
             schema["$schema"], "https://json-schema.org/draft/2020-12/schema",
             "{stem}: wrong $schema"
         );
-        assert_eq!(schema["$id"], format!("{ID_BASE}{stem}.schema.json"), "{stem}: wrong $id");
-        jsonschema::meta::validate(schema)
-            .unwrap_or_else(|e| panic!("{stem} is not a valid schema: {e}"));
+        assert_eq!(
+            schema["$id"],
+            format!("{ID_BASE}{stem}.schema.json"),
+            "{stem}: wrong $id"
+        );
+        jsonschema::meta::validate(schema).unwrap_or_else(|e| panic!("{stem} is not a valid schema: {e}"));
     }
 }
 
@@ -77,7 +82,10 @@ fn every_example_validates_and_every_bad_example_is_refused() {
             let instance = load_example(&path);
             let errors: Vec<String> = validator.iter_errors(&instance).map(|e| e.to_string()).collect();
             if name.starts_with("bad-") {
-                assert!(!errors.is_empty(), "{stem}/{name} was meant to be refused but validates");
+                assert!(
+                    !errors.is_empty(),
+                    "{stem}/{name} was meant to be refused but validates"
+                );
                 // Shown with --no-capture, to check each bad example fails for its own reason.
                 eprintln!("{stem}/{name}: {}", errors.join(" | "));
                 bad_here += 1;
@@ -87,7 +95,10 @@ fn every_example_validates_and_every_bad_example_is_refused() {
             }
         }
         assert!(good_here >= 1, "{stem} has no valid example");
-        assert!(bad_here >= 1, "{stem} has no bad example, so nothing shows it refuses anything");
+        assert!(
+            bad_here >= 1,
+            "{stem} has no bad example, so nothing shows it refuses anything"
+        );
         good += good_here;
         bad += bad_here;
     }

@@ -8,11 +8,11 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+use crate::Result;
 use crate::canonical::hash_value;
 use crate::event::Kind;
 use crate::ledger::{self, Dedupe, Recorded, Tx};
 use crate::root::{format_time, parse_time};
-use crate::Result;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -56,7 +56,9 @@ pub enum Observed {
     /// The content equals the item's latest observation.
     Unchanged(i64),
     /// Older than the item's latest observation; not recorded.
-    Stale { latest_seq: i64 },
+    Stale {
+        latest_seq: i64,
+    },
 }
 
 /// Records an observation under the rules above.

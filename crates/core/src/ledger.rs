@@ -87,7 +87,10 @@ impl Ledger {
         conn.busy_timeout(Duration::from_secs(5))?;
         let mode: String = conn.query_row("PRAGMA journal_mode = WAL", [], |r| r.get(0))?;
         if !mode.eq_ignore_ascii_case("wal") {
-            return Err(Error::refused(format!("{} could not be put in WAL mode ({mode})", path.display())));
+            return Err(Error::refused(format!(
+                "{} could not be put in WAL mode ({mode})",
+                path.display()
+            )));
         }
         // FULL: a committed transaction survives a power loss, not only a process crash.
         conn.execute_batch("PRAGMA synchronous = FULL;")?;
@@ -98,7 +101,10 @@ impl Ledger {
     /// Starts a write transaction; events recorded through it carry `now` as their time.
     pub fn begin(&mut self, now: &str) -> Result<Tx<'_>> {
         let tx = self.conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        Ok(Tx { tx, now: now.to_string() })
+        Ok(Tx {
+            tx,
+            now: now.to_string(),
+        })
     }
 
     pub fn conn(&self) -> &Connection {
@@ -140,7 +146,10 @@ impl<'a> Tx<'a> {
                 }
             }
             Dedupe::Any => {
-                if let Some(e) = events_of(&self.tx, subject, kind)?.into_iter().find(|e| e.distinct == distinct) {
+                if let Some(e) = events_of(&self.tx, subject, kind)?
+                    .into_iter()
+                    .find(|e| e.distinct == distinct)
+                {
                     return Ok(Recorded::Repeat(e));
                 }
             }
@@ -187,7 +196,16 @@ impl<'a> Tx<'a> {
 type RawRow = (i64, String, String, String, i64, String, String, String);
 
 fn from_row(row: &Row<'_>) -> rusqlite::Result<RawRow> {
-    Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?, row.get(7)?))
+    Ok((
+        row.get(0)?,
+        row.get(1)?,
+        row.get(2)?,
+        row.get(3)?,
+        row.get(4)?,
+        row.get(5)?,
+        row.get(6)?,
+        row.get(7)?,
+    ))
 }
 
 fn to_event(raw: RawRow) -> Result<Event> {
@@ -221,7 +239,11 @@ fn query_one(conn: &Connection, sql: &str, args: impl rusqlite::Params) -> Resul
 }
 
 fn by_identity(conn: &Connection, identity: &str) -> Result<Option<Event>> {
-    query_one(conn, &format!("SELECT {COLUMNS} FROM events WHERE identity = ?1"), [identity])
+    query_one(
+        conn,
+        &format!("SELECT {COLUMNS} FROM events WHERE identity = ?1"),
+        [identity],
+    )
 }
 
 /// The subject's latest event of `kind`.
@@ -244,12 +266,20 @@ pub fn events_of(conn: &Connection, subject: &str, kind: Kind) -> Result<Vec<Eve
 
 /// Every event of `kind`, in sequence order.
 pub fn events_by_kind(conn: &Connection, kind: Kind) -> Result<Vec<Event>> {
-    query(conn, &format!("SELECT {COLUMNS} FROM events WHERE kind = ?1 ORDER BY seq"), [kind.as_str()])
+    query(
+        conn,
+        &format!("SELECT {COLUMNS} FROM events WHERE kind = ?1 ORDER BY seq"),
+        [kind.as_str()],
+    )
 }
 
 /// Every event with a sequence number above `after`, in order.
 pub fn events_after(conn: &Connection, after: i64) -> Result<Vec<Event>> {
-    query(conn, &format!("SELECT {COLUMNS} FROM events WHERE seq > ?1 ORDER BY seq"), [after])
+    query(
+        conn,
+        &format!("SELECT {COLUMNS} FROM events WHERE seq > ?1 ORDER BY seq"),
+        [after],
+    )
 }
 
 /// The event with this sequence number.

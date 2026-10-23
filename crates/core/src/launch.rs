@@ -178,18 +178,31 @@ pub struct Launch {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "result", rename_all = "snake_case")]
 pub enum Reservation {
-    Reserved { launch: String, token: String, repeat: bool },
-    Queued { launch: String, repeat: bool },
+    Reserved {
+        launch: String,
+        token: String,
+        repeat: bool,
+    },
+    Queued {
+        launch: String,
+        repeat: bool,
+    },
 }
 
 /// What [`started`] decided.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "result", rename_all = "snake_case")]
 pub enum StartResult {
-    Started { launch: String, repeat: bool },
+    Started {
+        launch: String,
+        repeat: bool,
+    },
     /// The token was released, or another session already started under it; the reporting
     /// session is recorded alongside the launch as possible duplicate work.
-    Orphan { launch: String, repeat: bool },
+    Orphan {
+        launch: String,
+        repeat: bool,
+    },
 }
 
 /// The result of a command that moves a launch along, or repeats a move already made.
@@ -201,7 +214,11 @@ pub struct Moved {
 }
 
 fn moved(l: &Launch, state: State, repeat: bool) -> Moved {
-    Moved { launch: l.id.clone(), state, repeat }
+    Moved {
+        launch: l.id.clone(),
+        state,
+        repeat,
+    }
 }
 
 fn record(tx: &mut Tx<'_>, launch_id: &str, data: LaunchData) -> Result<Event> {
@@ -210,7 +227,10 @@ fn record(tx: &mut Tx<'_>, launch_id: &str, data: LaunchData) -> Result<Event> {
         distinct["session"] = json!(s);
     }
     let value = serde_json::to_value(&data)?;
-    Ok(tx.record(Kind::Launch, launch_id, distinct, value, Dedupe::IdentityOnly)?.event().clone())
+    Ok(tx
+        .record(Kind::Launch, launch_id, distinct, value, Dedupe::IdentityOnly)?
+        .event()
+        .clone())
 }
 
 fn fold(id: &str, events: &[Event]) -> Result<Option<Launch>> {
@@ -220,7 +240,12 @@ fn fold(id: &str, events: &[Event]) -> Result<Option<Launch>> {
     let first_data: LaunchData = serde_json::from_value(first.data.clone())?;
     let request = match (first_data.transition, first_data.request) {
         (Transition::Requested, Some(r)) => r,
-        _ => return Err(Error::refused(format!("launch {id}: its first event (seq {}) is not a request", first.seq))),
+        _ => {
+            return Err(Error::refused(format!(
+                "launch {id}: its first event (seq {}) is not a request",
+                first.seq
+            )));
+        }
     };
     let mut l = Launch {
         id: id.to_string(),
@@ -265,9 +290,9 @@ fn fold(id: &str, events: &[Event]) -> Result<Option<Launch>> {
                 session: d.session.unwrap_or_default(),
                 reported_at: e.time.clone(),
             }),
-            Transition::OrphanSettled => {
-                l.orphans.retain(|o| Some(&o.token) != d.token.as_ref() || Some(&o.session) != d.session.as_ref())
-            }
+            Transition::OrphanSettled => l
+                .orphans
+                .retain(|o| Some(&o.token) != d.token.as_ref() || Some(&o.session) != d.session.as_ref()),
         }
         l.last_seq = e.seq;
     }
@@ -308,7 +333,13 @@ fn by_token(conn: &Connection, token: &str) -> Result<Launch> {
             |r| r.get(0),
         )
         .map(Some)
-        .or_else(|e| if e == rusqlite::Error::QueryReturnedNoRows { Ok(None) } else { Err(e) })?;
+        .or_else(|e| {
+            if e == rusqlite::Error::QueryReturnedNoRows {
+                Ok(None)
+            } else {
+                Err(e)
+            }
+        })?;
     let id = id.ok_or_else(|| Error::refused(format!("no reservation has token {token}")))?;
     load(conn, &id)?.ok_or_else(|| Error::refused(format!("launch {id} has no request")))
 }
@@ -349,14 +380,22 @@ pub fn request(tx: &mut Tx<'_>, doc: &LaunchRequest, via: Via) -> Result<Moved> 
     data.project = Some(doc.project.clone());
     data.via = Some(via);
     record(tx, &doc.id, data)?;
-    Ok(Moved { launch: doc.id.clone(), state: State::Requested, repeat: false })
+    Ok(Moved {
+        launch: doc.id.clone(),
+        state: State::Requested,
+        repeat: false,
+    })
 }
 
 /// An item of `l` held by another launch, with that launch.
 fn held_item<'a>(l: &'a Launch, all: &'a [Launch]) -> Option<(&'a str, &'a Launch)> {
-    all.iter()
-        .filter(|o| o.id != l.id && o.state.holds())
-        .find_map(|o| l.request.items.iter().find(|i| o.request.items.contains(i)).map(|i| (i.as_str(), o)))
+    all.iter().filter(|o| o.id != l.id && o.state.holds()).find_map(|o| {
+        l.request
+            .items
+            .iter()
+            .find(|i| o.request.items.contains(i))
+            .map(|i| (i.as_str(), o))
+    })
 }
 
 /// `reserve` (10.7): in one transaction across every project, checks that no launch holding
@@ -370,7 +409,9 @@ pub fn reserve(
     capacity: &dyn Fn(&str) -> Result<u32>,
 ) -> Result<Reservation> {
     let l = load(tx.conn(), launch_id)?.ok_or_else(|| {
-        Error::refused(format!("no launch {launch_id}; reserve --request <file> records its document first"))
+        Error::refused(format!(
+            "no launch {launch_id}; reserve --request <file> records its document first"
+        ))
     })?;
     match l.state {
         State::Requested | State::Queued => {}
@@ -383,7 +424,10 @@ pub fn reserve(
             });
         }
         State::Ended | State::Released | State::Withdrawn => {
-            return Err(Error::refused(format!("launch {launch_id} is {}; it cannot be reserved", l.state)));
+            return Err(Error::refused(format!(
+                "launch {launch_id} is {}; it cannot be reserved",
+                l.state
+            )));
         }
     }
     let all = all(tx.conn())?;
@@ -414,7 +458,11 @@ fn try_reserve(
     let cap = capacity(recipe)? as usize;
     let same_pool = || all.iter().filter(|o| &o.request.recipe == recipe && o.id != l.id);
     let held = same_pool().filter(|o| o.state.holds()).count()
-        + all.iter().filter(|o| &o.request.recipe == recipe).map(|o| o.orphans.len()).sum::<usize>();
+        + all
+            .iter()
+            .filter(|o| &o.request.recipe == recipe)
+            .map(|o| o.orphans.len())
+            .sum::<usize>();
     // Queued launches that come before this one and could take a slot now.
     let ahead = same_pool()
         .filter(|o| o.state == State::Queued && held_item(o, all).is_none())
@@ -425,14 +473,30 @@ fn try_reserve(
         .count();
     if held + ahead >= cap {
         if l.state == State::Queued {
-            return Ok(Reservation::Queued { launch: l.id.clone(), repeat: true });
+            return Ok(Reservation::Queued {
+                launch: l.id.clone(),
+                repeat: true,
+            });
         }
         record(tx, &l.id, LaunchData::new(Transition::Queued).dispatcher(dispatcher))?;
-        return Ok(Reservation::Queued { launch: l.id.clone(), repeat: false });
+        return Ok(Reservation::Queued {
+            launch: l.id.clone(),
+            repeat: false,
+        });
     }
     let token = new_token();
-    record(tx, &l.id, LaunchData::new(Transition::Reserved).token(&token).dispatcher(dispatcher))?;
-    Ok(Reservation::Reserved { launch: l.id.clone(), token, repeat: false })
+    record(
+        tx,
+        &l.id,
+        LaunchData::new(Transition::Reserved)
+            .token(&token)
+            .dispatcher(dispatcher),
+    )?;
+    Ok(Reservation::Reserved {
+        launch: l.id.clone(),
+        token,
+        repeat: false,
+    })
 }
 
 /// Reserves the oldest queued launch that can take a slot now, if any.
@@ -460,23 +524,44 @@ pub fn reserve_next(
 pub fn started(tx: &mut Tx<'_>, token: &str, session: &str) -> Result<StartResult> {
     let l = by_token(tx.conn(), token)?;
     if l.session.as_deref() == Some(session) {
-        return Ok(StartResult::Started { launch: l.id, repeat: true });
+        return Ok(StartResult::Started {
+            launch: l.id,
+            repeat: true,
+        });
     }
     match l.state {
         State::Reserved | State::Unconfirmed => {
-            record(tx, &l.id, LaunchData::new(Transition::Started).token(token).session(session))?;
-            Ok(StartResult::Started { launch: l.id, repeat: false })
+            record(
+                tx,
+                &l.id,
+                LaunchData::new(Transition::Started).token(token).session(session),
+            )?;
+            Ok(StartResult::Started {
+                launch: l.id,
+                repeat: false,
+            })
         }
         State::Started | State::Ended | State::Released => {
             if l.orphans.iter().any(|o| o.token == token && o.session == session) {
-                return Ok(StartResult::Orphan { launch: l.id, repeat: true });
+                return Ok(StartResult::Orphan {
+                    launch: l.id,
+                    repeat: true,
+                });
             }
-            record(tx, &l.id, LaunchData::new(Transition::Orphan).token(token).session(session))?;
-            Ok(StartResult::Orphan { launch: l.id, repeat: false })
+            record(
+                tx,
+                &l.id,
+                LaunchData::new(Transition::Orphan).token(token).session(session),
+            )?;
+            Ok(StartResult::Orphan {
+                launch: l.id,
+                repeat: false,
+            })
         }
-        State::Requested | State::Queued | State::Withdrawn => {
-            Err(Error::refused(format!("launch {} is {}; it has no live token", l.id, l.state)))
-        }
+        State::Requested | State::Queued | State::Withdrawn => Err(Error::refused(format!(
+            "launch {} is {}; it has no live token",
+            l.id, l.state
+        ))),
     }
 }
 
@@ -486,14 +571,23 @@ pub fn unconfirm(tx: &mut Tx<'_>, token: &str, dispatcher: &str) -> Result<Moved
     match l.state {
         State::Reserved => {
             check_owner(&l, dispatcher)?;
-            record(tx, &l.id, LaunchData::new(Transition::Unconfirmed).token(token).dispatcher(dispatcher))?;
+            record(
+                tx,
+                &l.id,
+                LaunchData::new(Transition::Unconfirmed)
+                    .token(token)
+                    .dispatcher(dispatcher),
+            )?;
             Ok(moved(&l, State::Unconfirmed, false))
         }
         State::Unconfirmed => {
             check_owner(&l, dispatcher)?;
             Ok(moved(&l, State::Unconfirmed, true))
         }
-        other => Err(Error::refused(format!("launch {} is {other}; only a reserved launch becomes unconfirmed", l.id))),
+        other => Err(Error::refused(format!(
+            "launch {} is {other}; only a reserved launch becomes unconfirmed",
+            l.id
+        ))),
     }
 }
 
@@ -514,7 +608,10 @@ pub fn ended(tx: &mut Tx<'_>, token: &str, end_state: EndState) -> Result<Moved>
             l.id,
             serde_json::to_value(recorded)?.as_str().unwrap_or_default()
         ))),
-        (other, _) => Err(Error::refused(format!("launch {} is {other}; only a started launch can end", l.id))),
+        (other, _) => Err(Error::refused(format!(
+            "launch {} is {other}; only a started launch can end",
+            l.id
+        ))),
     }
 }
 
@@ -534,7 +631,13 @@ pub fn release(tx: &mut Tx<'_>, token: &str, dispatcher: &str) -> Result<Moved> 
                     age.num_seconds()
                 )));
             }
-            record(tx, &l.id, LaunchData::new(Transition::Released).token(token).dispatcher(dispatcher))?;
+            record(
+                tx,
+                &l.id,
+                LaunchData::new(Transition::Released)
+                    .token(token)
+                    .dispatcher(dispatcher),
+            )?;
             Ok(moved(&l, State::Released, false))
         }
         State::Released => Ok(moved(&l, State::Released, true)),
@@ -556,7 +659,9 @@ pub fn withdraw(tx: &mut Tx<'_>, launch_id: &str, decision: &str) -> Result<Move
             Ok(moved(&l, State::Withdrawn, false))
         }
         State::Withdrawn => Ok(moved(&l, State::Withdrawn, true)),
-        other => Err(Error::refused(format!("launch {launch_id} is {other}; only a requested or queued launch can be withdrawn"))),
+        other => Err(Error::refused(format!(
+            "launch {launch_id} is {other}; only a requested or queued launch can be withdrawn"
+        ))),
     }
 }
 
@@ -564,8 +669,15 @@ pub fn withdraw(tx: &mut Tx<'_>, launch_id: &str, decision: &str) -> Result<Move
 pub fn settle_orphan(tx: &mut Tx<'_>, token: &str, session: &str) -> Result<Moved> {
     let l = by_token(tx.conn(), token)?;
     if !l.orphans.iter().any(|o| o.token == token && o.session == session) {
-        return Err(Error::refused(format!("launch {} has no unsettled orphan for session {session}", l.id)));
+        return Err(Error::refused(format!(
+            "launch {} has no unsettled orphan for session {session}",
+            l.id
+        )));
     }
-    record(tx, &l.id, LaunchData::new(Transition::OrphanSettled).token(token).session(session))?;
+    record(
+        tx,
+        &l.id,
+        LaunchData::new(Transition::OrphanSettled).token(token).session(session),
+    )?;
     Ok(moved(&l, l.state, false))
 }

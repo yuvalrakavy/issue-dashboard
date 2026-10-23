@@ -4,9 +4,9 @@
 mod common;
 
 use common::{ISSUE_A, ISSUE_B, ISSUE_C, launch_doc, t, temp_root};
+use issue_dashboard_core::event::Kind;
 use issue_dashboard_core::launch::{self, EndState, Reservation, StartResult, State, Via};
 use issue_dashboard_core::ledger::{self, Tx};
-use issue_dashboard_core::event::Kind;
 use issue_dashboard_core::{Error, Result, Root};
 
 const D1: &str = "local_dispatcher_1";
@@ -25,7 +25,10 @@ fn at<T>(root: &Root, minutes: i64, f: impl FnOnce(&mut Tx<'_>) -> Result<T>) ->
 }
 
 fn request(root: &Root, id: &str, items: &[&str], recipe: &str) {
-    at(root, 0, |tx| launch::request(tx, &launch_doc(id, "home", items, recipe), Via::Ingest)).unwrap();
+    at(root, 0, |tx| {
+        launch::request(tx, &launch_doc(id, "home", items, recipe), Via::Ingest)
+    })
+    .unwrap();
 }
 
 fn reserve(root: &Root, id: &str, dispatcher: &str) -> Result<Reservation> {
@@ -44,7 +47,9 @@ fn state(root: &Root, id: &str) -> State {
 }
 
 fn launch_events(root: &Root, id: &str) -> usize {
-    root.read(|l| ledger::events_of(l.conn(), id, Kind::Launch)).unwrap().len()
+    root.read(|l| ledger::events_of(l.conn(), id, Kind::Launch))
+        .unwrap()
+        .len()
 }
 
 fn refused<T: std::fmt::Debug>(r: Result<T>) -> String {
@@ -74,7 +79,13 @@ fn the_happy_path_requested_reserved_started_ended_released() {
     assert!(token.starts_with("res-") && token.len() == 36, "{token}");
     assert_eq!(state(&r.root, "L1"), State::Reserved);
     let s = at(&r.root, 2, |tx| launch::started(tx, &token, "S1")).unwrap();
-    assert_eq!(s, StartResult::Started { launch: "L1".into(), repeat: false });
+    assert_eq!(
+        s,
+        StartResult::Started {
+            launch: "L1".into(),
+            repeat: false
+        }
+    );
     let m = at(&r.root, 3, |tx| launch::ended(tx, &token, EndState::Landed)).unwrap();
     assert_eq!(m.state, State::Released);
     let l = r.root.read(|l| launch::load(l.conn(), "L1")).unwrap().unwrap();
@@ -90,12 +101,24 @@ fn a_retried_launch_started_is_a_no_op_returning_the_recorded_result() {
     let token = started(&r.root, "L1", &[ISSUE_A]);
     let before = launch_events(&r.root, "L1");
     let again = at(&r.root, 3, |tx| launch::started(tx, &token, "S1")).unwrap();
-    assert_eq!(again, StartResult::Started { launch: "L1".into(), repeat: true });
+    assert_eq!(
+        again,
+        StartResult::Started {
+            launch: "L1".into(),
+            repeat: true
+        }
+    );
     assert_eq!(launch_events(&r.root, "L1"), before);
     // Even after the launch ended, the same session retrying is not an orphan.
     at(&r.root, 4, |tx| launch::ended(tx, &token, EndState::Stopped)).unwrap();
     let late = at(&r.root, 5, |tx| launch::started(tx, &token, "S1")).unwrap();
-    assert_eq!(late, StartResult::Started { launch: "L1".into(), repeat: true });
+    assert_eq!(
+        late,
+        StartResult::Started {
+            launch: "L1".into(),
+            repeat: true
+        }
+    );
     let l = r.root.read(|l| launch::load(l.conn(), "L1")).unwrap().unwrap();
     assert!(l.orphans.is_empty());
 }
@@ -105,7 +128,13 @@ fn a_different_session_for_a_started_token_is_an_orphan_alongside_the_launch() {
     let r = temp_root();
     let token = started(&r.root, "L1", &[ISSUE_A]);
     let o = at(&r.root, 3, |tx| launch::started(tx, &token, "S2")).unwrap();
-    assert_eq!(o, StartResult::Orphan { launch: "L1".into(), repeat: false });
+    assert_eq!(
+        o,
+        StartResult::Orphan {
+            launch: "L1".into(),
+            repeat: false
+        }
+    );
     let l = r.root.read(|l| launch::load(l.conn(), "L1")).unwrap().unwrap();
     assert_eq!(l.state, State::Started, "an orphan is not the launch's state");
     assert_eq!(l.session.as_deref(), Some("S1"));
@@ -113,7 +142,13 @@ fn a_different_session_for_a_started_token_is_an_orphan_alongside_the_launch() {
     assert_eq!(l.orphans[0].session, "S2");
     // Reported again: still one orphan.
     let o2 = at(&r.root, 4, |tx| launch::started(tx, &token, "S2")).unwrap();
-    assert_eq!(o2, StartResult::Orphan { launch: "L1".into(), repeat: true });
+    assert_eq!(
+        o2,
+        StartResult::Orphan {
+            launch: "L1".into(),
+            repeat: true
+        }
+    );
     let l = r.root.read(|l| launch::load(l.conn(), "L1")).unwrap().unwrap();
     assert_eq!(l.orphans.len(), 1);
 }
@@ -124,7 +159,13 @@ fn a_session_reporting_a_released_token_is_an_orphan() {
     let token = reserved(&r.root, "L1", &[ISSUE_A]);
     at(&r.root, 20, |tx| launch::release(tx, &token, D1)).unwrap();
     let o = at(&r.root, 21, |tx| launch::started(tx, &token, "S9")).unwrap();
-    assert_eq!(o, StartResult::Orphan { launch: "L1".into(), repeat: false });
+    assert_eq!(
+        o,
+        StartResult::Orphan {
+            launch: "L1".into(),
+            repeat: false
+        }
+    );
     assert_eq!(state(&r.root, "L1"), State::Released);
 }
 
@@ -138,10 +179,20 @@ fn an_orphan_holds_a_slot_until_settled() {
     at(&r.root, 21, |tx| launch::started(tx, &token, "S9")).unwrap(); // orphan
     request(&r.root, "L2", &[ISSUE_B], "solo");
     let q = reserve(&r.root, "L2", D1).unwrap();
-    assert_eq!(q, Reservation::Queued { launch: "L2".into(), repeat: false }, "the orphan's slot was handed out");
+    assert_eq!(
+        q,
+        Reservation::Queued {
+            launch: "L2".into(),
+            repeat: false
+        },
+        "the orphan's slot was handed out"
+    );
     at(&r.root, 22, |tx| launch::settle_orphan(tx, &token, "S9")).unwrap();
     let next = at(&r.root, 23, |tx| launch::reserve_next(tx, D1, &cap)).unwrap();
-    assert!(matches!(next, Some(Reservation::Reserved { ref launch, .. }) if launch == "L2"), "{next:?}");
+    assert!(
+        matches!(next, Some(Reservation::Reserved { ref launch, .. }) if launch == "L2"),
+        "{next:?}"
+    );
 }
 
 #[test]
@@ -209,7 +260,9 @@ fn illegal_transitions_are_refused_and_record_nothing() {
     refused(reserve(&r.root, "L1", D1));
     refused(at(&r.root, 32, |tx| launch::withdraw(tx, "L1", "D_x")));
     // an unknown token or launch is refused.
-    refused(at(&r.root, 32, |tx| launch::started(tx, "res-00000000000000000000000000000000", "S1")));
+    refused(at(&r.root, 32, |tx| {
+        launch::started(tx, "res-00000000000000000000000000000000", "S1")
+    }));
     refused(reserve(&r.root, "L_unknown", D1));
     assert_eq!(launch_events(&r.root, "L1"), n_released);
     assert!(n_released == n + 2, "ended + released only");
@@ -232,7 +285,14 @@ fn reserve_retried_returns_the_same_token_and_another_dispatcher_is_refused() {
     let r = temp_root();
     let token = reserved(&r.root, "L1", &[ISSUE_A]);
     let again = reserve(&r.root, "L1", D1).unwrap();
-    assert_eq!(again, Reservation::Reserved { launch: "L1".into(), token: token.clone(), repeat: true });
+    assert_eq!(
+        again,
+        Reservation::Reserved {
+            launch: "L1".into(),
+            token: token.clone(),
+            repeat: true
+        }
+    );
     refused(reserve(&r.root, "L1", D2));
 }
 
@@ -241,7 +301,10 @@ fn an_issue_held_by_a_launch_in_any_project_refuses_another_reservation() {
     let r = temp_root();
     reserved(&r.root, "L1", &[ISSUE_A]);
     // Another project's batch that includes the same issue.
-    at(&r.root, 0, |tx| launch::request(tx, &launch_doc("L2", "work", &[ISSUE_B, ISSUE_A], "lanes"), Via::Ingest)).unwrap();
+    at(&r.root, 0, |tx| {
+        launch::request(tx, &launch_doc("L2", "work", &[ISSUE_B, ISSUE_A], "lanes"), Via::Ingest)
+    })
+    .unwrap();
     let m = refused(reserve(&r.root, "L2", D1));
     assert!(m.contains(ISSUE_A), "{m}");
     assert_eq!(state(&r.root, "L2"), State::Requested, "a refusal changes nothing");
@@ -253,7 +316,10 @@ fn a_held_issue_is_free_again_once_its_launch_is_released() {
     let token = started(&r.root, "L1", &[ISSUE_A]);
     at(&r.root, 3, |tx| launch::ended(tx, &token, EndState::Landed)).unwrap();
     request(&r.root, "L2", &[ISSUE_A], "lanes");
-    assert!(matches!(reserve(&r.root, "L2", D1).unwrap(), Reservation::Reserved { .. }));
+    assert!(matches!(
+        reserve(&r.root, "L2", D1).unwrap(),
+        Reservation::Reserved { .. }
+    ));
 }
 
 #[test]
@@ -262,18 +328,44 @@ fn a_full_pool_queues_and_the_queue_is_first_in_first_out() {
     reserved(&r.root, "L1", &[ISSUE_A]);
     let t2 = reserved(&r.root, "L2", &[ISSUE_B]); // "lanes" has two slots: now full
     request(&r.root, "L3", &[ISSUE_C], "lanes");
-    assert_eq!(reserve(&r.root, "L3", D1).unwrap(), Reservation::Queued { launch: "L3".into(), repeat: false });
-    assert_eq!(reserve(&r.root, "L3", D1).unwrap(), Reservation::Queued { launch: "L3".into(), repeat: true });
+    assert_eq!(
+        reserve(&r.root, "L3", D1).unwrap(),
+        Reservation::Queued {
+            launch: "L3".into(),
+            repeat: false
+        }
+    );
+    assert_eq!(
+        reserve(&r.root, "L3", D1).unwrap(),
+        Reservation::Queued {
+            launch: "L3".into(),
+            repeat: true
+        }
+    );
     request(&r.root, "L4", &["I_kwDOissueD"], "lanes");
-    assert!(matches!(reserve(&r.root, "L4", D1).unwrap(), Reservation::Queued { .. }));
-    assert!(at(&r.root, 2, |tx| launch::reserve_next(tx, D1, &cap)).unwrap().is_none(), "no slot is free");
+    assert!(matches!(
+        reserve(&r.root, "L4", D1).unwrap(),
+        Reservation::Queued { .. }
+    ));
+    assert!(
+        at(&r.root, 2, |tx| launch::reserve_next(tx, D1, &cap))
+            .unwrap()
+            .is_none(),
+        "no slot is free"
+    );
 
     // A slot frees: the later queued launch may not jump the earlier one.
     at(&r.root, 3, |tx| launch::started(tx, &t2, "S2")).unwrap();
     at(&r.root, 4, |tx| launch::ended(tx, &t2, EndState::Landed)).unwrap();
-    assert!(matches!(reserve(&r.root, "L4", D1).unwrap(), Reservation::Queued { .. }), "L4 jumped the queue");
+    assert!(
+        matches!(reserve(&r.root, "L4", D1).unwrap(), Reservation::Queued { .. }),
+        "L4 jumped the queue"
+    );
     let next = at(&r.root, 5, |tx| launch::reserve_next(tx, D1, &cap)).unwrap();
-    assert!(matches!(next, Some(Reservation::Reserved { ref launch, .. }) if launch == "L3"), "{next:?}");
+    assert!(
+        matches!(next, Some(Reservation::Reserved { ref launch, .. }) if launch == "L3"),
+        "{next:?}"
+    );
     assert_eq!(state(&r.root, "L3"), State::Reserved);
     assert_eq!(state(&r.root, "L4"), State::Queued);
 }
@@ -288,7 +380,10 @@ fn a_new_request_queues_behind_an_earlier_queued_launch_even_with_a_free_slot() 
     at(&r.root, 3, |tx| launch::started(tx, &t2, "S2")).unwrap();
     at(&r.root, 4, |tx| launch::ended(tx, &t2, EndState::Landed)).unwrap();
     request(&r.root, "L5", &["I_kwDOissueE"], "lanes");
-    assert!(matches!(reserve(&r.root, "L5", D1).unwrap(), Reservation::Queued { .. }), "L5 took the slot L3 waits for");
+    assert!(
+        matches!(reserve(&r.root, "L5", D1).unwrap(), Reservation::Queued { .. }),
+        "L5 took the slot L3 waits for"
+    );
 }
 
 #[test]
@@ -297,7 +392,11 @@ fn withdraw_only_from_requested_or_queued() {
     request(&r.root, "L1", &[ISSUE_A], "lanes");
     let m = at(&r.root, 1, |tx| launch::withdraw(tx, "L1", "D_cancel")).unwrap();
     assert_eq!(m.state, State::Withdrawn);
-    assert!(at(&r.root, 1, |tx| launch::withdraw(tx, "L1", "D_cancel")).unwrap().repeat);
+    assert!(
+        at(&r.root, 1, |tx| launch::withdraw(tx, "L1", "D_cancel"))
+            .unwrap()
+            .repeat
+    );
     refused(reserve(&r.root, "L1", D1));
 
     reserved(&r.root, "L2", &[ISSUE_B]);
@@ -318,7 +417,11 @@ fn requested_by_reserve_then_ingested_is_one_event_and_a_changed_document_is_ref
     refused(at(&r.root, 2, |tx| launch::request(tx, &changed, Via::Ingest)));
     // Even after the launch moved on, its request is still the same document.
     reserve(&r.root, "L1", D1).unwrap();
-    assert!(at(&r.root, 3, |tx| launch::request(tx, &doc, Via::Ingest)).unwrap().repeat);
+    assert!(
+        at(&r.root, 3, |tx| launch::request(tx, &doc, Via::Ingest))
+            .unwrap()
+            .repeat
+    );
 }
 
 #[test]
@@ -339,5 +442,9 @@ fn every_launch_event_validates_against_the_launch_event_schema() {
         common::assert_valid("event-launch", &serde_json::to_value(e).unwrap());
         transitions.insert(e.data["transition"].as_str().unwrap().to_string());
     }
-    assert_eq!(transitions.len(), 9, "not every transition was exercised: {transitions:?}");
+    assert_eq!(
+        transitions.len(),
+        9,
+        "not every transition was exercised: {transitions:?}"
+    );
 }

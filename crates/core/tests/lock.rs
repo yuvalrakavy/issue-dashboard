@@ -14,7 +14,11 @@ use issue_dashboard_core::lock::RootLock;
 use issue_dashboard_core::root::Options;
 
 fn quick(command: &str) -> Options {
-    Options { command: command.into(), lock_wait: Duration::from_millis(400), ..Options::default() }
+    Options {
+        command: command.into(),
+        lock_wait: Duration::from_millis(400),
+        ..Options::default()
+    }
 }
 
 #[test]
@@ -27,7 +31,10 @@ fn a_waiter_gives_up_after_the_bounded_wait_and_names_the_holder() {
     match &err {
         Error::LockTimeout { holder: Some(h), .. } => {
             assert!(h.contains("holder-command"), "holder not named: {h}");
-            assert!(h.contains(&format!("pid={}", std::process::id())), "holder pid not named: {h}");
+            assert!(
+                h.contains(&format!("pid={}", std::process::id())),
+                "holder pid not named: {h}"
+            );
         }
         other => panic!("expected a lock timeout naming the holder, got {other}"),
     }
@@ -40,7 +47,10 @@ fn a_waiter_gives_up_after_the_bounded_wait_and_names_the_holder() {
 
 #[test]
 fn a_waiter_proceeds_as_soon_as_the_holder_releases() {
-    let r = temp_root_with(Options { lock_wait: Duration::from_secs(10), ..quick("waiter") });
+    let r = temp_root_with(Options {
+        lock_wait: Duration::from_secs(10),
+        ..quick("waiter")
+    });
     let held = RootLock::acquire(&r.root.lock_path(), "holder", Duration::from_secs(1)).unwrap();
     let (tx, rx) = mpsc::channel();
     let root = r.root.clone();
@@ -71,13 +81,22 @@ fn concurrent_commands_serialise_and_none_is_lost() {
     use issue_dashboard_core::ledger::{self, Dedupe};
     use serde_json::json;
 
-    let r = temp_root_with(Options { lock_wait: Duration::from_secs(20), ..quick("worker") });
+    let r = temp_root_with(Options {
+        lock_wait: Duration::from_secs(20),
+        ..quick("worker")
+    });
     let handles: Vec<_> = (0..8)
         .map(|i| {
             let root = r.root.clone();
             thread::spawn(move || {
                 root.mutate(t(i), |tx| {
-                    tx.record(Kind::Suggested, &format!("I_{i}"), json!({"run_id": "r", "decision": "type"}), json!({}), Dedupe::Any)
+                    tx.record(
+                        Kind::Suggested,
+                        &format!("I_{i}"),
+                        json!({"run_id": "r", "decision": "type"}),
+                        json!({}),
+                        Dedupe::Any,
+                    )
                 })
                 .unwrap();
             })
@@ -86,7 +105,11 @@ fn concurrent_commands_serialise_and_none_is_lost() {
     for h in handles {
         h.join().unwrap();
     }
-    let n = r.root.read(|l| ledger::events_by_kind(l.conn(), Kind::Suggested)).unwrap().len();
+    let n = r
+        .root
+        .read(|l| ledger::events_by_kind(l.conn(), Kind::Suggested))
+        .unwrap()
+        .len();
     assert_eq!(n, 8);
     let seqs = common::backup_seqs(&r.root);
     let expected: Vec<i64> = (1..=seqs.len() as i64).collect();

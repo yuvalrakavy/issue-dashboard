@@ -26,7 +26,12 @@ pub struct Options {
 
 impl Default for Options {
     fn default() -> Self {
-        Options { command: "issue-dashboard".into(), lock_wait: DEFAULT_WAIT, failpoint: None, abort_on_failpoint: false }
+        Options {
+            command: "issue-dashboard".into(),
+            lock_wait: DEFAULT_WAIT,
+            failpoint: None,
+            abort_on_failpoint: false,
+        }
     }
 }
 
@@ -57,7 +62,10 @@ fn companions(db: &Path) -> [PathBuf; 2] {
 
 impl Root {
     pub fn new(dir: impl Into<PathBuf>, options: Options) -> Root {
-        Root { dir: dir.into(), options }
+        Root {
+            dir: dir.into(),
+            options,
+        }
     }
 
     pub fn dir(&self) -> &Path {
@@ -154,7 +162,10 @@ impl Root {
 
         let mut moved_aside = None;
         if target.exists() {
-            let safe: String = stamp.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).collect();
+            let safe: String = stamp
+                .chars()
+                .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+                .collect();
             let aside = self.dir.join(format!("ledger.sqlite.before-rebuild-{safe}"));
             fs::rename(&target, &aside)?;
             for (from, to) in companions(&target).into_iter().zip(companions(&aside)) {

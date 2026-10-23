@@ -11,7 +11,9 @@ use issue_dashboard_core::decision::{self, Status};
 use issue_dashboard_core::docs::{Decision, Priority};
 
 fn ingest(root: &Root, doc: &Decision) -> bool {
-    root.mutate(t(0), |tx| decision::ingest(tx, "home", OWNER, doc)).unwrap().is_new()
+    root.mutate(t(0), |tx| decision::ingest(tx, "home", OWNER, doc))
+        .unwrap()
+        .is_new()
 }
 
 fn priorities(root: &Root) -> BTreeMap<String, Priority> {
@@ -34,7 +36,10 @@ fn a_decision_by_someone_other_than_the_owner_is_recorded_as_refused() {
         other => panic!("{other:?}"),
     }
     // The refused event validates against its schema, accepted = false.
-    let events = r.root.read(|l| issue_dashboard_core::ledger::events_by_kind(l.conn(), issue_dashboard_core::Kind::Decided)).unwrap();
+    let events = r
+        .root
+        .read(|l| issue_dashboard_core::ledger::events_by_kind(l.conn(), issue_dashboard_core::Kind::Decided))
+        .unwrap();
     assert_eq!(events[0].data["accepted"], false);
     common::assert_valid("event-decided", &serde_json::to_value(&events[0]).unwrap());
 }
@@ -75,7 +80,11 @@ fn undo_after_its_target_cancels_it() {
     ingest(&r.root, &set_priority("D1", ISSUE_A, Priority::P1));
     ingest(&r.root, &set_priority("D2", ISSUE_A, Priority::P3));
     ingest(&r.root, &undo("U2", "D2"));
-    assert_eq!(priorities(&r.root)[ISSUE_A], Priority::P1, "undoing the later decision restores the earlier one");
+    assert_eq!(
+        priorities(&r.root)[ISSUE_A],
+        Priority::P1,
+        "undoing the later decision restores the earlier one"
+    );
     assert_eq!(statuses(&r.root)["D2"], Status::Cancelled { by: "U2".into() });
 }
 
@@ -91,7 +100,11 @@ fn undo_before_its_target_cancels_it_the_moment_it_arrives() {
 
 #[test]
 fn arrival_order_of_a_decision_and_its_undo_does_not_matter() {
-    let docs = [set_priority("D0", ISSUE_A, Priority::P2), set_priority("D1", ISSUE_A, Priority::P0), undo("U1", "D1")];
+    let docs = [
+        set_priority("D0", ISSUE_A, Priority::P2),
+        set_priority("D1", ISSUE_A, Priority::P0),
+        undo("U1", "D1"),
+    ];
     let forward = temp_root();
     for d in &docs {
         ingest(&forward.root, d);
@@ -129,7 +142,16 @@ fn a_cleared_priority_removes_the_item() {
     use issue_dashboard_core::docs::{Action, Target};
     let r = temp_root();
     ingest(&r.root, &set_priority("D1", ISSUE_A, Priority::P1));
-    let clear = common::decision("D2", OWNER, Action::ClearPriority, Target { item: Some(ISSUE_A.into()), ..Default::default() }, None);
+    let clear = common::decision(
+        "D2",
+        OWNER,
+        Action::ClearPriority,
+        Target {
+            item: Some(ISSUE_A.into()),
+            ..Default::default()
+        },
+        None,
+    );
     ingest(&r.root, &clear);
     assert!(!priorities(&r.root).contains_key(ISSUE_A));
 }

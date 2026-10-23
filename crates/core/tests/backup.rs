@@ -37,11 +37,21 @@ fn record(root: &Root, minutes: i64, label: &str) {
 }
 
 fn sqlite_seqs(root: &Root) -> Vec<i64> {
-    root.read(|l| ledger::events_after(l.conn(), 0)).unwrap().iter().map(|e| e.seq).collect()
+    root.read(|l| ledger::events_after(l.conn(), 0))
+        .unwrap()
+        .iter()
+        .map(|e| e.seq)
+        .collect()
 }
 
 fn with_failpoint(dir: &std::path::Path, fp: Failpoint) -> Root {
-    Root::new(dir, Options { failpoint: Some(fp), ..Options::default() })
+    Root::new(
+        dir,
+        Options {
+            failpoint: Some(fp),
+            ..Options::default()
+        },
+    )
 }
 
 #[test]
@@ -54,7 +64,12 @@ fn every_committed_event_is_in_the_backup_when_the_command_returns() {
     let in_backup = backup_seqs(&r.root);
     for e in &in_sqlite {
         if e.kind != Kind::Exported {
-            assert!(in_backup.contains(&e.seq), "event {} ({:?}) is not in the backup", e.seq, e.kind);
+            assert!(
+                in_backup.contains(&e.seq),
+                "event {} ({:?}) is not in the backup",
+                e.seq,
+                e.kind
+            );
         }
     }
     let expected: Vec<i64> = (1..=in_backup.len() as i64).collect();
@@ -113,7 +128,14 @@ fn a_month_change_starts_a_new_file_and_an_earlier_clock_never_appends_to_an_old
     // The clock steps back into October: the event still goes to the latest file, so the
     // backup stays in sequence order across files.
     record(&r.root, 5, "C");
-    let names: Vec<String> = r.root.backup().files().unwrap().iter().map(|p| p.file_name().unwrap().to_string_lossy().into_owned()).collect();
+    let names: Vec<String> = r
+        .root
+        .backup()
+        .files()
+        .unwrap()
+        .iter()
+        .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+        .collect();
     assert_eq!(names, ["2026-10.jsonl", "2026-11.jsonl"]);
     let seqs = backup_seqs(&r.root);
     let mut sorted = seqs.clone();
@@ -127,11 +149,22 @@ fn crash_after_commit_before_export_is_exported_by_the_next_command() {
     record(&r.root, 0, "A");
     let crashing = with_failpoint(r.path(), Failpoint::AfterCommit);
     let err = crashing
-        .mutate(t(1), |tx| tx.record(Kind::Config, "config", json!({"content_hash": "B"}), json!({}), Dedupe::Latest))
+        .mutate(t(1), |tx| {
+            tx.record(
+                Kind::Config,
+                "config",
+                json!({"content_hash": "B"}),
+                json!({}),
+                Dedupe::Latest,
+            )
+        })
         .unwrap_err();
     assert!(matches!(err, Error::Failpoint("after-commit")), "{err}");
     let b_seq = *sqlite_seqs(&r.root).last().unwrap();
-    assert!(!backup_seqs(&r.root).contains(&b_seq), "B reached the backup although the export never ran");
+    assert!(
+        !backup_seqs(&r.root).contains(&b_seq),
+        "B reached the backup although the export never ran"
+    );
 
     record(&r.root, 2, "C");
     let seqs = backup_seqs(&r.root);
@@ -146,7 +179,15 @@ fn crash_between_append_and_cursor_update_neither_loses_nor_duplicates() {
     record(&r.root, 0, "A");
     let crashing = with_failpoint(r.path(), Failpoint::AfterAppend);
     let err = crashing
-        .mutate(t(1), |tx| tx.record(Kind::Config, "config", json!({"content_hash": "B"}), json!({}), Dedupe::Latest))
+        .mutate(t(1), |tx| {
+            tx.record(
+                Kind::Config,
+                "config",
+                json!({"content_hash": "B"}),
+                json!({}),
+                Dedupe::Latest,
+            )
+        })
         .unwrap_err();
     assert!(matches!(err, Error::Failpoint("after-append")), "{err}");
     let after_crash = backup_seqs(&r.root);
@@ -228,7 +269,10 @@ fn rebuild_recreates_the_ledger_exactly() {
 
     // The rebuilt ledger keeps working: a repeat of the latest is still a no-op...
     record(&r.root, 5, "A");
-    assert_eq!(r.root.read(|l| ledger::events_after(l.conn(), 0)).unwrap().len(), before.len());
+    assert_eq!(
+        r.root.read(|l| ledger::events_after(l.conn(), 0)).unwrap().len(),
+        before.len()
+    );
     // ...and a change is recorded after it.
     record(&r.root, 6, "B");
     assert!(r.root.read(|l| ledger::events_after(l.conn(), 0)).unwrap().len() > before.len());

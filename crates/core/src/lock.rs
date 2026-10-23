@@ -30,7 +30,12 @@ impl RootLock {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir)?;
         }
-        let mut file = OpenOptions::new().read(true).write(true).create(true).truncate(false).open(path)?;
+        let mut file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(path)?;
         let start = Instant::now();
         loop {
             match file.try_lock() {
@@ -52,7 +57,10 @@ impl RootLock {
         file.seek(SeekFrom::Start(0))?;
         writeln!(file, "pid={} command={}", std::process::id(), command)?;
         file.flush()?;
-        Ok(RootLock { file, path: path.to_path_buf() })
+        Ok(RootLock {
+            file,
+            path: path.to_path_buf(),
+        })
     }
 
     pub fn path(&self) -> &Path {

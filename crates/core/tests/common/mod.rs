@@ -7,7 +7,9 @@ use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Duration, TimeZone, Utc};
 use issue_dashboard_core::Root;
-use issue_dashboard_core::docs::{Action, Decision, DecisionValue, LaunchKind, LaunchRequest, Priority, Routing, Target};
+use issue_dashboard_core::docs::{
+    Action, Decision, DecisionValue, LaunchKind, LaunchRequest, Priority, Routing, Target,
+};
 use issue_dashboard_core::root::Options;
 use serde_json::Value;
 
@@ -22,10 +24,7 @@ struct LocalRetriever {
 }
 
 impl jsonschema::Retrieve for LocalRetriever {
-    fn retrieve(
-        &self,
-        uri: &jsonschema::Uri<String>,
-    ) -> Result<Value, Box<dyn std::error::Error + Send + Sync>> {
+    fn retrieve(&self, uri: &jsonschema::Uri<String>) -> Result<Value, Box<dyn std::error::Error + Send + Sync>> {
         let name = uri
             .as_str()
             .strip_prefix(ID_BASE)
@@ -117,11 +116,24 @@ pub fn launch_doc(id: &str, project: &str, items: &[&str], recipe: &str) -> Laun
         project: project.to_string(),
         author: OWNER.to_string(),
         created_at: "2026-10-23T08:00:00Z".to_string(),
-        kind: if items.len() > 1 { LaunchKind::Batch } else { LaunchKind::Fix },
+        kind: if items.len() > 1 {
+            LaunchKind::Batch
+        } else {
+            LaunchKind::Fix
+        },
         items: items.iter().map(|s| s.to_string()).collect(),
-        aliases: items.iter().enumerate().map(|(i, _)| format!("example-org/server#{}", 100 + i)).collect(),
+        aliases: items
+            .iter()
+            .enumerate()
+            .map(|(i, _)| format!("example-org/server#{}", 100 + i))
+            .collect(),
         recipe: recipe.to_string(),
-        routing: Routing { model: "claude-opus-5-5".into(), effort: "medium".into(), workspace: None, reason: None },
+        routing: Routing {
+            model: "claude-opus-5-5".into(),
+            effort: "medium".into(),
+            workspace: None,
+            reason: None,
+        },
         suggested_routing: None,
     }
 }
@@ -144,13 +156,28 @@ pub fn set_priority(id: &str, item: &str, p: Priority) -> Decision {
         id,
         OWNER,
         Action::SetPriority,
-        Target { item: Some(item.into()), ..Default::default() },
-        Some(DecisionValue { priority: Some(p), ..Default::default() }),
+        Target {
+            item: Some(item.into()),
+            ..Default::default()
+        },
+        Some(DecisionValue {
+            priority: Some(p),
+            ..Default::default()
+        }),
     )
 }
 
 pub fn undo(id: &str, of: &str) -> Decision {
-    decision(id, OWNER, Action::Undo, Target { decision: Some(of.into()), ..Default::default() }, None)
+    decision(
+        id,
+        OWNER,
+        Action::Undo,
+        Target {
+            decision: Some(of.into()),
+            ..Default::default()
+        },
+        None,
+    )
 }
 
 /// Every line of every backup file, as text.
@@ -167,6 +194,10 @@ pub fn backup_lines(root: &Root) -> Vec<String> {
 pub fn backup_seqs(root: &Root) -> Vec<i64> {
     backup_lines(root)
         .iter()
-        .map(|l| serde_json::from_str::<Value>(l).unwrap()["event"]["seq"].as_i64().unwrap())
+        .map(|l| {
+            serde_json::from_str::<Value>(l).unwrap()["event"]["seq"]
+                .as_i64()
+                .unwrap()
+        })
         .collect()
 }

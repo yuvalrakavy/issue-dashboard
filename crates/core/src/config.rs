@@ -259,9 +259,14 @@ pub struct ConfigSet {
 
 /// Parses a TOML file into `T`, naming the file on failure.
 pub fn parse_toml<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T> {
-    let text = fs::read_to_string(path)
-        .map_err(|e| Error::Config { file: path.to_path_buf(), reason: e.to_string() })?;
-    toml::from_str(&text).map_err(|e| Error::Config { file: path.to_path_buf(), reason: e.to_string() })
+    let text = fs::read_to_string(path).map_err(|e| Error::Config {
+        file: path.to_path_buf(),
+        reason: e.to_string(),
+    })?;
+    toml::from_str(&text).map_err(|e| Error::Config {
+        file: path.to_path_buf(),
+        reason: e.to_string(),
+    })
 }
 
 impl ConfigSet {
@@ -270,7 +275,10 @@ impl ConfigSet {
     pub fn load(root: &Path) -> Result<ConfigSet> {
         let registry_path = root.join("repos.toml");
         if !registry_path.exists() {
-            return Err(Error::Config { file: registry_path, reason: "the repo registry is missing".into() });
+            return Err(Error::Config {
+                file: registry_path,
+                reason: "the repo registry is missing".into(),
+            });
         }
         let registry: Registry = parse_toml(&registry_path)?;
 
@@ -296,7 +304,11 @@ impl ConfigSet {
                 }
             }
         }
-        Ok(ConfigSet { registry, projects, repo_files })
+        Ok(ConfigSet {
+            registry,
+            projects,
+            repo_files,
+        })
     }
 
     /// The configuration's content hash, over its canonical JSON.
