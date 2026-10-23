@@ -598,21 +598,49 @@ Each project's dashboard is a private claude.ai Artifact declaring three capabil
 owner from anyone the page is shared with). It renders without GitHub access, so it works
 on a phone. The page code is generic and lives in this repo; only its data is per project.
 
-### 5.2 What the page shows, summary first
+### 5.2 Layout: a status strip and three tabs
 
-| Panel | Shows | You can |
+The page is built around the owner's jobs, most frequent first: glance (is anything on
+fire, is anything waiting on me?), decide, pick and launch the next work, and study trends.
+Revised 2026-10-23 after a UX review of the first mockup.
+
+**Status strip** (on every tab): the project name; the view or isolated scope in force as a
+chip (5.6); one freshness line ("all repos read 08:14 · rhai stale"), expanding to per-repo
+times on tap; the "hidden by this view" line; and summary tiles (p0 open, waiting on you,
+untriaged, over time limit, open). **Every tile is a link** to the tab and filter it counts.
+
+| Tab | Holds | Main actions |
 |---|---|---|
-| **Header** | project name; when each repo was last read, with stale repos flagged (2.5) | open `explain` for any row |
-| **Waiting on you** | everything blocked on you, oldest first (2.3), including plans awaiting approval (1.7) and outside pull requests needing review (4.4) | act on each in place |
-| **Next batch** | the top batch from chapter 6: its issues, why they are grouped, the estimated gate cost, what fixing them unblocks | launch one session for the batch |
-| **Queue** | every open issue in order, filterable by repo, area, type, status, inside/outside | set a priority, add an override, launch a fix session |
-| **Triage queue** | the triage session's suggestions, each with its confidence and reason | accept, reject (with an optional reason), or edit |
-| **Pull requests** | open pull requests by status (4.4) | launch a review session |
-| **Forks** | each fork's state and how far behind it is (chapter 3) | launch "go back" or "send upstream" |
-| **Metrics** | flow, aging against the time limits, outside response times, session outcomes, decision accuracy (5.7) | change the time window |
+| **Inbox** | everything that needs the owner, one card per item, oldest first: plans to approve (1.7), decisions, outside pull requests to review (4.4), stale overrides and GitHub-side changes (1.5), starving issues (6.8); then the triage suggestions with their confidence | the card's one main action; a `⋯` menu for the rest; accept or reject suggestions, singly or "accept all at or above a confidence" |
+| **Queue** | the next batch on top with its launch sheet; then open issues grouped by priority level; then pull requests and forks that are **not** already in the inbox | launch, set a priority, override, explain |
+| **Trends** | flow, time limits, outside response times, decision accuracy, session outcomes, each splittable by group or repo | change the period, isolate a group |
 
-At phone width the panels stack in that order, so the first screen is the header and what is
-waiting on you.
+**An item appears once.** Anything that needs a decision lives in the Inbox; the Queue and
+its lists show only what is not already there, and members of the next batch are not
+repeated in the level lists.
+
+### 5.2a Interaction rules
+
+- **One main action per card**, styled as primary; every other action in the `⋯` menu.
+- **A decision shows that it is pending.** Decisions are applied on the next tracker run
+  (5.3), so an acted-on card collapses to "Decided · applied on the next run (in N min)" with
+  **Undo**, until the run consumes it.
+- **Reject asks why**, with one-tap reasons fitting the suggestion (5.7) and "Other…".
+- **Launch opens a sheet**, not an immediate action: the suggested model, effort and
+  workspace (editable, with the reason they were suggested), "Preview brief", and Launch.
+  After launch the row shows the launch state (`requested`, `queued`, `started`, `landed`).
+  When no dispatcher is listening, Launch is disabled with that reason (5.4).
+- **Rows show the level and idle time; the score is in `explain`.** Scores only compare
+  within a level (6.1), so they are not shown as a column beside the level.
+- **Phone width:** queue rows become cards with one action; nothing scrolls sideways;
+  touch targets are at least 40 px high.
+- **Keyboard:** `j`/`k` move, `a` main action, `r` reject, `u` undo, `/` filter.
+- **States:** an empty inbox says "Nothing waiting on you"; a stale repo's rows carry
+  "read HH:MM, stale"; a panel whose data is loading says so.
+- **Contrast:** every text colour meets WCAG 4.5:1 in both themes; priority levels are
+  filled badges.
+- **Metrics show their base:** "9 of 31", never a bare percentage, and a target tick where a
+  threshold exists.
 
 ### 5.3 The database
 
@@ -674,12 +702,17 @@ exclude list, each holding repos and groups; an empty include list means every r
 mqtt_dali" is `exclude = [repo yuvalrakavy/mqtt_dali]`; "only the PD libraries" is
 `include = [group pd-libraries]`.
 
-- Views can be saved by name and switched in the header. The project config names the
+- **Scope pills, not tap cycling.** Each included or excluded repo or group is a pill that
+  reads as a sentence ("repo is not mqtt_dali"); tapping a repo or group name anywhere opens
+  a menu: Include, Exclude, Isolate. Content filters (type, author, status) are a separate
+  row, since they do not change which repos are in scope.
+- Views can be saved by name ("Save view" beside the view chip) and switched from the chip. The project config names the
   default view; saved views are page-owned documents (`views`, 5.3).
 - **Isolate** is a one-step view: every repo name and group name on the page has an
   "isolate" action that shows only that repo or group, with every panel, tile and metric
   aggregated over it alone ("Bridges: 2 open, 0 over time limit, first response 2.1 days").
-  The header shows "Isolated: Bridges", and one tap returns to the view you came from.
+  The view chip in the status strip becomes "Isolated: Bridges ✕", and its ✕ returns to the
+  view you came from.
   An isolated scope can be saved as a view like any other.
 - The metrics panel can also break any metric down by group, so groups can be compared side
   by side without isolating each in turn.
