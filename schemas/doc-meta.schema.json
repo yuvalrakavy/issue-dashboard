@@ -159,6 +159,22 @@
                 "type": "null"
               }
             ]
+          },
+          "recipe": {
+            "description": "The recipe the repo's launches use (7.6); null when none is configured.",
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "campaign_skill": {
+            "description": "Whether a recommender applies the repo's own campaign skill (5.8) rather than the generic procedure.",
+            "type": "boolean"
           }
         }
       }

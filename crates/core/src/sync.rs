@@ -80,7 +80,7 @@ pub fn request(tx: &mut Tx<'_>, config: &ConfigSet, project: &str, issue: Option
 /// The node id of `alias` among the members of `project`'s sets. The repo part may be the
 /// name the project's config uses or the repo's name at its latest read; the number is matched
 /// within that repo, since an item's own alias keeps the name it was last read under.
-fn tracked(conn: &Connection, config: &ConfigSet, project: &str, alias: &str) -> Result<String> {
+pub(crate) fn tracked(conn: &Connection, config: &ConfigSet, project: &str, alias: &str) -> Result<String> {
     let shape = || Error::refused(format!("{alias}: an issue is named owner/repo#N"));
     let (repo, number) = alias.split_once('#').ok_or_else(shape)?;
     let well_formed = repo.split('/').count() == 2

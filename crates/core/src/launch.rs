@@ -396,9 +396,14 @@ pub fn request(tx: &mut Tx<'_>, doc: &LaunchRequest, via: Via) -> Result<Moved> 
     })
 }
 
-/// An item of `l` held by another launch, with that launch.
+/// An item of `l` held by another launch, with that launch. A launch whose kind holds no
+/// items (a read-only recommender) neither blocks nor is blocked.
 fn held_item<'a>(l: &'a Launch, all: &'a [Launch]) -> Option<(&'a str, &'a Launch)> {
-    all.iter().filter(|o| o.id != l.id && o.state.holds()).find_map(|o| {
+    if !l.request.kind.holds_items() {
+        return None;
+    }
+    let mut holders = all.iter().filter(|o| o.id != l.id && o.state.holds() && o.request.kind.holds_items());
+    holders.find_map(|o| {
         l.request
             .items
             .iter()

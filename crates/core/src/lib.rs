@@ -6,6 +6,7 @@
 //! and appended to the JSON Lines backup before the lock is released ([`backup`]).
 
 pub mod backup;
+pub mod brief;
 pub mod canonical;
 pub mod config;
 pub mod cycle;
@@ -26,6 +27,7 @@ pub mod read;
 pub mod root;
 pub mod schema;
 pub mod sessions;
+pub mod suggest;
 pub mod snapshot;
 pub mod sync;
 pub mod translate;

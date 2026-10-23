@@ -34,7 +34,10 @@
         "priority",
         "likely_fixed",
         "duplicate",
-        "combined"
+        "combined",
+        "obsolete",
+        "batch",
+        "left_out"
       ]
     },
     "made_at": {
@@ -46,7 +49,7 @@
       "maximum": 1
     },
     "action_label": {
-      "description": "What the main button says (5.2a), e.g. \"Set bug \u00b7 p1\".",
+      "description": "What the main button says (5.2a), e.g. \"Set bug · p1\".",
       "type": "string",
       "minLength": 1
     }

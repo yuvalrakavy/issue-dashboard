@@ -171,6 +171,11 @@
               }
             }
           }
+        },
+        "launch": {
+          "description": "The recipe a repo's launches use when its entry names none (7.6).",
+          "type": "string",
+          "minLength": 1
         }
       }
     },
@@ -352,6 +357,11 @@
               "type": "string",
               "minLength": 1
             }
+          },
+          "campaign_skill": {
+            "description": "The repo's own way to triage and batch closures, relative to local_path (5.8).",
+            "type": "string",
+            "minLength": 1
           }
         }
       }

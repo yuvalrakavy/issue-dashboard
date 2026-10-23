@@ -42,7 +42,8 @@
             "send_upstream",
             "go_back",
             "stronger_look",
-            "design"
+            "design",
+            "recommend_closures"
           ]
         },
         "items": {

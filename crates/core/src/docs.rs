@@ -34,6 +34,16 @@ pub enum LaunchKind {
     GoBack,
     StrongerLook,
     Design,
+    /// A read-only session that recommends which issues to close, and which together (5.8).
+    RecommendClosures,
+}
+
+impl LaunchKind {
+    /// Whether a launch of this kind holds its items against other launches (10.7). A
+    /// read-only recommender changes nothing, so it neither holds an item nor waits for one.
+    pub fn holds_items(self) -> bool {
+        self != LaunchKind::RecommendClosures
+    }
 }
 
 /// A `launches` document asking for a launch (5.4). Written once, never changed.
