@@ -106,8 +106,15 @@ CREATE TABLE IF NOT EXISTS reads (
     attempt_at TEXT NOT NULL,
     good_at    TEXT,
     full_at    TEXT,
+    full_seq   INTEGER,
     error      TEXT,
     PRIMARY KEY (project, repo)
+);
+CREATE TABLE IF NOT EXISTS rereads (
+    project    TEXT NOT NULL,
+    repo_node  TEXT NOT NULL,
+    item       TEXT NOT NULL,
+    PRIMARY KEY (project, repo_node, item)
 );
 ";
 

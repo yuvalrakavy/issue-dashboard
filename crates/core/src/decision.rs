@@ -152,14 +152,27 @@ fn resolve(decided: &[(i64, DecidedData)], effects: &HashMap<String, i64>) -> Ve
         .filter(|(_, d)| d.accepted && d.document.action == Action::Undo)
     {
         if let Some(target) = &d.document.target.decision {
-            match effects.get(target) {
-                Some(at) if *at < *seq => {
+            // Too late when it would cancel, directly or along a chain of undos, a decision whose
+            // irreversible effect came before it. Undos are taken in sequence order, each against
+            // the ones before it.
+            let mut trial = undos.clone();
+            trial.entry(target.clone()).or_default().push(d.document.id.clone());
+            let reversed = effects
+                .iter()
+                .filter(|(_, at)| **at < *seq)
+                .filter(|(id, _)| {
+                    cancelled_by(id, &undos, &mut HashSet::new()).is_none()
+                        && cancelled_by(id, &trial, &mut HashSet::new()).is_some()
+                })
+                .min_by_key(|(_, at)| **at);
+            match reversed {
+                Some((id, at)) => {
                     too_late.insert(
                         d.document.id.clone(),
-                        format!("too late: decision {target} already took effect (seq {at})"),
+                        format!("too late: decision {id} already took effect (seq {at})"),
                     );
                 }
-                _ => undos.entry(target.clone()).or_default().push(d.document.id.clone()),
+                None => undos = trial,
             }
         }
     }

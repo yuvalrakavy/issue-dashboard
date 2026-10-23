@@ -6,11 +6,15 @@
 //! 1. **membership**: the member's filtered searches, ids only, plus each `also` number. Its
 //!    result is the project's set; an item that stopped matching leaves it on this cycle.
 //! 2. **details**: every item of the repo updated since the repo's watermark (less five
-//!    minutes), without the filter, kept when it is in this project's set or another project's;
-//!    plus, read by node id, every item entering the set, and on a full read the whole set.
+//!    minutes), without the filter; plus, read by node id, every item entering the set, every
+//!    item left to re-read, and on a full read the whole set. Under the lock, an item's details
+//!    are kept when any project's set holds it at that moment (by repo node id, whatever name
+//!    the project's config uses), since the watermark this read advances is every project's.
 //!
 //! The watermark is per repo, shared by every project, and advances only when the whole read
-//! of the repo succeeded. A failed read records its error and changes nothing else, so the
+//! of the repo succeeded. An item that entered a set from a read older than the watermark (less
+//! the overlap) another read advanced meanwhile may have changed unseen in between: it is left
+//! to re-read by node id on the next read. A failed read records its error and changes nothing else, so the
 //! repo keeps its last good items (2.5). A full read happens on a project's first read of a
 //! repo, after its view or translation changes, and once a day; it also confirms which items
 //! that left the set are gone (`item_gone`).
@@ -71,6 +75,39 @@ pub fn membership(conn: &Connection, project: &str, repo_node: &str) -> Result<O
     Ok(None)
 }
 
+/// Every project's latest recorded set in the repo with node id `repo_node`.
+fn latest_memberships(conn: &Connection, repo_node: &str) -> Result<Vec<MembershipData>> {
+    let mut latest: BTreeMap<String, MembershipData> = BTreeMap::new();
+    for e in ledger::events_of(conn, repo_node, Kind::Membership)? {
+        let d: MembershipData = serde_json::from_value(e.data)?;
+        latest.insert(d.project.clone(), d);
+    }
+    Ok(latest.into_values().collect())
+}
+
+/// Whether one of `repos`, as `project` names them, is the repo `info` describes: the node id
+/// of that project's last read of the name, else the name itself.
+fn reads_repo(conn: &Connection, project: &str, repos: Option<&Vec<String>>, info: &RepoInfo) -> Result<bool> {
+    for r in repos.into_iter().flatten() {
+        let node = read_state(conn, project, r)?.and_then(|s| s.repo_node);
+        let same = match node {
+            Some(n) => n == info.node_id,
+            None => r.eq_ignore_ascii_case(&info.name_with_owner),
+        };
+        if same {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// The members of `project` in the repo left to re-read by node id.
+fn rereads(conn: &Connection, project: &str, repo_node: &str) -> Result<BTreeSet<String>> {
+    let mut stmt = conn.prepare("SELECT item FROM rereads WHERE project = ?1 AND repo_node = ?2")?;
+    let rows = stmt.query_map(params![project, repo_node], |r| r.get::<_, String>(0))?;
+    Ok(rows.collect::<rusqlite::Result<_>>()?)
+}
+
 /// The node id the ledger knows for a repo name: from any project's last read of it, else from
 /// the repo's latest observation under that name.
 pub fn repo_node_of(conn: &Connection, repo: &str) -> Result<Option<String>> {
@@ -106,13 +143,16 @@ pub struct ReadState {
     pub attempt_at: Option<String>,
     pub good_at: Option<String>,
     pub full_at: Option<String>,
+    /// The ledger's last sequence number when the last full read was recorded: the boundary of
+    /// the sets that full read checked (sequence numbers, unlike times, cannot tie).
+    pub full_seq: Option<i64>,
     pub error: Option<String>,
 }
 
 pub fn read_state(conn: &Connection, project: &str, repo: &str) -> Result<Option<ReadState>> {
     Ok(conn
         .query_row(
-            "SELECT repo_node, view_hash, mode, attempt_at, good_at, full_at, error FROM reads
+            "SELECT repo_node, view_hash, mode, attempt_at, good_at, full_at, full_seq, error FROM reads
              WHERE project = ?1 AND repo = ?2",
             params![project, repo],
             |r| {
@@ -123,7 +163,8 @@ pub fn read_state(conn: &Connection, project: &str, repo: &str) -> Result<Option
                     attempt_at: r.get(3)?,
                     good_at: r.get(4)?,
                     full_at: r.get(5)?,
-                    error: r.get(6)?,
+                    full_seq: r.get(6)?,
+                    error: r.get(7)?,
                 })
             },
         )
@@ -161,15 +202,17 @@ pub struct RepoPlan {
     pub watermark: Option<DateTime<Utc>>,
     /// This project's latest recorded set in the repo.
     pub previous: BTreeSet<String>,
-    /// Every other project's latest recorded set in the repo: their items' details are kept
-    /// too, since the watermark this read advances is theirs as well.
-    pub others: BTreeSet<String>,
+    /// Members to read by node id whatever the since-lists say (see the module doc).
+    pub reread: BTreeSet<String>,
     /// Every item in this project's set at any time since its last full read of the repo: a
     /// full read checks each one that is no longer in the set, including those that left at an
     /// incremental read since.
     pub since_full: BTreeSet<String>,
     /// The latest alias of each item in `since_full`, for `item_gone`.
     pub aliases: BTreeMap<String, String>,
+    /// Every other project and the repo names it is configured to read: the ones that read
+    /// this repo (by node id, at record time) keep their members' details current.
+    pub other_views: BTreeMap<String, Vec<String>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -210,22 +253,14 @@ pub fn plan(conn: &Connection, config: &ConfigSet, project: &str, now: DateTime<
         .map(str::to_string);
         let mut previous = BTreeSet::new();
         let mut since_full = BTreeSet::new();
-        let mut others = BTreeSet::new();
+        let mut reread = BTreeSet::new();
         let mut aliases = BTreeMap::new();
         if let Some(node) = &repo_node {
             if let Some((_, m)) = membership(conn, project, node)? {
                 previous = m.all();
             }
-            since_full = sets_since(conn, project, node, full_at)?;
-            for other in config.projects.keys().filter(|o| o.as_str() != project) {
-                let tracks = config
-                    .views(other)
-                    .map(|v| v.keys().any(|r| r.eq_ignore_ascii_case(&view.repo)))
-                    .unwrap_or(false);
-                if tracks && let Some((_, m)) = membership(conn, other, node)? {
-                    others.extend(m.all());
-                }
-            }
+            since_full = sets_since(conn, project, node, state.as_ref().and_then(|s| s.full_seq))?;
+            reread = rereads(conn, project, node)?;
             for id in &since_full {
                 if let Some(e) = ledger::latest(conn, id, Kind::Observed)?
                     && let Some(a) = e.data.get("alias").and_then(|a| a.as_str())
@@ -234,14 +269,21 @@ pub fn plan(conn: &Connection, config: &ConfigSet, project: &str, now: DateTime<
                 }
             }
         }
+        let mut other_views = BTreeMap::new();
+        for other in config.projects.keys().filter(|o| o.as_str() != project) {
+            if let Ok(v) = config.views(other) {
+                other_views.insert(other.clone(), v.into_keys().collect());
+            }
+        }
         repos.push(RepoPlan {
+            other_views,
             view,
             view_hash: vh,
             repo_node,
             full_reason,
             watermark,
             previous,
-            others,
+            reread,
             since_full,
             aliases,
         });
@@ -253,14 +295,9 @@ pub fn plan(conn: &Connection, config: &ConfigSet, project: &str, now: DateTime<
     })
 }
 
-/// The union of `project`'s sets in the repo from the one current at `full_at` on; every set
-/// it ever had when there was no full read.
-fn sets_since(
-    conn: &Connection,
-    project: &str,
-    repo_node: &str,
-    full_at: Option<DateTime<Utc>>,
-) -> Result<BTreeSet<String>> {
+/// The union of `project`'s sets in the repo from the one current at the last full read (the
+/// ledger at `full_seq`) on; every set it ever had when there was no full read.
+fn sets_since(conn: &Connection, project: &str, repo_node: &str, full_seq: Option<i64>) -> Result<BTreeSet<String>> {
     let mut out = BTreeSet::new();
     for e in ledger::events_of(conn, repo_node, Kind::Membership)?.into_iter().rev() {
         let d: MembershipData = serde_json::from_value(e.data)?;
@@ -268,7 +305,7 @@ fn sets_since(
             continue;
         }
         out.extend(d.all());
-        if full_at.is_some_and(|f| parse_time(&e.time).is_ok_and(|t| t <= f)) {
+        if full_seq.is_some_and(|f| e.seq <= f) {
             break;
         }
     }
@@ -285,6 +322,11 @@ pub struct Fetched {
     pub items: Vec<Item>,
     /// Items that left the set and that GitHub no longer resolves, with their last alias.
     pub gone: Vec<(String, String)>,
+    /// The items that entered the set on this read (each read in full by node id).
+    pub entering: BTreeSet<String>,
+    /// The items a full read checked because they left the set: what it learned of them (a
+    /// transfer, a rename) is recorded although no set holds them now.
+    pub checked: BTreeSet<String>,
     pub entered: usize,
     pub left: usize,
     /// `also` numbers that are neither an issue nor a pull request (2.2).
@@ -331,8 +373,8 @@ fn fetch_repo(r: &Reader<'_>, rp: &RepoPlan, history_days: u32, started_at: Date
     // what the ledger holds under it.
     let same = rp.repo_node.as_deref() == Some(info.node_id.as_str());
     let empty = BTreeSet::new();
-    let (previous, others, since_full, watermark) = if same {
-        (&rp.previous, &rp.others, &rp.since_full, rp.watermark)
+    let (previous, reread, since_full, watermark) = if same {
+        (&rp.previous, &rp.reread, &rp.since_full, rp.watermark)
     } else {
         (&empty, &empty, &empty, None)
     };
@@ -373,12 +415,10 @@ fn fetch_repo(r: &Reader<'_>, rp: &RepoPlan, history_days: u32, started_at: Date
             None => skipped_also.push(*n),
         }
     }
-    let set: BTreeSet<String> = issues.iter().chain(&prs).cloned().collect();
-    let entering: BTreeSet<String> = if full {
-        set.clone()
-    } else {
-        set.difference(previous).cloned().collect()
-    };
+    let mut set: BTreeSet<String> = issues.iter().chain(&prs).cloned().collect();
+    let mut entering: BTreeSet<String> = set.difference(previous).cloned().collect();
+    // A full read reads every member by node id; an incremental one only those entering.
+    let read_all: BTreeSet<String> = if full { set.clone() } else { entering.clone() };
     let leaving: BTreeSet<String> = previous.difference(&set).cloned().collect();
     // A full read checks everything that left since the last full one.
     let unchecked: BTreeSet<String> = if full {
@@ -391,8 +431,8 @@ fn fetch_repo(r: &Reader<'_>, rp: &RepoPlan, history_days: u32, started_at: Date
         BTreeSet::new()
     };
 
-    // Read 2: details. Every item updated since the watermark, unfiltered, kept when some
-    // project tracks it; then by node id whatever is still needed.
+    // Read 2: details. Every item updated since the watermark, unfiltered (the record step
+    // keeps what some project tracks); then by node id whatever is still needed.
     let mut items: BTreeMap<String, Item> = BTreeMap::new();
     if let Some(w) = watermark {
         let since = w - OVERLAP;
@@ -401,12 +441,11 @@ fn fetch_repo(r: &Reader<'_>, rp: &RepoPlan, history_days: u32, started_at: Date
             .into_iter()
             .chain(r.prs_since(name, since)?)
         {
-            if set.contains(&it.node_id) || others.contains(&it.node_id) {
-                items.insert(it.node_id.clone(), it);
-            }
+            items.insert(it.node_id.clone(), it);
         }
     }
-    let mut need: Vec<String> = entering.iter().cloned().collect();
+    let mut need: Vec<String> = read_all.iter().cloned().collect();
+    need.extend(reread.intersection(&set).cloned());
     need.extend(unchecked.iter().cloned());
     need.retain(|id| !items.contains_key(id));
     let mut gone = Vec::new();
@@ -415,9 +454,19 @@ fn fetch_repo(r: &Reader<'_>, rp: &RepoPlan, history_days: u32, started_at: Date
             Some(it) => {
                 items.insert(id, it);
             }
+            // Only an item once observed has an alias to record its going under; every member
+            // was observed when it entered (below).
             None if unchecked.contains(&id) => {
-                let alias = rp.aliases.get(&id).cloned().unwrap_or_else(|| format!("{name}#0"));
-                gone.push((id, alias));
+                if let Some(alias) = rp.aliases.get(&id) {
+                    gone.push((id, alias.clone()));
+                }
+            }
+            // Gone between the search and this read: not a member, and enters when it resolves.
+            None if entering.contains(&id) => {
+                set.remove(&id);
+                issues.remove(&id);
+                prs.remove(&id);
+                entering.remove(&id);
             }
             None => {}
         }
@@ -430,6 +479,8 @@ fn fetch_repo(r: &Reader<'_>, rp: &RepoPlan, history_days: u32, started_at: Date
         items: items.into_values().collect(),
         gone,
         entered: entering.len(),
+        entering,
+        checked: unchecked,
         left: leaving.len(),
         skipped_also,
     })
@@ -448,6 +499,8 @@ pub struct RepoReport {
     pub entered: usize,
     pub left: usize,
     pub gone: usize,
+    /// Entered items left to re-read on the next read (see the module doc).
+    pub reread: usize,
     pub skipped_also: Vec<u64>,
     /// A newer read of this repo for this project was recorded first; only its observations
     /// were offered (each checked for staleness), not its set or its read times.
@@ -477,11 +530,23 @@ fn record_repo(tx: &mut Tx<'_>, project: &str, f: &RepoFetch) -> Result<RepoRepo
         entered: 0,
         left: 0,
         gone: 0,
+        reread: 0,
         skipped_also: Vec::new(),
         superseded: false,
     };
     let prior = read_state(tx.conn(), project, repo)?;
+    // A newer read of this repo for this project was recorded first.
+    let superseded = match prior.as_ref().and_then(|p| p.good_at.as_deref()) {
+        Some(g) => parse_time(g)? > f.started_at,
+        None => false,
+    };
+    report.superseded = superseded;
     let fetched = match &f.outcome {
+        // Its failure says nothing about the repo now.
+        Err(e) if superseded => {
+            report.error = Some(e.clone());
+            return Ok(report);
+        }
         Err(e) => {
             // A failed read changes nothing but the error: the repo keeps its last good items.
             tx.conn().execute(
@@ -494,17 +559,27 @@ fn record_repo(tx: &mut Tx<'_>, project: &str, f: &RepoFetch) -> Result<RepoRepo
         }
         Ok(x) => x,
     };
-    let superseded = match prior.as_ref().and_then(|p| p.good_at.as_deref()) {
-        Some(g) => parse_time(g)? > f.started_at,
-        None => false,
-    };
     report.mode = Some(if fetched.full { "full" } else { "incremental" }.into());
-    report.superseded = superseded;
     report.skipped_also = fetched.skipped_also.clone();
     report.entered = fetched.entered;
     report.left = fetched.left;
 
     let info = &fetched.info;
+    // Details are kept for this read's set and for the latest set of each other project that
+    // still reads this repo, the repo known by node id (a project's configured name may be an
+    // old one); for this project's own latest set too when that is newer than this read.
+    let mut tracked: BTreeSet<String> = fetched.issues.union(&fetched.pull_requests).cloned().collect();
+    tracked.extend(fetched.checked.iter().cloned());
+    for m in latest_memberships(tx.conn(), &info.node_id)? {
+        let reads_it = if m.project == project {
+            superseded
+        } else {
+            reads_repo(tx.conn(), &m.project, f.plan.other_views.get(&m.project), info)?
+        };
+        if reads_it {
+            tracked.extend(m.all());
+        }
+    }
     let mut offer = |tx: &mut Tx<'_>, o: Observation| -> Result<()> {
         match observe::record(tx, &o)? {
             Observed::Recorded(_) => report.recorded += 1,
@@ -525,7 +600,7 @@ fn record_repo(tx: &mut Tx<'_>, project: &str, f: &RepoFetch) -> Result<RepoRepo
             content: info.content(),
         },
     )?;
-    for it in &fetched.items {
+    for it in fetched.items.iter().filter(|it| tracked.contains(&it.node_id)) {
         offer(
             tx,
             Observation {
@@ -571,6 +646,24 @@ fn record_repo(tx: &mut Tx<'_>, project: &str, f: &RepoFetch) -> Result<RepoRepo
         }
     }
     let current = watermark(tx.conn(), &info.node_id)?;
+    // Another read advanced the watermark past what this read saw of its entering items: a
+    // change between this read and the watermark (less the overlap) would be missed by every
+    // later since-list, so they are read again by node id next time.
+    let lagging: Vec<&String> = match current {
+        Some(w) if w - OVERLAP > f.started_at => fetched.entering.iter().collect(),
+        _ => Vec::new(),
+    };
+    tx.conn().execute(
+        "DELETE FROM rereads WHERE project = ?1 AND repo_node = ?2",
+        params![project, info.node_id],
+    )?;
+    for id in &lagging {
+        tx.conn().execute(
+            "INSERT OR IGNORE INTO rereads (project, repo_node, item) VALUES (?1, ?2, ?3)",
+            params![project, info.node_id, id],
+        )?;
+    }
+    report.reread = lagging.len();
     if current.is_none_or(|w| w < f.started_at) {
         tx.conn().execute(
             "INSERT INTO watermarks (repo, started_at) VALUES (?1, ?2)
@@ -578,17 +671,20 @@ fn record_repo(tx: &mut Tx<'_>, project: &str, f: &RepoFetch) -> Result<RepoRepo
             params![info.node_id, started],
         )?;
     }
-    let full_at = if fetched.full {
-        Some(started.clone())
+    let (full_at, full_seq) = if fetched.full {
+        (Some(started.clone()), Some(ledger::max_seq(tx.conn())?))
     } else {
-        prior.as_ref().and_then(|p| p.full_at.clone())
+        (
+            prior.as_ref().and_then(|p| p.full_at.clone()),
+            prior.as_ref().and_then(|p| p.full_seq),
+        )
     };
     tx.conn().execute(
-        "INSERT INTO reads (project, repo, repo_node, view_hash, mode, attempt_at, good_at, full_at, error)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, ?7, NULL)
+        "INSERT INTO reads (project, repo, repo_node, view_hash, mode, attempt_at, good_at, full_at, full_seq, error)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, ?7, ?8, NULL)
          ON CONFLICT (project, repo) DO UPDATE SET repo_node = excluded.repo_node,
            view_hash = excluded.view_hash, mode = excluded.mode, attempt_at = excluded.attempt_at,
-           good_at = excluded.good_at, full_at = excluded.full_at, error = NULL",
+           good_at = excluded.good_at, full_at = excluded.full_at, full_seq = excluded.full_seq, error = NULL",
         params![
             project,
             repo,
@@ -596,7 +692,8 @@ fn record_repo(tx: &mut Tx<'_>, project: &str, f: &RepoFetch) -> Result<RepoRepo
             f.plan.view_hash,
             report.mode,
             started,
-            full_at
+            full_at,
+            full_seq
         ],
     )?;
     Ok(report)

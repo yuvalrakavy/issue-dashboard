@@ -230,6 +230,19 @@ fn an_issues_status_follows_the_chain_of_the_spec() {
             "new",
             true,
         ),
+        // More comments than were read: an earlier one may be from inside.
+        (
+            Sc::new()
+                .labels(&[])
+                .author("NONE", "stranger")
+                .comment("NONE", "other")
+                .raw(
+                    "comments",
+                    json!({"totalCount": 51, "nodes": [{"author": {"login": "other"}, "authorAssociation": "NONE", "createdAt": "2026-10-20T00:00:00Z"}]}),
+                ),
+            "untriaged",
+            true,
+        ),
         (Sc::new().labels(&["bug"]).author("NONE", "stranger"), "untriaged", true),
         (
             Sc::new().labels(&[]).author("NONE", "stranger").comment("MEMBER", "x"),
@@ -482,7 +495,14 @@ fn priority_is_the_override_then_the_project_then_the_label() {
 #[test]
 fn a_pull_requests_status_is_the_first_of_the_list_that_holds() {
     // (draft, mergeable, checks, review decision, status)
-    let table: Vec<(bool, &str, Option<&str>, Option<&str>, &str)> = vec![
+    type Row = (
+        bool,
+        &'static str,
+        Option<&'static str>,
+        Option<&'static str>,
+        &'static str,
+    );
+    let table: Vec<Row> = vec![
         (true, "CONFLICTING", Some("FAILURE"), Some("CHANGES_REQUESTED"), "draft"),
         (
             false,
@@ -569,6 +589,53 @@ fn a_pull_requests_status_is_the_first_of_the_list_that_holds() {
         if status == "needs-review" {
             // Outside, open and waiting for review: it is waiting on you.
             assert!(d["meta"]["summary"]["waiting_on_you"].as_u64().unwrap() >= prs.len() as u64);
+        }
+    }
+}
+
+#[test]
+fn changes_requested_wait_on_the_author_only_when_requested_on_the_latest_push() {
+    // (the reviews are read, the changes were requested on the head, status)
+    for (read, on_head, status) in [
+        (true, true, "waiting-on-author"),
+        (true, false, "needs-review"),
+        (false, false, "waiting-on-author"),
+    ] {
+        let t = fixture_root();
+        let gh = gh_with(move |req, v| {
+            let mut v = v?;
+            if req.name == "nodes"
+                && let Some(nodes) = v["data"]["nodes"].as_array_mut()
+            {
+                for n in nodes.iter_mut().filter(|n| n["isDraft"].is_boolean()) {
+                    n["isDraft"] = json!(false);
+                    n["mergeable"] = json!("MERGEABLE");
+                    n["reviewDecision"] = json!("CHANGES_REQUESTED");
+                    n["state"] = json!("OPEN");
+                    n["closedAt"] = Value::Null;
+                    n["commits"]["nodes"][0]["commit"]["statusCheckRollup"] = json!({"state": "SUCCESS"});
+                    let head = n["commits"]["nodes"][0]["commit"]["oid"].clone();
+                    let reviewed = if on_head { head } else { json!("0000000aaaaaaa") };
+                    if read {
+                        n["latestOpinionatedReviews"] = json!({"nodes": [
+                            {"state": "APPROVED", "commit": {"oid": "1111111bbbbbbb"}},
+                            {"state": "CHANGES_REQUESTED", "commit": {"oid": reviewed}}
+                        ]});
+                    }
+                }
+            }
+            Ok(v)
+        });
+        let d = doc(&run_with(&t, &gh, &no_pages(), 0));
+        let prs: Vec<&Value> = d["issues"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|i| i["kind"] == "pull_request")
+            .collect();
+        assert!(prs.len() >= 3, "{}", prs.len());
+        for pr in &prs {
+            assert_eq!(pr["status"], status, "read {read} on head {on_head}: {pr}");
         }
     }
 }

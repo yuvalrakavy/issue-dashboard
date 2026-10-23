@@ -4,7 +4,7 @@
 //! A response that carries an error fails the read, except a `NOT_FOUND` where a missing item
 //! is an answer (a node gone, a number that is neither an issue nor a pull request).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, Utc};
 use serde_json::{Map, Value, json};
@@ -48,6 +48,7 @@ const PR_FIELDS: &str = "fragment PrFields on PullRequest {
   comments(last: 50) { totalCount nodes { author { login } authorAssociation createdAt } }
   reactionGroups { content reactors { totalCount } }
   commits(last: 1) { nodes { commit { oid statusCheckRollup { state } } } }
+  latestOpinionatedReviews(first: 50) { nodes { state commit { oid } } }
   closingIssuesReferences(first: 20) { nodes { ...Linked } }
   timelineItems(itemTypes: [LABELED_EVENT, UNLABELED_EVENT], last: 50) { nodes { ... on LabeledEvent { id } ... on UnlabeledEvent { id } } }
   repository { nameWithOwner }
@@ -387,6 +388,14 @@ pub fn item(v: &Value) -> Result<Item> {
             "checks": head.and_then(|c| c.get("statusCheckRollup")).and_then(|s| s.get("state")),
             "closes": closes,
         });
+        if v.get("latestOpinionatedReviews").is_some() {
+            content["pull_request"]["changes_requested_on"] = json!(
+                nodes(v, "latestOpinionatedReviews")
+                    .filter(|r| r.get("state").and_then(Value::as_str) == Some("CHANGES_REQUESTED"))
+                    .filter_map(|r| str_at(r, &["commit", "oid"]))
+                    .collect::<BTreeSet<_>>()
+            );
+        }
     }
     content["linked"] = Value::Object(linked_items);
     Ok(Item {

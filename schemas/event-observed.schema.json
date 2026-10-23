@@ -305,6 +305,13 @@
                           "UNKNOWN"
                         ]
                       },
+                      "changes_requested_on": {
+                        "description": "The commits each reviewer's latest change-requesting review is on (absent in a read without reviews).",
+                        "type": "array",
+                        "items": {
+                          "$ref": "common.schema.json#/$defs/commit"
+                        }
+                      },
                       "head": {
                         "anyOf": [
                           {

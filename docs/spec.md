@@ -1595,7 +1595,9 @@ them rather than refusing.
 - *GitHub access* is one trait, `GitHub::graphql`, with three implementations: `gh api graphql`
   (the real one), `Recorder` (the real one, saving each response) and `Replay` (recorded
   responses, keyed by the query name and its variables with `since` dropped and `closed:>=`
-  dates blanked, so a recording answers a later clock). `nodes` requests are keyed by their
+  dates blanked, so a recording answers a later clock). A search recording keeps its own
+  `closed:>=` date and answers only that window or a shorter one: a longer window would need
+  closed items it does not hold, so it is an error. `nodes` requests are keyed by their
   exact ids; the tests answer them from any node found in the recordings. The CLI picks one by
   `ISSUE_DASHBOARD_REPLAY` / `ISSUE_DASHBOARD_RECORD`; `ISSUE_DASHBOARD_PAGE_SIZE` sets the page
   size (default 100). Every request sends `X-Github-Next-Global-ID: 1`: without it GitHub still
@@ -1605,23 +1607,36 @@ them rather than refusing.
   valid answer (`nodes`, an `also` number). GitHub refuses a query that defines a fragment it
   does not use, so fragments are appended per query.
 - *Membership* is a new event kind, `membership`: subject the repo's node id, one per project
-  and set, recorded only when the set or the repo's name changes. The details of an item are
-  kept when any project's latest set holds it, since the per-repo watermark is shared.
+  and set, recorded only when the set or the repo's name changes. The since-lists are read
+  unfiltered, and the record step keeps the details of an item that this read's set holds, or
+  the latest set of another project that is configured to read the same repo, matched by node
+  id (that project's last read of the name it configures), not by name, since a project may
+  still name a renamed repo by its old name. The per-repo watermark is shared. An item that
+  enters a set is read by node id; when another project's read has already moved the watermark
+  past this read's start (less the overlap), a change between the two would be in no later
+  since-list and was dropped by that read (no set held the item yet), so the entrants go into
+  `rereads` and the project's next read reads them by node id again.
 - *The read state* lives in derived side tables beside the events (not in the backup, like
   `freshness`): `watermarks` (per repo node: the start of the last complete read) and `reads`
   (per project and configured repo: node id, view hash, mode, attempt, last good and last full
-  read, error). After `rebuild` they are empty, so the next read of each repo is full.
+  read with the ledger seq it was recorded at, error) and `rereads`. After `rebuild` they are
+  empty, so the next read of each repo is full.
 - *Full reads:* the first read, a changed view or translation (hashed), a missing watermark,
   and once every 24 hours. A full read reads the whole set by node id and checks every item that
   was in the set at any time since the last full read and is not now (including items that left
-  at an incremental read), recording `item_gone` for those GitHub no longer resolves. An item
-  that resolves elsewhere (transferred) is observed under its new alias, not gone.
+  at an incremental read), recording `item_gone` for those GitHub no longer resolves. "Since the
+  last full read" is by ledger order: the sets from the one current at the full read's seq on,
+  never a time compare (event times carry milliseconds, read times do not). An item that
+  resolves elsewhere (transferred) is observed under its new alias, not gone. An item entering
+  the set that GitHub does not resolve is not a member (it enters when it resolves); a member
+  that does not resolve at a full read stays one until it leaves the set.
 - *Renames:* searches, `also` numbers and the since-lists use the repo's current
   `nameWithOwner` from the repo query, not the configured name, so a renamed repo keeps its
   items. Config keeps naming the repo by its old name until the owner edits it.
 - *Stale fetches:* a fetch whose start is older than the project's last good read of the repo
   (`superseded`) offers only its observations, each checked for staleness, and records neither
-  its set nor its read times. The watermark only moves forward.
+  its set nor its read times; a superseded fetch that failed records nothing, so the newer
+  read's status stands. The watermark only moves forward.
 - *Ingest* (page documents, passed to `cycle --pages <file>` as `{decisions, launches, views,
   requests}`; an unknown collection is refused): launches first, then decisions, then the
   cancels, then views and requests. A document that fails its schema or the owner check is
@@ -1631,8 +1646,10 @@ them rather than refusing.
 - *Cancels* are applied by `apply_cancels`, run on every ingest and after `reserve --request`,
   which withdraws each requested or queued launch an effective `cancel_launch` names, whichever
   arrived first. A launch already reserved is past cancelling: the decision's ack says refused.
-  *Undo too late:* an undo of a `cancel_launch` recorded after the withdrawal it caused is
-  refused ("too late"), since a withdrawal is final.
+  `reserve --request` for a withdrawn launch answers `withdrawn` on every try, so a retried
+  command gets the same answer. *Undo too late:* an undo recorded after the withdrawal a
+  `cancel_launch` caused is refused ("too late") when it would cancel that cancel, directly or
+  through a chain of undos (undoing the undo of an undo), since a withdrawal is final.
 - *The outbox:* the cycle's sequence number is the seq of a new `outbox` event (subject the
   project), so it rises and survives `rebuild`. Each cycle writes
   `outbox/<project>/<seq>.json` (temp file, fsync, rename) with the meta, issue, acks and
@@ -1641,7 +1658,12 @@ them rather than refusing.
   it). Derive runs after the root lock is released, over a read transaction begun while the lock
   was held, so it sees exactly its own commit.
 - *Derived status* follows 4.4 for pull requests and then: umbrella, new, untriaged,
-  needs-decision, in-progress, blocked, ready. Priority is override, then the project's
+  needs-decision, in-progress, blocked, ready. `waiting-on-author` needs the changes requested
+  on the head commit ("since the last push"): the read takes each reviewer's latest
+  change-requesting review commit (`latestOpinionatedReviews`, probed on rhaiscript/rhai#1194,
+  stored as `changes_requested_on`); an observation without it keeps GitHub's aggregate
+  `reviewDecision`. Only the latest 50 comments of an issue are read, so an issue with more is
+  not "new" (an earlier inside comment may be unseen). Priority is override, then the project's
   priority, then the label. Closed items older than the history window are left out.
 - **Open (for the owner):** "new" is approximated as open, with no comment by an inside author
   and no labels; a closed or merged pull request still gets a pull-request status (e.g.

@@ -260,12 +260,25 @@ fn every_member_of_a_full_read_is_read_again_not_only_the_new_ones() {
     let first = snap(&t, &gh(), "home", at(0));
     let before = first.iter().find(|x| x.repo == STORE).unwrap().entered;
     assert!(before > 10);
-    // The daily full read, with nothing new in the set: everything is read by id again.
-    let again = snap(&t, &gh(), "home", at(24 * 60));
-    let n = members(&t, "home", STORE).len();
+    // The daily full read, with nothing new in the set: everything is read by id again, and
+    // nothing counts as entering.
+    let asked = std::sync::Arc::new(std::sync::Mutex::new(BTreeSet::<String>::new()));
+    let log = asked.clone();
+    let gh = gh_with(move |req, v| {
+        if req.name == "nodes" {
+            for id in req.variables["ids"].as_array().unwrap() {
+                log.lock().unwrap().insert(id.as_str().unwrap().to_string());
+            }
+        }
+        v
+    });
+    let again = snap(&t, &gh, "home", at(24 * 60));
+    let m = members(&t, "home", STORE);
     let store = again.iter().find(|x| x.repo == STORE).unwrap();
     assert_eq!(store.mode.as_deref(), Some("full"));
-    assert_eq!(store.entered, n, "{store:?}");
+    assert_eq!(store.entered, 0, "{store:?}");
+    let asked = asked.lock().unwrap();
+    assert!(m.iter().all(|id| asked.contains(id)), "{store:?}");
 }
 
 #[test]

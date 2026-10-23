@@ -88,6 +88,16 @@ fn key_of(name: &str, variables: &Value) -> String {
     format!("{name}:{}", canonical_json(&vars))
 }
 
+/// The `closed:>=` date of a search, if it has one.
+fn cutoff(variables: &Value) -> Option<String> {
+    variables
+        .get("q")?
+        .as_str()?
+        .split(' ')
+        .find_map(|w| w.strip_prefix("closed:>="))
+        .map(str::to_string)
+}
+
 fn blank_dates(q: &str) -> String {
     q.split(' ')
         .map(|w| match w.strip_prefix("closed:>=") {
@@ -106,6 +116,9 @@ pub type Hook = Box<dyn Fn(&Request, Option<Value>) -> Result<Value> + Send + Sy
 /// answers it.
 pub struct Replay {
     recordings: BTreeMap<String, Value>,
+    /// The `closed:>=` date each search was recorded with: it serves a request for that window
+    /// or a shorter one, never a longer one, whose older items it does not hold.
+    cutoffs: BTreeMap<String, String>,
     hook: Option<Hook>,
     calls: Mutex<Vec<String>>,
 }
@@ -114,6 +127,7 @@ impl Replay {
     /// Loads every recording (`*.json`, as [`Recorder`] writes them) in `dir`.
     pub fn load(dir: &Path) -> Result<Replay> {
         let mut recordings = BTreeMap::new();
+        let mut cutoffs = BTreeMap::new();
         let mut files: Vec<PathBuf> = fs::read_dir(dir)?
             .map(|e| e.map(|e| e.path()))
             .collect::<std::io::Result<_>>()?;
@@ -132,10 +146,14 @@ impl Replay {
             ) else {
                 continue;
             };
+            if let Some(c) = cutoff(vars) {
+                cutoffs.insert(key_of(name, vars), c);
+            }
             recordings.insert(key_of(name, vars), resp.clone());
         }
         Ok(Replay {
             recordings,
+            cutoffs,
             hook: None,
             calls: Mutex::new(Vec::new()),
         })
@@ -175,10 +193,23 @@ impl GitHub for Replay {
     fn graphql(&self, req: &Request) -> Result<Value> {
         let key = replay_key(req);
         self.calls.lock().expect("calls lock").push(key.clone());
-        let recorded = self.recordings.get(&key).cloned();
+        // ISO dates compare as strings.
+        let uncovered = match (cutoff(&req.variables), self.cutoffs.get(&key)) {
+            (Some(asked), Some(recorded)) if asked < *recorded => Some(recorded.clone()),
+            _ => None,
+        };
+        let recorded = match uncovered {
+            Some(_) => None,
+            None => self.recordings.get(&key).cloned(),
+        };
         match &self.hook {
             Some(h) => h(req, recorded),
-            None => recorded.ok_or_else(|| Error::GitHub(format!("no recording for {key}"))),
+            None => recorded.ok_or_else(|| match uncovered {
+                Some(c) => Error::GitHub(format!(
+                    "the recording for {key} holds items closed since {c} only; the request needs an earlier window"
+                )),
+                None => Error::GitHub(format!("no recording for {key}")),
+            }),
         }
     }
 }

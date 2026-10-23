@@ -103,6 +103,42 @@ fn snapshot_then_cycle_writes_an_outbox_with_the_acks() {
 }
 
 #[test]
+fn reserve_request_retried_after_its_launch_was_withdrawn_says_withdrawn_again() {
+    let t = Tracker::new();
+    t.ok(&["snapshot", "--project", "home"]);
+    let pages = t.dir.path().join("pages.json");
+    fs::write(
+        &pages,
+        json!({"decisions": [{
+            "id": "D_cancel", "project": "home", "author": "user_owner",
+            "created_at": "2026-10-23T10:00:00Z", "action": "cancel_launch",
+            "target": {"launch": "L_one"}
+        }]})
+        .to_string(),
+    )
+    .unwrap();
+    t.ok(&["cycle", "--project", "home", "--pages", pages.to_str().unwrap()]);
+    let request = t.dir.path().join("request.json");
+    fs::write(
+        &request,
+        json!({
+            "id": "L_one", "project": "home", "author": "user_owner",
+            "created_at": "2026-10-23T10:05:00Z", "kind": "fix",
+            "items": ["I_kwDONszNXs8AAAABLDRZzA"], "aliases": ["yuvalrakavy/Store#1"],
+            "recipe": "lanes",
+            "routing": {"model": "claude-opus-5-5", "effort": "medium"}
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let args = ["reserve", "--request", request.to_str().unwrap(), "--dispatcher", "D1"];
+    let first = t.ok(&args);
+    assert_eq!(first, json!({"result": "withdrawn", "launch": "L_one"}));
+    // The answer to the first try was lost; the dispatcher asks again.
+    assert_eq!(t.ok(&args), first);
+}
+
+#[test]
 fn a_pages_file_with_an_unknown_collection_exits_1() {
     let t = Tracker::new();
     let pages = t.dir.path().join("pages.json");

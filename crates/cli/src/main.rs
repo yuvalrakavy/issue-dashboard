@@ -322,8 +322,10 @@ fn run(cli: Cli) -> anyhow::Result<Value> {
                 let id = match &request {
                     Some(doc) => {
                         launch::request(tx, doc, Via::Reserve)?;
-                        // A cancel ingested before this launch was requested takes effect now.
-                        if ingest::apply_cancels(tx, &doc.project)?.contains(&doc.id) {
+                        // A cancel ingested before this launch was requested takes effect now,
+                        // or did on an earlier try of this command: either way it is withdrawn.
+                        ingest::apply_cancels(tx, &doc.project)?;
+                        if launch::load(tx.conn(), &doc.id)?.is_some_and(|l| l.state == launch::State::Withdrawn) {
                             return Ok(json!({"result": "withdrawn", "launch": doc.id}));
                         }
                         doc.id.clone()

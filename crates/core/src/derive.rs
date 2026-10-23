@@ -81,7 +81,7 @@ fn pr_status(pr: &Value) -> &'static str {
         "conflicting"
     } else if matches!(s("checks"), "FAILURE" | "ERROR") {
         "checks-failing"
-    } else if s("review_decision") == "CHANGES_REQUESTED" {
+    } else if s("review_decision") == "CHANGES_REQUESTED" && changes_requested_on_head(pr) {
         "waiting-on-author"
     } else if matches!(s("checks"), "PENDING" | "EXPECTED") {
         "checks-running"
@@ -89,6 +89,16 @@ fn pr_status(pr: &Value) -> &'static str {
         "approved"
     } else {
         "needs-review"
+    }
+}
+
+/// Whether the changes requested are on the latest push (4.4: "since the last push"): a
+/// change-requesting review of the head commit. A read without the reviews (an older
+/// observation) keeps GitHub's aggregate decision.
+fn changes_requested_on_head(pr: &Value) -> bool {
+    match pr.get("changes_requested_on").and_then(Value::as_array) {
+        Some(oids) => pr.get("head").is_some_and(|h| !h.is_null() && oids.contains(h)),
+        None => true,
     }
 }
 
@@ -242,7 +252,11 @@ impl Context<'_> {
                 let who = cm.get("author").and_then(Value::as_str).unwrap_or("");
                 INSIDE.contains(&a) || self.maintainers.iter().any(|m| m == who)
             });
-        commented || !labels.is_empty()
+        // Only the latest comments are read: when there are more, an earlier inside comment may
+        // be unseen, so the thread is not taken as unanswered.
+        let read = c.get("comments").and_then(Value::as_array).map_or(0, Vec::len) as u64;
+        let unseen = c.get("comment_count").and_then(Value::as_u64).unwrap_or(0) > read;
+        commented || unseen || !labels.is_empty()
     }
 
     fn any_open(&self, ids: &[String], content: &Value) -> Result<bool> {
