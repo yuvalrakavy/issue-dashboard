@@ -58,3 +58,20 @@ test("the schema's session fields are the ones the page reads", () => {
   for (const k of ["id", "title", "running", "last_active_at", "link", "match"]) assert.ok(k in props, "doc-issue sessions has no " + k);
   assert.deepEqual(props.match.properties.kind.enum.slice().sort(), ["exact", "probable"]);
 });
+
+test("the age changes unit exactly at an hour and at a day, and rounds down", () => {
+  const ago = (mins) => D.sessionLines(issue([session({ last_active_at: new Date(now.getTime() - mins * 60000).toISOString() })]), now)[0].ago;
+  assert.equal(ago(1), "1 min ago");
+  assert.equal(ago(59), "59 min ago");
+  assert.equal(ago(60), "1 h ago");
+  assert.equal(ago(119), "1 h ago");
+  assert.equal(ago(1439), "23 h ago");
+  assert.equal(ago(1440), "1 d ago");
+  assert.equal(ago(2159), "1 d ago");
+});
+
+test("a session whose row has no link at all shows a null link", () => {
+  const s = session();
+  delete s.link;
+  assert.equal(D.sessionLines(issue([s]), now)[0].link, null);
+});
