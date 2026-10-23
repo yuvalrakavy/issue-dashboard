@@ -31,8 +31,18 @@ The next scheduled run starts fresh, and every step is safe to repeat.
    `out_dir: WORK/pages`. Follow `next_cursor` until there is none. An empty collection is
    fine.
 2. **Assemble them:** `BIN pages --dir WORK/pages --out WORK/pages.json`.
-3. **Run the cycle:** `BIN --root ROOT cycle --project PROJECT --pages WORK/pages.json`. It
-   prints JSON; its `outbox` field is the outbox file. Exit 1 is a refusal (stop and
+2a. **List the app's sessions** (spec 10.10). Note the time first (`date -u +%Y-%m-%dT%H:%M:%SZ`),
+   then call `mcp__ccd_session_mgmt__list_sessions` with `include_archived: true` and
+   `limit: 200`. Write `WORK/sessions.json` with the Write tool as
+   `{"listed_at": "<that time>", "limit": 200, "sessions": <the reply's array, verbatim>}`.
+   The list leaves out the session that runs the job, so a run started by hand from a session
+   working on an issue shows that session as gone until a later run lists it again.
+   The rows carry only titles, ids, paths, branches, PR numbers, times and links: never fetch
+   a transcript or call any other session tool. If the tool is not available (the job runs
+   outside the app), skip this step and leave out `--sessions` below: the page then shows no
+   session, and no session is taken for gone.
+3. **Run the cycle:** `BIN --root ROOT cycle --project PROJECT --pages WORK/pages.json --sessions WORK/sessions.json`.
+   It prints JSON; its `outbox` field is the outbox file. Exit 1 is a refusal (stop and
    report it); exit 2 is an environment error.
 4. **Read the page's state:**
    - `ArtifactData` `get` with `collection: meta`, `doc_id: active` and `out_dir: WORK/active`.
@@ -61,7 +71,8 @@ The next scheduled run starts fresh, and every step is safe to repeat.
    - A refused delete batch is not an error: someone deleted those documents first. Stop
      cleaning; the next run lists again and finishes.
 9. **Report** in two lines: the generation published (or why not), the cycle's per-repo
-   errors, the ingest counts and skipped documents, and the generations cleaned.
+   errors, the ingest counts and skipped documents, the sessions seen, gone and skipped, and
+   the generations cleaned.
 
 ## Never
 

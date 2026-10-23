@@ -1793,7 +1793,15 @@ them rather than refusing.
   Each issue document carries `sessions`: id, title, running, last active, link, and the match
   (`exact` via `launch` or `pull_request`, `probable` via `title` or `branch`), newest first.
   As built, the working directory is kept in the ledger for matching (the page never gets it);
-  the rest is the list above.
+  the rest is the list above. `list_sessions` leaves out the session that calls it, so a sync
+  run by hand from a session shows that session as gone until a later run lists it; the
+  scheduled task's own session works on no issue. Without `--sessions` nothing is ingested and
+  nothing is taken for gone. **Page:** a card or Queue row shows its newest session ("In
+  progress", the title linking to the session, running or idle, how long since it was active,
+  and "probably" for a probable match) and a count of the rest; Details shows each, with its
+  link as selectable text and a Copy link button, since a `claude://` link may not open from
+  the page. The Queue's "In progress" pill keeps the items with a session or the
+  `in-progress` status.
 - *Corrections from slice 3's gate (round 1).* A refused send's `not_sent` outranks the
   tracker's `requested` (every ingested launch is `requested`, heard or not); only a later
   transition supersedes it. Each launch thread gets its own thread record (`T_…`, written once;

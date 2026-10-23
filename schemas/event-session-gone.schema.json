@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yuvalrakavy/issue-dashboard/schemas/event-session-gone.schema.json",
+  "title": "Ledger event: session_gone",
+  "description": "A session seen before is archived, or is missing from a list that would have shown it (10.3, 10.10).",
+  "allOf": [
+    {
+      "$ref": "common.schema.json#/$defs/eventEnvelope"
+    }
+  ],
+  "properties": {
+    "kind": {
+      "const": "session_gone"
+    },
+    "subject": {
+      "type": "string",
+      "minLength": 1
+    },
+    "distinct": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "seen"
+      ],
+      "properties": {
+        "seen": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "data": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "why",
+        "listed_at"
+      ],
+      "properties": {
+        "why": {
+          "enum": [
+            "archived",
+            "absent"
+          ]
+        },
+        "listed_at": {
+          "$ref": "common.schema.json#/$defs/timestamp"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "listed_at": "2026-10-23T16:47:00Z",
+  "limit": 200,
+  "sessions": [
+    {
+      "sessionId": "local_23265ad0",
+      "title": "Fix gh #403: one parked DeleteStore stops the server",
+      "cwd": "/Users/owner/Projects/Store",
+      "isArchived": false,
+      "isRunning": true,
+      "lastActivityAt": "2026-10-23T16:46:02.205Z",
+      "link": "claude://claude.ai/epitaxy/local_23265ad0",
+      "name": "fix-gh-403",
+      "group": null
+    }
+  ]
+}

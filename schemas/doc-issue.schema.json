@@ -423,6 +423,67 @@
           }
         }
       ]
+    },
+    "sessions": {
+      "description": "The app's sessions matched to this item (10.10), newest activity first; absent or empty when none. Never the session's working directory or transcript.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "title",
+          "running",
+          "last_active_at",
+          "link",
+          "match"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "title": {
+            "type": "string"
+          },
+          "running": {
+            "type": "boolean"
+          },
+          "last_active_at": {
+            "$ref": "common.schema.json#/$defs/timestamp"
+          },
+          "link": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "match": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "kind",
+              "via"
+            ],
+            "properties": {
+              "kind": {
+                "enum": [
+                  "exact",
+                  "probable"
+                ]
+              },
+              "via": {
+                "enum": [
+                  "launch",
+                  "pull_request",
+                  "title",
+                  "branch"
+                ]
+              }
+            }
+          }
+        }
+      }
     }
   }
 }

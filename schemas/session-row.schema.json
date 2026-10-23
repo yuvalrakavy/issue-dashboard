@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yuvalrakavy/issue-dashboard/schemas/session-row.schema.json",
+  "title": "One row of the app's session list",
+  "description": "A session as `list_sessions` returns it (10.10). Only the fields named here are kept; any other field is dropped at ingest.",
+  "type": "object",
+  "required": [
+    "sessionId",
+    "title",
+    "cwd",
+    "isArchived",
+    "isRunning",
+    "lastActivityAt"
+  ],
+  "properties": {
+    "sessionId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "title": {
+      "type": "string"
+    },
+    "cwd": {
+      "type": "string",
+      "minLength": 1
+    },
+    "branch": {
+      "type": "string"
+    },
+    "prNumber": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "isArchived": {
+      "type": "boolean"
+    },
+    "isRunning": {
+      "type": "boolean"
+    },
+    "lastActivityAt": {
+      "$ref": "common.schema.json#/$defs/timestamp"
+    },
+    "link": {
+      "type": "string"
+    }
+  }
+}

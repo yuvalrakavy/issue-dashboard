@@ -1,0 +1,113 @@
+{
+  "listed_at": "2026-10-23T16:47:00Z",
+  "limit": 8,
+  "sessions": [
+    {
+      "sessionId": "local_23265ad0-0776-4092-bfb7-8a21ffcc7a54",
+      "title": "Fix gh #403: one parked DeleteStore stops the server",
+      "cwd": "/Users/yuval/Documents/Projects/Store",
+      "isArchived": false,
+      "isRunning": true,
+      "lastActivityAt": "2026-10-23T16:46:02.205Z",
+      "group": null,
+      "link": "claude://claude.ai/epitaxy/local_23265ad0-0776-4092-bfb7-8a21ffcc7a54",
+      "remoteControlActive": false,
+      "name": "fix-gh-403-one-parked-de",
+      "startedBy": "local_b7166e43-c476-40a4-bd71-912d082b3ab5"
+    },
+    {
+      "sessionId": "local_b7166e43-c476-40a4-bd71-912d082b3ab5",
+      "title": "Development process optimization",
+      "cwd": "/Users/yuval/Documents/Projects/Store",
+      "isArchived": false,
+      "isRunning": false,
+      "lastActivityAt": "2026-10-23T16:45:59.607Z",
+      "group": null,
+      "link": "claude://claude.ai/epitaxy/local_b7166e43-c476-40a4-bd71-912d082b3ab5",
+      "remoteControlActive": true,
+      "name": "development-process-opti"
+    },
+    {
+      "sessionId": "local_4872e48b-c8eb-4500-bbff-f4439b143769",
+      "title": "Issue tracking dashboard design",
+      "cwd": "/Users/yuval/Documents/Projects/Store",
+      "isArchived": false,
+      "isRunning": false,
+      "lastActivityAt": "2026-10-23T16:36:41.113Z",
+      "group": null,
+      "link": "claude://claude.ai/epitaxy/local_4872e48b-c8eb-4500-bbff-f4439b143769",
+      "remoteControlActive": true
+    },
+    {
+      "sessionId": "local_b00b74d6-f740-4f61-a6f1-c9e8dde189a3",
+      "title": "S5: split six over-cap repo skills into 25 KB routers",
+      "cwd": "/Users/yuval/Documents/Projects/Store/.claude/worktrees/cost-and-lint-7dbf3f",
+      "branch": "claude/relaxed-hofstadter-748086",
+      "isArchived": true,
+      "isRunning": false,
+      "prNumber": 415,
+      "prState": "MERGED",
+      "lastActivityAt": "2026-10-23T15:43:01.608Z",
+      "group": null,
+      "link": "claude://claude.ai/epitaxy/local_b00b74d6-f740-4f61-a6f1-c9e8dde189a3",
+      "remoteControlActive": false,
+      "name": "s5-split-six-over-cap-re",
+      "startedBy": "local_b7166e43-c476-40a4-bd71-912d082b3ab5"
+    },
+    {
+      "sessionId": "local_106a3a58-1cff-4ba4-8116-973f89db380f",
+      "title": "Process retro over the 23 unconsolidated entries",
+      "cwd": "/Users/yuval/Documents/Projects/Store/.claude/worktrees/cost-and-lint-7dbf3f",
+      "branch": "claude/youthful-newton-68d0ee",
+      "isArchived": true,
+      "isRunning": false,
+      "prNumber": 414,
+      "prState": "MERGED",
+      "lastActivityAt": "2026-10-23T15:31:25.490Z",
+      "group": null,
+      "link": "claude://claude.ai/epitaxy/local_106a3a58-1cff-4ba4-8116-973f89db380f",
+      "remoteControlActive": false,
+      "name": "process-retro-over-the-2",
+      "startedBy": "local_b7166e43-c476-40a4-bd71-912d082b3ab5"
+    },
+    {
+      "sessionId": "local_530679a0-9326-4c9d-bc43-2cde46066aeb",
+      "title": "issue-dashboard phase 1 slice 2: cycle, snapshot, outbox",
+      "cwd": "/Users/yuval/Documents/Projects/issue-dashboard",
+      "isArchived": true,
+      "isRunning": false,
+      "prNumber": 2,
+      "prState": "MERGED",
+      "lastActivityAt": "2026-10-23T15:00:04.566Z",
+      "group": null,
+      "link": "claude://claude.ai/epitaxy/local_530679a0-9326-4c9d-bc43-2cde46066aeb",
+      "remoteControlActive": false,
+      "name": "dash-slice2",
+      "startedBy": "local_4872e48b-c8eb-4500-bbff-f4439b143769"
+    },
+    {
+      "sessionId": "local_d4a073a6-ae99-437d-8af2-9397ca022ecd",
+      "title": "Behavior Enhancement (5c)",
+      "cwd": "/Users/yuval/Documents/Projects/Store",
+      "isArchived": false,
+      "isRunning": false,
+      "lastActivityAt": "2026-10-23T12:40:42.376Z",
+      "group": null,
+      "link": "claude://claude.ai/epitaxy/local_d4a073a6-ae99-437d-8af2-9397ca022ecd",
+      "remoteControlActive": true
+    },
+    {
+      "sessionId": "local_f1668868-fe3e-47f5-9e1a-a98a7cc14a8f",
+      "title": "P4+P5: gate selection by directory, nextest, nightly net",
+      "cwd": "/Users/yuval/Documents/Projects/Store",
+      "isArchived": true,
+      "isRunning": false,
+      "lastActivityAt": "2026-10-23T12:12:04.231Z",
+      "group": null,
+      "link": "claude://claude.ai/epitaxy/local_f1668868-fe3e-47f5-9e1a-a98a7cc14a8f",
+      "remoteControlActive": false,
+      "name": "s3-gate-derivation",
+      "startedBy": "local_6e1ee643-7846-4ced-abac-8dfdde36fa9b"
+    }
+  ]
+}
