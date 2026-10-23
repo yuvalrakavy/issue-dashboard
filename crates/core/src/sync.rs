@@ -5,12 +5,17 @@
 //! wakes is an ordinary cycle. An item request names node ids, and the next read of the item's
 //! repo reads each of them by node id, whatever the watermark says, as it reads an entering item.
 //!
-//! Nothing marks a request served. It is waiting while the project's last good read of the repo
-//! started before it was recorded, so a failed read leaves it waiting, a read that started
-//! before it does not serve it, and any number of requests before a run cost one read.
+//! A request is served by the ledger's order, never by the clock. A read plan notes the last
+//! event seq when it is made (`RepoPlan::requests_upto`) and reads the items of every request
+//! after the seq its project's last good read of the repo served (the derived `served` table);
+//! once the read is recorded good, that seq is served. So a failed read leaves its requests
+//! waiting, a request recorded while a read runs waits for the next read, and any number of
+//! requests before a run cost one read. Losing `served` (a rebuild) costs one read by id of
+//! each item ever requested, never a missed request.
 
-use chrono::{DateTime, Utc};
-use rusqlite::Connection;
+use std::collections::BTreeSet;
+
+use rusqlite::{Connection, OptionalExtension, params};
 use serde::Serialize;
 use serde_json::{Value, json};
 
@@ -19,7 +24,6 @@ use crate::config::ConfigSet;
 use crate::event::Kind;
 use crate::ingest;
 use crate::ledger::{self, Tx};
-use crate::root::parse_time;
 use crate::snapshot;
 use crate::{Error, Result};
 
@@ -73,34 +77,45 @@ pub fn request(tx: &mut Tx<'_>, config: &ConfigSet, project: &str, issue: Option
     })
 }
 
-/// The node id of `alias` among the members of `project`'s set, as the ledger last saw them.
+/// The node id of `alias` among the members of `project`'s sets. The repo part may be the
+/// name the project's config uses or the repo's name at its latest read; the number is matched
+/// within that repo, since an item's own alias keeps the name it was last read under.
 fn tracked(conn: &Connection, config: &ConfigSet, project: &str, alias: &str) -> Result<String> {
     let shape = || Error::refused(format!("{alias}: an issue is named owner/repo#N"));
     let (repo, number) = alias.split_once('#').ok_or_else(shape)?;
     let well_formed = repo.split('/').count() == 2
         && repo.split('/').all(|p| !p.is_empty())
-        && !number.is_empty()
         && number.bytes().all(|b| b.is_ascii_digit());
-    if !well_formed {
-        return Err(shape());
-    }
+    let number: u64 = match number.parse() {
+        Ok(n) if well_formed => n,
+        _ => return Err(shape()),
+    };
     for view in config.views(project)?.into_values() {
+        // After a rebuild `reads` is empty; the ledger still knows the repo (as the plan finds it).
         let node = match snapshot::read_state(conn, project, &view.repo)?.and_then(|s| s.repo_node) {
-            Some(n) => n,
-            None => continue,
+            Some(n) => Some(n),
+            None => snapshot::repo_node_of(conn, &view.repo)?,
         };
+        let Some(node) = node else { continue };
+        let current = ledger::latest(conn, &node, Kind::Observed)?
+            .and_then(|e| e.data.get("alias").and_then(Value::as_str).map(str::to_string));
+        let names_it =
+            repo.eq_ignore_ascii_case(&view.repo) || current.as_deref().is_some_and(|c| repo.eq_ignore_ascii_case(c));
+        if !names_it {
+            continue;
+        }
         let Some((_, members)) = snapshot::membership(conn, project, &node)? else {
             continue;
         };
         for id in members.all() {
-            // The alias carries the repo's current name, so a renamed repo answers to it.
             let seen = ledger::latest(conn, &id, Kind::Observed)?;
-            if seen
+            let n = seen
                 .as_ref()
                 .and_then(|e| e.data.get("alias"))
                 .and_then(Value::as_str)
-                .is_some_and(|a| a.eq_ignore_ascii_case(alias))
-            {
+                .and_then(|a| a.rsplit_once('#'))
+                .and_then(|(_, n)| n.parse::<u64>().ok());
+            if n == Some(number) {
                 return Ok(id);
             }
         }
@@ -110,23 +125,43 @@ fn tracked(conn: &Connection, config: &ConfigSet, project: &str, alias: &str) ->
     )))
 }
 
-/// Every item request of `project`: when it was recorded, and the node ids it names.
-pub(crate) fn item_requests(conn: &Connection, project: &str) -> Result<Vec<(DateTime<Utc>, Vec<String>)>> {
-    let mut out = Vec::new();
-    for e in ledger::events_by_kind(conn, Kind::Request)? {
+/// The ledger seq up to which `project`'s good reads of the repo served its sync requests.
+pub(crate) fn served(conn: &Connection, project: &str, repo_node: &str) -> Result<i64> {
+    Ok(conn
+        .query_row(
+            "SELECT seq FROM served WHERE project = ?1 AND repo_node = ?2",
+            params![project, repo_node],
+            |r| r.get(0),
+        )
+        .optional()?
+        .unwrap_or(0))
+}
+
+/// Records that a good read of the repo served `project`'s sync requests up to `upto`.
+pub(crate) fn mark_served(conn: &Connection, project: &str, repo_node: &str, upto: i64) -> Result<()> {
+    conn.execute(
+        "INSERT INTO served (project, repo_node, seq) VALUES (?1, ?2, ?3)
+         ON CONFLICT (project, repo_node) DO UPDATE SET seq = MAX(seq, excluded.seq)",
+        params![project, repo_node, upto],
+    )?;
+    Ok(())
+}
+
+/// The items named by `project`'s sync requests recorded after seq `after`, up to `upto`.
+pub(crate) fn waiting(conn: &Connection, project: &str, after: i64, upto: i64) -> Result<BTreeSet<String>> {
+    let mut out = BTreeSet::new();
+    for e in ledger::events_of_kind_between(conn, Kind::Request, after, upto)? {
         let doc = &e.data["document"];
         if e.data["project"] != project || doc["kind"] != "sync" {
             continue;
         }
-        let items: Vec<String> = doc["items"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(|i| i.as_str().map(str::to_string))
-            .collect();
-        if !items.is_empty() {
-            out.push((parse_time(&e.time)?, items));
-        }
+        out.extend(
+            doc["items"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|i| i.as_str().map(str::to_string)),
+        );
     }
     Ok(out)
 }

@@ -1,20 +1,23 @@
 //! Sync requests (7.2, 10.8): `sync-now` and the page's `sync` request make the next run read
-//! the named item by node id, whatever the watermark says, until a good read of its repo has
-//! started after the request.
+//! the named item by node id, whatever the watermark says, until a good read of its repo whose
+//! plan was made after the request has been recorded.
 
 mod common;
 
 use std::fs;
+use std::path::Path;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use chrono::{DateTime, Utc};
 use common::TempRoot;
 use common::fixture::*;
 use issue_dashboard_core::config::ConfigSet;
 use issue_dashboard_core::event::Kind;
-use issue_dashboard_core::github::Replay;
+use issue_dashboard_core::github::{GitHub, Replay};
 use issue_dashboard_core::ingest::Pages;
 use issue_dashboard_core::sync::{self, Requested};
-use issue_dashboard_core::{Error, Result, cycle, ledger, snapshot};
+use issue_dashboard_core::{Error, Result, Root, cycle, ledger, snapshot};
 use serde_json::{Value, json};
 
 fn snap(t: &TempRoot, gh: &Replay, now: DateTime<Utc>) {
@@ -22,11 +25,14 @@ fn snap(t: &TempRoot, gh: &Replay, now: DateTime<Utc>) {
 }
 
 fn ask(t: &TempRoot, issue: Option<&str>, now: DateTime<Utc>) -> Result<Requested> {
-    let dir = t.path().to_path_buf();
-    t.root.mutate_with_clock(
+    ask_in(&t.root, t.path(), issue, now)
+}
+
+fn ask_in(root: &Root, dir: &Path, issue: Option<&str>, now: DateTime<Utc>) -> Result<Requested> {
+    root.mutate_with_clock(
         move || now,
         |tx| {
-            let config = ConfigSet::load(&dir)?;
+            let config = ConfigSet::load(dir)?;
             config.record(tx)?;
             sync::request(tx, &config, "home", issue)
         },
@@ -100,7 +106,7 @@ fn a_requested_item_is_read_by_id_on_the_next_read_and_not_after() {
     let g = gh();
     snap(&t, &g, at(20));
     assert_eq!(reads_by_id(&g, &x), 1, "{:?}", g.calls());
-    // Served: the read started after the request.
+    // Served: the read was planned after the request.
     let g = gh();
     snap(&t, &g, at(30));
     assert_eq!(reads_by_id(&g, &x), 0, "{:?}", g.calls());
@@ -143,7 +149,7 @@ fn a_request_stays_waiting_while_its_repos_read_fails() {
 #[test]
 fn a_request_made_after_a_read_started_waits_for_the_next_one() {
     let (t, x) = settled();
-    // The read at 20 records first; a request stamped at 25 is newer than that read's start.
+    // The read at 20 records first; the request after it waits for the next read.
     snap(&t, &gh(), at(20));
     ask(&t, Some(&alias_of(&t, &x)), at(25)).unwrap();
     let g = gh();
@@ -231,4 +237,86 @@ fn a_page_sync_request_is_ingested_once_and_read_in_that_cycle() {
     let r = cycle::cycle(&t.root, &g, "home", &pages, &move || at(30), PAGE).unwrap();
     assert_eq!(r.ingest.requests, 0);
     assert_eq!(reads_by_id(&g, &x), 0, "{:?}", g.calls());
+}
+
+// Gate round 1: a request is served by the ledger's order, not by the clock.
+
+#[test]
+fn a_request_made_while_a_read_fetches_waits_for_the_next_read() {
+    let (t, x) = settled();
+    let alias = alias_of(&t, &x);
+    let root = t.root.clone();
+    let dir = t.path().to_path_buf();
+    let asked = Arc::new(AtomicBool::new(false));
+    let once = asked.clone();
+    let s = Switch::new();
+    // The request lands after the plan was made and before the read records, stamped with the
+    // read's own start time (the clocks tie).
+    s.set(move |req, v| {
+        if is_search_of(req, STORE) && !once.swap(true, Ordering::SeqCst) {
+            ask_in(&root, &dir, Some(&alias), at(20)).unwrap();
+        }
+        v
+    });
+    snap(&t, &s.gh(), at(20));
+    assert!(asked.load(Ordering::SeqCst));
+    let g = gh();
+    snap(&t, &g, at(30));
+    assert_eq!(reads_by_id(&g, &x), 1, "{:?}", g.calls());
+}
+
+#[test]
+fn after_a_rename_an_item_is_requested_by_the_repos_current_name() {
+    let (t, x) = settled();
+    let number = alias_of(&t, &x).rsplit_once('#').unwrap().1.to_string();
+    let renamed = "yuvalrakavy/StoreRenamed";
+    let lib = library();
+    let s = Switch::new();
+    s.set(move |req, v| {
+        let v = match v {
+            Ok(v) => v,
+            // A request under the new name: serve the recording made under the old one.
+            Err(_) => {
+                let mut vars = req.variables.clone();
+                rename(&mut vars, "StoreRenamed", "Store");
+                if let Some(q) = vars["q"].as_str() {
+                    vars["q"] = json!(q.replace(renamed, STORE));
+                }
+                lib.graphql(&issue_dashboard_core::github::Request {
+                    name: req.name,
+                    query: req.query,
+                    variables: vars,
+                })?
+            }
+        };
+        let mut v = v;
+        rename(&mut v, STORE, renamed);
+        Ok(v)
+    });
+    // An incremental read under the new name: the repo's observation renames, the unchanged
+    // member's does not.
+    let r = cycle::snapshot(&t.root, &s.gh(), "home", &move || at(20), PAGE).unwrap();
+    assert!(r.iter().all(|x| x.error.is_none()), "the renamed read succeeds: {r:?}");
+    assert!(
+        alias_of(&t, &x).starts_with(&format!("{STORE}#")),
+        "an unchanged member keeps the alias it was read under"
+    );
+    let r = ask(&t, Some(&format!("{renamed}#{number}")), at(25)).unwrap();
+    assert_eq!(r.items, vec![x.clone()]);
+    // The old name, as the project's config still has it, names it too.
+    let r = ask(&t, Some(&format!("{STORE}#{number}")), at(26)).unwrap();
+    assert_eq!(r.items, vec![x]);
+}
+
+#[test]
+fn after_a_rebuild_a_tracked_item_can_still_be_requested() {
+    let (t, x) = settled();
+    let alias = alias_of(&t, &x);
+    t.root.rebuild(at(15), true).unwrap();
+    let r = ask(&t, Some(&alias), at(16)).unwrap();
+    assert_eq!(r.items, vec![x.clone()]);
+    // Losing what was served costs one read by id, never a missed request.
+    let g = gh();
+    snap(&t, &g, at(20));
+    assert_eq!(reads_by_id(&g, &x), 1, "{:?}", g.calls());
 }
