@@ -42,12 +42,19 @@ pub const SCHEMAS: &[(&str, &str)] = schemas![
     "event-request",
     "event-suggested",
     "event-view-saved",
+    "event-write-applied",
+    "event-write-failed",
+    "event-write-intended",
+    "event-session-gone",
+    "event-session-seen",
     "filing-block",
     "ledger-line",
     "page-decision",
     "page-launch",
     "page-request",
     "page-view",
+    "session-list",
+    "session-row",
 ];
 
 struct Embedded;

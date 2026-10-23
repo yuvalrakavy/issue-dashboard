@@ -963,6 +963,11 @@ fn launch_documents_that_are_not_launch_requests_are_skipped_and_reported() {
     not_sent["author"] = json!(OWNER);
     p.launches.push(not_sent);
     p.launches.push(doc_of("page-launch/thread.json"));
+    // A thread record of this project, by its owner: still not a launch request.
+    let mut record = doc_of("page-launch/thread-record.json");
+    record["project"] = json!("home");
+    record["author"] = json!(OWNER);
+    p.launches.push(record);
     // Against its schema: an id with a slash; no items.
     let mut bad = serde_json::to_value(launch_doc("L_bad", "home", &[&ids[1]], "lanes")).unwrap();
     bad["items"] = json!([]);
@@ -976,7 +981,7 @@ fn launch_documents_that_are_not_launch_requests_are_skipped_and_reported() {
     p.launches.push(serde_json::to_value(stranger).unwrap());
     let r = run_with(&t, &gh(), &p, 10);
     assert_eq!(r.ingest.launches, 1, "{:?}", r.ingest.skipped);
-    assert_eq!(r.ingest.skipped.len(), 6, "{:?}", r.ingest.skipped);
+    assert_eq!(r.ingest.skipped.len(), 7, "{:?}", r.ingest.skipped);
     let reason = |id: &str| {
         r.ingest
             .skipped
@@ -992,6 +997,8 @@ fn launch_documents_that_are_not_launch_requests_are_skipped_and_reported() {
         reason("L_20261023_080001_cd34")
     );
     assert!(reason("_thread").contains("thread"), "{}", reason("_thread"));
+    let t_rec = "T_20261023_080100_k3m9x2qa";
+    assert!(reason(t_rec).contains("thread records"), "{}", reason(t_rec));
     assert!(reason("L_elsewhere").contains("project"), "{}", reason("L_elsewhere"));
     assert!(reason("L_stranger").contains("owner_id"), "{}", reason("L_stranger"));
     for id in [
@@ -1000,6 +1007,7 @@ fn launch_documents_that_are_not_launch_requests_are_skipped_and_reported() {
         "L_stranger",
         "L_20261023_080001_cd34",
         "_thread",
+        "T_20261023_080100_k3m9x2qa",
     ] {
         assert!(t.root.read(|l| launch::load(l.conn(), id)).unwrap().is_none(), "{id}");
     }

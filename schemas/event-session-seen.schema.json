@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yuvalrakavy/issue-dashboard/schemas/event-session-seen.schema.json",
+  "title": "Ledger event: session_seen",
+  "description": "A cycle's session list showed an unarchived session whose content differs from its latest session_seen, or which was gone since (10.3, 10.10). Never a transcript.",
+  "allOf": [
+    {
+      "$ref": "common.schema.json#/$defs/eventEnvelope"
+    }
+  ],
+  "properties": {
+    "kind": {
+      "const": "session_seen"
+    },
+    "subject": {
+      "type": "string",
+      "minLength": 1
+    },
+    "distinct": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "content"
+      ],
+      "properties": {
+        "content": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "data": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "title",
+        "cwd",
+        "branch",
+        "pr_number",
+        "running",
+        "last_active_at",
+        "link",
+        "listed_at"
+      ],
+      "properties": {
+        "title": {
+          "type": "string"
+        },
+        "cwd": {
+          "type": "string",
+          "minLength": 1
+        },
+        "branch": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "pr_number": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1
+        },
+        "running": {
+          "type": "boolean"
+        },
+        "last_active_at": {
+          "$ref": "common.schema.json#/$defs/timestamp"
+        },
+        "link": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "listed_at": {
+          "$ref": "common.schema.json#/$defs/timestamp"
+        }
+      }
+    }
+  }
+}

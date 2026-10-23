@@ -87,6 +87,8 @@ fn event_examples_have_the_identity_this_crate_computes_and_typed_data() {
         "event-launch",
         "event-outcome",
         "event-exported",
+        "event-session-seen",
+        "event-session-gone",
         "event",
     ] {
         for (name, v) in good_examples(stem) {

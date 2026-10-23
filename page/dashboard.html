@@ -1,0 +1,910 @@
+<title>Villa Rakavy Issue Board</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Source+Sans+3:wght@400;600;700&display=swap">
+<style>
+:root {
+  --bg: #eef1f4; --panel: #ffffff; --panel-2: #f6f8fa; --ink: #18202a; --muted: #566270;
+  --line: #d8dee6; --accent: #2b5fae; --accent-ink: #ffffff; --accent-soft: #e3ecf8;
+  --p0: #b42318; --p1: #b5470c; --p2: #2b5fae; --p3: #5b6573; --badge-ink: #ffffff;
+  --ok: #1d6b3a; --ok-soft: #e2f2e7; --warn: #8a5a00; --warn-soft: #fbf0d9;
+  --bad: #b42318; --bad-soft: #fbe5e2; --outside: #6b3fa0; --outside-soft: #efe7f8;
+  --bar-open: #2b5fae; --bar-closed: #1d6b3a; --shadow: 0 1px 2px rgba(24, 32, 42, .08);
+  --font: "Source Sans 3", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #11161c; --panel: #19212a; --panel-2: #1f2832; --ink: #e3e8ee; --muted: #9aa6b4;
+  --line: #2c3743; --accent: #7aa7ec; --accent-ink: #0d1520; --accent-soft: #1f3150;
+  --p0: #c8372b; --p1: #b5470c; --p2: #2f63b4; --p3: #5b6573; --badge-ink: #ffffff;
+  --ok: #6fcf93; --ok-soft: #173225; --warn: #e6b450; --warn-soft: #3a2e12;
+  --bad: #f08a80; --bad-soft: #3d1c19; --outside: #c3a2ee; --outside-soft: #2e2240;
+  --bar-open: #7aa7ec; --bar-closed: #6fcf93; --shadow: none; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #11161c; --panel: #19212a; --panel-2: #1f2832; --ink: #e3e8ee; --muted: #9aa6b4;
+  --line: #2c3743; --accent: #7aa7ec; --accent-ink: #0d1520; --accent-soft: #1f3150;
+  --p0: #c8372b; --p1: #b5470c; --p2: #2f63b4; --p3: #5b6573; --badge-ink: #ffffff;
+  --ok: #6fcf93; --ok-soft: #173225; --warn: #e6b450; --warn-soft: #3a2e12;
+  --bad: #f08a80; --bad-soft: #3d1c19; --outside: #c3a2ee; --outside-soft: #2e2240;
+  --bar-open: #7aa7ec; --bar-closed: #6fcf93; --shadow: none; color-scheme: dark }
+
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--ink); font: 15px/1.45 var(--font); margin: 0; }
+body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 10; background: var(--panel); }
+.wrap { max-width: 1080px; margin: 0 auto; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+a { color: var(--accent); }
+button, select, input, textarea { font: inherit; color: inherit; }
+h1, h2, h3 { text-wrap: balance; margin: 0; }
+.mono { font-family: var(--mono); font-size: .86em; }
+.muted { color: var(--muted); }
+
+/* status strip */
+.strip { background: var(--panel); border-bottom: 1px solid var(--line); }
+.strip .wrap { padding-block: 14px 12px; display: grid; gap: 10px; }
+.titlerow { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.titlerow h1 { font-size: 1.35rem; font-weight: 700; }
+.chip { display: inline-flex; align-items: center; gap: 6px; min-height: 30px; padding: 2px 10px; border: 1px solid var(--line); border-radius: 999px; background: var(--panel-2); font-size: .88rem; cursor: pointer; }
+.chip.on { border-color: var(--accent); background: var(--accent-soft); }
+.fresh { font-size: .9rem; color: var(--muted); background: none; border: 0; padding: 0; text-align: left; cursor: pointer; min-height: 28px; }
+.fresh b { color: var(--warn); font-weight: 600; }
+.repotimes { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 2px 16px; font-size: .86rem; }
+.hiddenline { font-size: .9rem; color: var(--warn); background: var(--warn-soft); border-radius: 6px; padding: 6px 10px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.tiles { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; }
+.tile { display: grid; gap: 0; text-align: left; padding: 8px 12px; min-height: 60px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2); cursor: pointer; }
+.tile .n { font-size: 1.5rem; font-weight: 700; line-height: 1.1; font-variant-numeric: tabular-nums; }
+.tile .l { font-size: .74rem; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+.tile.hot .n { color: var(--bad); }
+.phase { font-size: .86rem; color: var(--muted); border-left: 3px solid var(--accent); padding: 2px 10px; }
+
+/* tabs */
+.tabs { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5; background: var(--bg); border-bottom: 1px solid var(--line); }
+.tabs .wrap { display: flex; gap: 4px; padding-block: 0; }
+.tab { border: 0; background: none; padding: 10px 14px; min-height: 44px; font-weight: 600; color: var(--muted); border-bottom: 3px solid transparent; cursor: pointer; }
+.tab[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--accent); }
+.tab .count { font-weight: 400; font-size: .85em; margin-left: 4px; }
+main .wrap { padding-block: 16px 48px; display: grid; gap: 14px; }
+.pills { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.pills input { min-height: 32px; padding: 4px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); min-width: 0; flex: 1 1 180px; max-width: 320px; }
+.note { padding: 14px; border: 1px dashed var(--line); border-radius: 8px; color: var(--muted); text-align: center; }
+.err { padding: 10px 14px; border-radius: 8px; background: var(--bad-soft); color: var(--bad); }
+
+/* cards and rows */
+.list { display: grid; gap: 8px; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; display: grid; gap: 6px; box-shadow: var(--shadow); min-width: 0; }
+.card:focus-visible, .row:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.card.sel, .row.sel { border-color: var(--accent); }
+.head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; min-width: 0; }
+.alias { font-family: var(--mono); font-size: .84rem; white-space: nowrap; }
+.title { font-weight: 600; min-width: 0; overflow-wrap: anywhere; }
+.meta { display: flex; flex-wrap: wrap; gap: 4px 10px; font-size: .85rem; color: var(--muted); align-items: center; }
+.why { font-size: .78rem; text-transform: uppercase; letter-spacing: .05em; font-weight: 600; }
+.why.decision { color: var(--warn); } .why.outside_pr { color: var(--outside); } .why.untriaged { color: var(--accent); }
+.badge { display: inline-block; min-width: 2.2em; text-align: center; padding: 1px 6px; border-radius: 5px; font: 600 .78rem/1.5 var(--mono); color: var(--badge-ink); }
+.badge.p0 { background: var(--p0); } .badge.p1 { background: var(--p1); } .badge.p2 { background: var(--p2); } .badge.p3 { background: var(--p3); }
+.badge.none { background: transparent; color: var(--muted); border: 1px dashed var(--line); }
+.tag { display: inline-block; padding: 0 7px; border-radius: 5px; font-size: .8rem; background: var(--panel-2); border: 1px solid var(--line); color: var(--ink); }
+.tag.over { background: var(--bad-soft); border-color: transparent; color: var(--bad); }
+.tag.stale { background: var(--warn-soft); border-color: transparent; color: var(--warn); }
+.tag.outside { background: var(--outside-soft); border-color: transparent; color: var(--outside); }
+.tag.launch { background: var(--ok-soft); border-color: transparent; color: var(--ok); }
+.tag.launch.not_sent { background: var(--bad-soft); color: var(--bad); }
+.sessions { display: grid; gap: 4px; font-size: .88rem; min-width: 0; }
+.session { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; padding: 4px 10px; border-left: 3px solid var(--ok); background: var(--panel-2); border-radius: 0 6px 6px 0; min-width: 0; }
+.session.probable { border-left-style: dashed; border-left-color: var(--muted); }
+.session .lead { font-size: .74rem; text-transform: uppercase; letter-spacing: .05em; font-weight: 600; color: var(--ok); }
+.session .stitle { font-weight: 600; min-width: 0; overflow-wrap: anywhere; }
+.session .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--muted); margin-right: 4px; vertical-align: 1px; }
+.session .dot.running { background: var(--ok); }
+.session .link { font-family: var(--mono); font-size: .78rem; color: var(--muted); min-width: 0; overflow-wrap: anywhere; user-select: all; }
+.session .copy { min-height: 28px; padding: 2px 8px; font-size: .8rem; }
+.actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; position: relative; }
+.btn { min-height: 40px; padding: 6px 14px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); cursor: pointer; font-weight: 600; text-decoration: none; display: inline-flex; align-items: center; gap: 6px; color: var(--ink); }
+.btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.btn.quiet { border-color: transparent; background: transparent; color: var(--accent); }
+.btn[disabled] { opacity: .55; cursor: not-allowed; }
+.more { min-width: 40px; justify-content: center; }
+.menu { position: absolute; z-index: 8; top: 100%; left: 0; margin-top: 4px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 6px 24px rgba(0, 0, 0, .18); display: grid; min-width: 210px; padding: 4px; }
+.menu button, .menu a { text-align: left; border: 0; background: none; padding: 9px 12px; min-height: 40px; border-radius: 6px; cursor: pointer; color: var(--ink); text-decoration: none; }
+.menu button:hover, .menu a:hover { background: var(--panel-2); }
+.menu.flip { left: auto; right: 0; }
+.pending { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 8px 12px; background: var(--ok-soft); color: var(--ok); border-radius: 8px; font-size: .92rem; }
+.pending.refused { background: var(--bad-soft); color: var(--bad); }
+.picker { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.picker input { min-height: 40px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); flex: 1 1 200px; min-width: 0; }
+
+.level { display: grid; gap: 6px; }
+.level h2 { font-size: .95rem; display: flex; gap: 8px; align-items: center; }
+.row { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 12px; align-items: center; min-width: 0; }
+.row .main { display: grid; gap: 2px; min-width: 0; }
+@media (max-width: 640px) {
+  .tiles { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .row { grid-template-columns: minmax(0, 1fr); }
+  .tab { padding: 10px 10px; }
+}
+
+/* trends */
+.panels { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px; display: grid; gap: 10px; min-width: 0; }
+.panel h2 { font-size: 1rem; }
+.panel .sub { font-size: .84rem; color: var(--muted); }
+.legend { display: flex; gap: 14px; font-size: .84rem; color: var(--muted); }
+.legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
+.chart { width: 100%; height: auto; display: block; }
+.chart text { fill: var(--muted); font: 11px var(--mono); }
+.big { font-size: 2rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+.meter { height: 10px; background: var(--panel-2); border-radius: 5px; border: 1px solid var(--line); overflow: hidden; }
+.meter span { display: block; height: 100%; background: var(--bad); }
+.scroll { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: .9rem; }
+th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+th { font-size: .74rem; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); font-weight: 600; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+
+/* dialogs */
+dialog { border: 1px solid var(--line); border-radius: 12px; background: var(--panel); color: var(--ink); padding: 0; width: min(680px, calc(100vw - 32px)); max-height: calc(100dvh - 48px); }
+dialog::backdrop { background: rgba(10, 14, 20, .45); }
+.dlg { display: grid; gap: 12px; padding: 16px 18px; }
+.dlg header { display: flex; gap: 10px; align-items: flex-start; justify-content: space-between; }
+.dlg h2 { font-size: 1.1rem; overflow-wrap: anywhere; }
+.body { white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--mono); font-size: .82rem; background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; max-height: 45vh; overflow: auto; }
+dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 14px; margin: 0; font-size: .9rem; }
+dt { color: var(--muted); } dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+label.field { display: grid; gap: 4px; font-size: .88rem; color: var(--muted); }
+label.field select, label.field input { min-height: 40px; padding: 6px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); }
+label.field textarea { min-height: 96px; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); resize: vertical; }
+.closes { display: grid; gap: 8px; }
+.closes h2 { font-size: .95rem; color: var(--muted); font-weight: 600; }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; }
+footer .wrap { padding-block: 0 32px; font-size: .82rem; color: var(--muted); display: flex; flex-wrap: wrap; gap: 6px 16px; }
+</style>
+
+<header class="strip">
+  <div class="wrap">
+    <div class="titlerow">
+      <h1 id="name">Issue board</h1>
+      <span id="scope"></span>
+    </div>
+    <button class="fresh" id="fresh" aria-expanded="false">Loading the latest snapshot…</button>
+    <div class="repotimes" id="repotimes" hidden></div>
+    <div id="hidden"></div>
+    <div class="tiles" id="tiles"></div>
+    <div class="phase">Phase 1: what you do here is recorded for the tracker's next run. The one GitHub write is your Close of an issue (and its Reopen), made by the next sync; a launch only records the request.</div>
+  </div>
+</header>
+<nav class="tabs" aria-label="Sections">
+  <div class="wrap" role="tablist">
+    <button class="tab" role="tab" data-tab="inbox" aria-selected="true">Inbox<span class="count" id="c-inbox"></span></button>
+    <button class="tab" role="tab" data-tab="queue" aria-selected="false">Queue<span class="count" id="c-queue"></span></button>
+    <button class="tab" role="tab" data-tab="trends" aria-selected="false">Trends</button>
+  </div>
+</nav>
+<main><div class="wrap" id="view"><div class="note">Loading…</div></div></main>
+<footer><div class="wrap" id="foot"></div></footer>
+<dialog id="dlg"></dialog>
+
+<script src="core.js"></script>
+<script>
+(function () {
+  "use strict";
+  const D = window.IssueDashboard;
+  const $ = (id) => document.getElementById(id);
+
+  // Builds an element. Text always goes in as text nodes: issue titles and bodies are data
+  // written by others (4.2), never markup.
+  function h(tag, attrs, ...kids) {
+    const el = document.createElement(tag);
+    for (const [k, v] of Object.entries(attrs || {})) {
+      if (v == null || v === false) continue;
+      if (k === "class") el.className = v;
+      else if (k.startsWith("on")) el.addEventListener(k.slice(2), v);
+      else el.setAttribute(k, v === true ? "" : v);
+    }
+    for (const k of kids.flat()) if (k != null && k !== false) el.append(k instanceof Node ? k : String(k));
+    return el;
+  }
+
+  const S = {
+    db: null, comments: null, user: null,
+    owner: false, viewer: null,
+    load: null, meta: null, issues: [], acks: [], statuses: [],
+    decisions: [], launches: [], views: [],
+    tab: "inbox", inboxFilter: "all", queueFilter: "all", text: "",
+    scope: null, scopeName: null, savedScope: null,
+    openCard: null, menu: null, sel: 0, error: null, weeks: 8,
+  };
+
+  try { const t = localStorage.getItem("tab"); if (t) S.tab = t; } catch (e) { /* no storage */ }
+
+  const fmtTime = (t) => { const d = new Date(t); return isNaN(d) ? "?" : d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }); };
+  const fmtDay = (t) => { const d = new Date(t); return isNaN(d) ? "?" : d.toLocaleDateString([], { month: "short", day: "numeric" }); };
+  const ageDays = (t) => Math.max(0, Math.floor((Date.now() - Date.parse(t)) / 86400000));
+  const shortRepo = (r) => r.split("/").pop();
+  function ghUrl(i) {
+    const [repo, n] = String(i.alias).split("#");
+    return "https://github.com/" + repo + (i.kind === "pull_request" ? "/pull/" : "/issues/") + n;
+  }
+  const who = () => ({ project: (S.meta && S.meta.project) || "unknown", author: S.viewer || "unknown" });
+
+  // --- loading -------------------------------------------------------------------------
+
+  async function start() {
+    S.db = await claude.use("db");
+    if (!S.db) {
+      S.error = "The database is not available in this view. Open the page signed in to claude.ai.";
+      render();
+      return;
+    }
+    S.user = await claude.use("user");
+    S.owner = S.user ? await S.user.isOwner().catch(() => false) : false;
+    S.viewer = S.user ? await S.user.id().catch(() => null) : null;
+    S.comments = await claude.use("comments");
+    await reload();
+    // One subscription each: the active generation, and the two page collections whose
+    // state a card shows. Each runs once; a snapshot only re-renders. A generation announced
+    // while one loads is loaded after it (D.follower).
+    const follow = D.follower(reload);
+    S.db.doc("meta/active").onSnapshot((snap) => {
+      const g = snap.exists ? (snap.data() || {}).generation : null;
+      if (S.load && g && g !== S.load.generation) follow();
+    }, () => {});
+    S.db.collection("decisions").limit(1000).onSnapshot((q) => { S.decisions = q.docs.map((d) => d.data()); render(); }, () => {});
+    S.db.collection("launches").limit(1000).onSnapshot((q) => { S.launches = q.docs.map((d) => d.data()); render(); }, () => {});
+    S.db.collection("views").limit(1000).get().then((q) => { S.views = q.docs.map((d) => d.data()); render(); }, () => {});
+    setInterval(render, 60000);
+  }
+
+  async function reload() {
+    try {
+      const r = await D.loadGeneration(S.db);
+      S.load = r;
+      S.meta = r.meta || null;
+      if (r.data) {
+        S.issues = r.data.issues;
+        S.acks = r.data.acks;
+        S.statuses = r.data.launch_status;
+      }
+      S.error = null;
+      if (S.meta && S.meta.name) document.title = S.meta.name + " · Issue Board";
+    } catch (e) {
+      S.error = "Could not read the snapshot (" + ((e && (e.code || e.message)) || "error") + ").";
+    }
+    render();
+  }
+
+  // --- derived state -------------------------------------------------------------------
+
+  const groups = () => (S.meta && S.meta.groups) || {};
+  const scoped = () => S.issues.filter((i) => D.inScope(D.repoOf(i.alias), S.scope, groups()));
+  const repoInfo = (repo) => ((S.meta && S.meta.repos) || []).find((r) => r.repo === repo);
+
+  function urgentHidden() {
+    if (!S.scope) return [];
+    const out = {};
+    for (const i of S.issues) {
+      const repo = D.repoOf(i.alias);
+      if (i.state !== "open" || D.inScope(repo, S.scope, groups())) continue;
+      const key = i.priority && i.priority.value === "p0" ? "p0" : (i.status === "needs-decision" || (i.status === "needs-review" && i.outside)) ? "waiting on you" : null;
+      if (!key) continue;
+      const k = key + " in " + shortRepo(repo);
+      out[k] = (out[k] || 0) + 1;
+    }
+    return Object.entries(out).map(([k, n]) => n + " " + k);
+  }
+
+  // --- actions -------------------------------------------------------------------------
+
+  async function writeDecision(fields) {
+    if (!S.owner) return;
+    const doc = D.decisionDoc(fields, who(), new Date());
+    try {
+      await S.db.doc("decisions/" + doc.id).set(doc);
+      S.decisions = S.decisions.concat([doc]);
+      S.openCard = null;
+      toast(null);
+    } catch (e) {
+      toast("Not recorded: " + ((e && e.code) || "error") + (e && e.code === "quota_exceeded" ? " (the page's database is full)" : ""));
+    }
+    render();
+  }
+
+  function setPriority(i, p) {
+    writeDecision({ action: "set_priority", target: { item: i.id, alias: i.alias }, value: { priority: p } });
+  }
+  function override(i, p, reason) {
+    writeDecision({ action: "set_override", target: { item: i.id, alias: i.alias }, value: { priority: p }, reason });
+  }
+  function undo(state) {
+    writeDecision({ action: "undo", target: { decision: state.doc.id, item: state.doc.target.item } });
+  }
+
+  async function requestTriage(i) {
+    if (!S.owner) return;
+    const doc = D.requestDoc({ kind: "triage", items: [i.id] }, who(), new Date());
+    try { await S.db.doc("requests/" + doc.id).set(doc); toast("Triage requested for " + i.alias + ". The triage session picks it up in phase 2."); }
+    catch (e) { toast("Not recorded: " + ((e && e.code) || "error")); }
+  }
+
+  async function saveView(name) {
+    if (!S.owner || !S.scope) return;
+    const doc = D.viewDoc(name, S.scope, who(), new Date());
+    try { await S.db.doc("views/" + doc.id).set(doc); S.views = S.views.concat([doc]); S.scopeName = name; toast("Saved view “" + name + "”."); }
+    catch (e) { toast("Not saved: " + ((e && e.code) || "error")); }
+    render();
+  }
+
+  function isolate(kind, name) {
+    if (!S.scope || S.scopeName) S.savedScope = { scope: S.scope, name: S.scopeName };
+    S.scope = { include: [kind === "group" ? { group: name } : { repo: name }], exclude: [] };
+    S.scopeName = null;
+    S.menu = null;
+    render();
+  }
+  function clearScope() {
+    const back = S.savedScope;
+    S.scope = back ? back.scope : null;
+    S.scopeName = back ? back.name : null;
+    S.savedScope = null;
+    render();
+  }
+
+  let toastMsg = null;
+  function toast(m) { toastMsg = m; }
+
+  // --- rendering -----------------------------------------------------------------------
+
+  function render() {
+    renderStrip();
+    for (const b of document.querySelectorAll(".tab")) b.setAttribute("aria-selected", String(b.dataset.tab === S.tab));
+    const view = $("view");
+    const kids = [];
+    if (S.error) kids.push(h("div", { class: "err" }, S.error));
+    const owner = D.ownerNotice(S.meta, S.viewer, S.owner);
+    if (owner) {
+      const line = h("span", { class: "mono", style: "user-select:all" }, owner.line);
+      kids.push(h("div", { class: "err", role: "status" },
+        owner.kind === "pending"
+          ? "The tracker does not know your page user id yet, so none of your actions here is accepted: each is refused at the next sync. "
+          : "The tracker's owner id is " + owner.configured + ", not yours, so none of your actions here is accepted. ",
+        "Set it in the tracker root's " + owner.file + ": ", line, " ", copyButton(owner.line, line)));
+    }
+    if (toastMsg) kids.push(h("div", { class: "pending", role: "status" }, toastMsg, h("button", { class: "btn quiet", onclick: () => { toastMsg = null; render(); } }, "Dismiss")));
+    if (S.load && S.load.status === "partial") kids.push(h("div", { class: "err" }, "Partial snapshot: " + (S.load.why || "a collection came back short") + ". Reload the page in a minute."));
+    if (!S.load && !S.error) kids.push(h("div", { class: "note" }, "Loading the latest snapshot…"));
+    else if (S.load && S.load.status === "empty") kids.push(h("div", { class: "note" }, "No snapshot yet: the sync job has not published one to this page."));
+    else if (S.load) kids.push(S.tab === "inbox" ? renderInbox() : S.tab === "queue" ? renderQueue() : renderTrends());
+    view.replaceChildren(...kids);
+    renderFoot();
+    // The menu opens rightward from its button; near the right edge it opens leftward instead.
+    const menu = view.querySelector(".menu");
+    if (menu && menu.getBoundingClientRect().right > document.documentElement.clientWidth - 8) menu.classList.add("flip");
+    const cards = view.querySelectorAll("[data-nav]");
+    if (cards.length) { S.sel = Math.min(S.sel, cards.length - 1); cards[S.sel].classList.add("sel"); }
+  }
+
+  function renderStrip() {
+    $("name").textContent = (S.meta && S.meta.name) || "Issue board";
+    const scope = $("scope");
+    scope.replaceChildren();
+    if (S.scope) {
+      const label = S.scopeName ? "View: " + S.scopeName : "Isolated: " + scopeSentence(S.scope);
+      scope.append(h("span", { class: "chip on" }, label, h("button", { class: "btn quiet", style: "min-height:28px;padding:0 4px", "aria-label": "Clear the view", onclick: clearScope }, "✕")));
+      if (!S.scopeName && S.owner) scope.append(" ", h("button", { class: "chip", onclick: () => openSaveView() }, "Save view"));
+    } else {
+      scope.append(h("span", { class: "chip" }, "All repos"));
+    }
+    if (S.views.length) {
+      const sel = h("select", { class: "chip", "aria-label": "Saved views", onchange: (e) => {
+        const v = S.views.find((x) => x.id === e.target.value);
+        if (v) { S.scope = { include: v.include, exclude: v.exclude }; S.scopeName = v.name; S.savedScope = null; render(); }
+      } }, h("option", { value: "" }, "Saved views…"), S.views.map((v) => h("option", { value: v.id }, v.name)));
+      scope.append(" ", sel);
+    }
+
+    const fresh = $("fresh");
+    if (S.meta) {
+      const repos = S.meta.repos || [];
+      const stale = repos.filter((r) => r.stale || r.error).map((r) => shortRepo(r.repo) + (r.error ? " error" : " stale"));
+      fresh.replaceChildren("All repos read " + fmtTime(S.meta.taken_at), stale.length ? h("b", {}, " · " + stale.join(" · ")) : " · none stale", " · " + repos.length + " repos ▾");
+      $("repotimes").replaceChildren(...repos.map((r) => h("span", {}, h("span", { class: "mono" }, shortRepo(r.repo)), " ", r.read_at ? fmtTime(r.read_at) : "never", r.stale ? h("span", { class: "tag stale" }, "stale") : "", r.error ? h("span", { class: "tag over" }, String(r.error)) : "", r.read_only && r.read_only.value ? h("span", { class: "muted" }, " read-only") : "")));
+    }
+
+    const hid = urgentHidden();
+    $("hidden").replaceChildren(...(hid.length ? [h("div", { class: "hiddenline" }, "Hidden by this view: " + hid.join(", "), h("button", { class: "btn quiet", onclick: () => { S.scope = null; S.scopeName = null; S.savedScope = null; render(); } }, "Show all"))] : []));
+
+    const t = D.tiles(scoped());
+    const tile = (n, label, go, hot) => h("button", { class: "tile" + (hot && n > 0 ? " hot" : ""), onclick: go }, h("span", { class: "n" }, String(n)), h("span", { class: "l" }, label));
+    $("tiles").replaceChildren(
+      tile(t.p0_open, "p0 open", () => go("queue", "p0"), true),
+      tile(t.waiting_on_you, "waiting on you", () => go("inbox", "waiting"), true),
+      tile(t.untriaged, "untriaged", () => go("inbox", "untriaged")),
+      tile(t.over_time_limit, "over time limit", () => go("queue", "over"), true),
+      tile(t.open, "open", () => go("queue", "all")),
+    );
+    const cards = D.inbox(scoped());
+    $("c-inbox").textContent = cards.length ? String(cards.length) : "";
+    $("c-queue").textContent = String(D.tiles(scoped()).open - cards.length);
+  }
+
+  function scopeSentence(v) {
+    const part = (e) => (e.group ? "group " + e.group : shortRepo(e.repo));
+    const inc = (v.include || []).map(part).join(", ");
+    const exc = (v.exclude || []).map((e) => "not " + part(e)).join(", ");
+    return [inc, exc].filter(Boolean).join(" · ") || "all";
+  }
+
+  function go(tab, filter) {
+    S.tab = tab;
+    if (tab === "inbox") S.inboxFilter = filter;
+    if (tab === "queue") S.queueFilter = filter;
+    S.sel = 0;
+    try { localStorage.setItem("tab", tab); } catch (e) { /* no storage */ }
+    render();
+  }
+
+  // One card's or row's decision state: pending until a cycle acks it (5.2a).
+  function decisionLine(i) {
+    const horizon = D.ackHorizon(S.meta);
+    const st = D.decisionStates(S.decisions, S.acks, horizon);
+    const s = st.latestFor(i.id);
+    const refused = Object.values(st.byId).filter((x) => x.doc.target && x.doc.target.item === i.id && x.ack && x.ack.result === "refused" && !x.undoneBy)
+      .sort((a, b) => (a.doc.created_at < b.doc.created_at ? 1 : -1))[0];
+    if (refused && (!s || refused.doc.created_at > s.doc.created_at)) {
+      return h("div", { class: "pending refused" }, "Refused by the tracker: " + describe(refused.doc) + (refused.ack.reason ? " (" + refused.ack.reason + ")" : ""));
+    }
+    const closing = D.pendingClose(S.decisions, S.acks, i.id, horizon);
+    if (closing) {
+      const pendingUndo = Object.values(st.byId).some((x) => x.doc.action === "undo" && x.doc.target.decision === closing.id);
+      return h("div", { class: "pending", role: "status" },
+        h("span", {}, "Closing · " + describe(closing) + " · applied on the next sync"),
+        S.owner && !pendingUndo ? h("button", { class: "btn quiet", onclick: () => undo({ doc: closing }) }, "Undo") : null);
+    }
+    if (!s || s.doc.action === "close") return null;
+    const pendingUndo = Object.values(st.byId).find((x) => x.doc.action === "undo" && x.doc.target.decision === s.doc.id);
+    if (s.ack) return h("div", { class: "meta" }, h("span", { class: "tag launch" }, "Recorded: " + describe(s.doc) + " · not written to GitHub yet"));
+    const n = D.nextRunMinutes(S.meta, new Date());
+    return h("div", { class: "pending", role: "status" },
+      h("span", {}, "Decided: " + describe(s.doc) + " · applied on the next run" + (n ? " (in " + n + " min)" : "") + " · not written to GitHub yet"),
+      S.owner && !pendingUndo ? h("button", { class: "btn quiet", onclick: () => undo(s) }, "Undo") : null);
+  }
+
+  function describe(d) {
+    const p = d.value && d.value.priority;
+    switch (d.action) {
+      case "set_priority": return "set " + p;
+      case "set_override": return "override " + p + (d.reason ? " (“" + d.reason + "”)" : "");
+      case "clear_priority": return "clear the priority";
+      case "clear_override": return "clear the override";
+      case "close": return D.describeClose((d.value && d.value.close) || {});
+      default: return d.action.replace(/_/g, " ");
+    }
+  }
+
+  function badge(i) {
+    const p = i.priority && i.priority.value;
+    return h("span", { class: "badge " + (p || "none"), title: p ? "priority from " + i.priority.source : "no priority" }, p || "—");
+  }
+
+  function launchTag(i, states) {
+    const s = states[i.id];
+    if (!s) return null;
+    return h("span", { class: "tag launch " + s.state, title: s.error || "" }, "launch " + s.state.replace("_", " ") + (s.error ? ": " + s.error : ""));
+  }
+
+  function itemMeta(i, states) {
+    const repo = repoInfo(D.repoOf(i.alias));
+    return h("div", { class: "meta" },
+      badge(i),
+      i.type ? h("span", { class: "tag" }, i.type) : h("span", { class: "tag" }, "no type"),
+      h("span", {}, i.status.replace(/-/g, " ")),
+      h("span", {}, "idle " + (i.idle_days || 0) + " d"),
+      i.limit_breached ? h("span", { class: "tag over" }, "over time limit") : null,
+      i.outside ? h("span", { class: "tag outside" }, "outside") : null,
+      (i.stale || (repo && repo.stale)) ? h("span", { class: "tag stale" }, "read " + fmtTime(repo ? repo.read_at : S.meta.taken_at) + ", stale") : null,
+      launchTag(i, states),
+    );
+  }
+
+  // The app's sessions on the item (10.10): in a card or row the newest, with a count of the
+  // rest; in Details every one with its link as text, since a claude:// link may not open here.
+  // Copies `text`; where the clipboard is refused, selects `shown` (the link's text) instead.
+  function copyButton(text, shown) {
+    const b = h("button", { class: "btn quiet copy", "aria-label": "Copy the session link", onclick: (e) => {
+      e.stopPropagation();
+      const select = () => { const r = document.createRange(); r.selectNodeContents(shown); const sel = getSelection(); sel.removeAllRanges(); sel.addRange(r); };
+      const done = () => { b.textContent = "Copied"; setTimeout(() => { b.textContent = "Copy link"; }, 1500); };
+      try { navigator.clipboard.writeText(text).then(done, select); } catch (_) { select(); }
+    } }, "Copy link");
+    return b;
+  }
+
+  function sessionsBlock(i, full) {
+    const lines = D.sessionLines(i, new Date());
+    if (!lines.length) return null;
+    const shown = full ? lines : lines.slice(0, 1);
+    return h("div", { class: "sessions" }, shown.map((s, k) => {
+      const linkText = s.link ? h("span", { class: "link" }, s.link) : null;
+      const copy = s.link ? copyButton(s.link, linkText) : null;
+      return h("div", { class: "session" + (s.probable ? " probable" : "") },
+        k === 0 ? h("span", { class: "lead" }, "In progress") : null,
+        s.link ? h("a", { class: "stitle", href: s.link, title: "Open the session in the Claude app" }, s.title) : h("span", { class: "stitle" }, s.title),
+        h("span", { class: "muted" }, h("span", { class: "dot " + s.state }), s.state + " · active " + s.ago),
+        s.probable ? h("span", { class: "tag", title: "Matched by a reference in the session's title or branch" }, "probably") : null,
+        full ? linkText : null,
+        full ? copy : null,
+        !full && k === 0 && lines.length > 1 ? h("span", { class: "muted" }, "+ " + (lines.length - 1) + " more in Details") : null);
+    }));
+  }
+
+  function moreMenu(i, extra) {
+    const open = S.menu === i.id;
+    const items = [
+      h("button", { onclick: () => { S.menu = null; openDetails(i); } }, "Details"),
+      h("a", { href: ghUrl(i), target: "_blank", rel: "noopener" }, "Open on GitHub ↗"),
+      ...(extra || []),
+      h("button", { onclick: () => isolate("repo", D.repoOf(i.alias)) }, "Isolate " + shortRepo(D.repoOf(i.alias))),
+    ];
+    for (const [g, repos] of Object.entries(groups())) if (repos.includes(D.repoOf(i.alias))) items.push(h("button", { onclick: () => isolate("group", g) }, "Isolate group " + g));
+    return h("span", { style: "position:relative" },
+      h("button", { class: "btn more", "aria-haspopup": "menu", "aria-expanded": String(open), "aria-label": "More actions", onclick: (e) => { e.stopPropagation(); S.menu = open ? null : i.id; render(); } }, "⋯"),
+      open ? h("div", { class: "menu", role: "menu" }, items) : null);
+  }
+
+  function ownerExtras(i) {
+    if (!S.owner) return [];
+    return [
+      h("button", { onclick: () => { S.menu = null; S.openCard = { id: i.id, mode: "priority" }; render(); } }, "Set priority…"),
+      h("button", { onclick: () => { S.menu = null; S.openCard = { id: i.id, mode: "override" }; render(); } }, "Override priority…"),
+      i.priority && i.priority.project ? h("button", { onclick: () => { S.menu = null; writeDecision({ action: "clear_priority", target: { item: i.id, alias: i.alias } }); } }, "Clear this project's priority") : null,
+      i.priority && i.priority.override ? h("button", { onclick: () => { S.menu = null; writeDecision({ action: "clear_override", target: { item: i.id, alias: i.alias } }); } }, "Clear the override") : null,
+      h("button", { onclick: () => { S.menu = null; requestTriage(i); } }, "Request triage"),
+      canClose(i) ? h("button", { onclick: () => { S.menu = null; openClose(i); } }, "Close…") : null,
+    ].filter(Boolean);
+  }
+
+  // Close is the page's one GitHub write (10.0): the owner's, on an open issue in a writable repo,
+  // and not while a close of it is already waiting for the sync.
+  const canClose = (i) => S.owner && D.closable(i, repoInfo(D.repoOf(i.alias))) && !D.pendingClose(S.decisions, S.acks, i.id, D.ackHorizon(S.meta));
+
+  function picker(i) {
+    const oc = S.openCard;
+    if (!oc || oc.id !== i.id) return null;
+    if (oc.mode === "priority") {
+      return h("div", { class: "picker" },
+        D.PRIORITIES.map((p) => h("button", { class: "btn" + (p === "p1" ? "" : ""), onclick: () => setPriority(i, p) }, "Set " + p)),
+        h("button", { class: "btn quiet", onclick: () => { S.openCard = null; render(); } }, "Cancel"));
+    }
+    const input = h("input", { placeholder: "Why (required for an override)", "aria-label": "Reason", maxlength: "200" });
+    const sel = h("select", { class: "btn", "aria-label": "Priority" }, D.PRIORITIES.map((p) => h("option", { value: p }, p)));
+    return h("div", { class: "picker" }, sel, input,
+      h("button", { class: "btn primary", onclick: () => { const r = input.value.trim(); if (!r) { input.focus(); input.setAttribute("aria-invalid", "true"); return; } override(i, sel.value, r); } }, "Override"),
+      h("button", { class: "btn quiet", onclick: () => { S.openCard = null; render(); } }, "Cancel"));
+  }
+
+  const WHY = { decision: "Needs your decision", outside_pr: "Outside pull request to review", untriaged: "Needs triage" };
+
+  function renderInbox() {
+    const states = D.launchStates(S.launches, S.statuses);
+    let cards = D.inbox(scoped());
+    if (S.inboxFilter === "waiting") cards = cards.filter((c) => c.why !== "untriaged");
+    if (S.inboxFilter === "untriaged") cards = cards.filter((c) => c.why === "untriaged");
+    const pill = (k, label) => h("button", { class: "chip" + (S.inboxFilter === k ? " on" : ""), onclick: () => { S.inboxFilter = k; S.sel = 0; render(); } }, label);
+    const head = h("div", { class: "pills" }, pill("all", "All"), pill("waiting", "Waiting on you"), pill("untriaged", "Untriaged"));
+    if (!cards.length) return h("div", { class: "list" }, head, h("div", { class: "note" }, S.inboxFilter === "untriaged" ? "Nothing untriaged." : "Nothing waiting on you."), recentClosesSection());
+    return h("div", { class: "list" }, head, cards.map((c) => {
+      const i = c.issue;
+      const line = decisionLine(i);
+      const pending = line && line.classList.contains("pending") && !line.classList.contains("refused");
+      let main;
+      if (c.why === "untriaged" && S.owner) main = h("button", { class: "btn primary", "data-main": "1", onclick: () => { S.openCard = { id: i.id, mode: "priority" }; render(); } }, "Set priority…");
+      else main = h("a", { class: "btn primary", "data-main": "1", href: ghUrl(i), target: "_blank", rel: "noopener" }, c.why === "outside_pr" ? "Review on GitHub ↗" : "Decide on GitHub ↗");
+      return h("article", { class: "card", tabindex: "0", "data-nav": "1", "data-gh": ghUrl(i), "data-id": i.id },
+        h("div", { class: "why " + c.why }, WHY[c.why] + " · " + ageDays(i.created_at) + " d old"),
+        h("div", { class: "head" }, h("a", { class: "alias", href: ghUrl(i), target: "_blank", rel: "noopener" }, i.alias), h("span", { class: "title" }, i.title)),
+        itemMeta(i, states),
+        sessionsBlock(i, false),
+        line,
+        pending ? null : picker(i),
+        pending || (S.openCard && S.openCard.id === i.id) ? null : h("div", { class: "actions" }, main, moreMenu(i, ownerExtras(i))));
+    }), recentClosesSection());
+  }
+
+  // The last 7 days' closes from this page, where Undo of an applied close lives (5.2a).
+  function recentClosesSection() {
+    const list = D.recentCloses(scoped(), S.decisions, S.acks, new Date(), 7);
+    if (!list.length) return null;
+    return h("section", { class: "closes" }, h("h2", {}, "Closed from the dashboard · last 7 days"), list.map(({ issue: i, close: c, reopening }) => {
+      const how = c.result === "already_closed" ? "was already closed on GitHub" : "closed as " + (D.CLOSE_REASONS[c.reason] || c.reason);
+      let tail;
+      if (reopening) tail = h("div", { class: "pending", role: "status" }, "Reopening · applied on the next sync");
+      else if (S.owner && c.undo_allowed) tail = h("div", { class: "actions" }, h("button", { class: "btn", onclick: () => writeDecision({ action: "undo", target: { decision: c.decision, item: i.id } }) }, "Reopen"));
+      else if (S.owner) tail = h("div", { class: "sub muted" }, c.result === "already_closed" ? "Not offered: the dashboard did not close it." : "Reopen is no longer offered: the issue changed on GitHub since.");
+      return h("article", { class: "card", "data-id": i.id },
+        h("div", { class: "head" }, h("a", { class: "alias", href: ghUrl(i), target: "_blank", rel: "noopener" }, i.alias), h("span", { class: "title" }, i.title)),
+        h("div", { class: "meta" }, h("span", {}, fmtDay(c.at) + " " + fmtTime(c.at) + " · " + how)),
+        tail);
+    }));
+  }
+
+  function renderQueue() {
+    const states = D.launchStates(S.launches, S.statuses);
+    const list = scoped();
+    const q = D.queue(list, D.inbox(list));
+    const f = S.queueFilter;
+    const text = S.text.toLowerCase();
+    const keep = (i) =>
+      (f === "all" || (f === "p0" && i.priority && i.priority.value === "p0") || (f === "over" && i.limit_breached) || (f === "pr" && i.kind === "pull_request") || (f === "progress" && D.inProgress(i)) || i.type === f) &&
+      (!text || (i.title + " " + i.alias).toLowerCase().includes(text));
+    const pill = (k, label) => h("button", { class: "chip" + (f === k ? " on" : ""), onclick: () => { S.queueFilter = k; S.sel = 0; render(); } }, label);
+    const search = h("input", { id: "filter", type: "search", placeholder: "Filter by title or number  ( / )", value: S.text, "aria-label": "Filter", oninput: (e) => { S.text = e.target.value; renderKeepFocus(); } });
+    const head = h("div", { class: "pills" }, pill("all", "All"), pill("p0", "p0"), pill("over", "Over time limit"), pill("progress", "In progress"), pill("bug", "Bugs"), pill("todo", "Todo"), pill("decision", "Decisions"), pill("docs", "Docs"), pill("pr", "Pull requests"), search);
+    const row = (i) => {
+      const line = decisionLine(i);
+      const st = states[i.id];
+      const launchable = S.owner && (!st || st.state === "not_sent");
+      return h("div", { class: "row", tabindex: "0", "data-nav": "1", "data-gh": ghUrl(i), "data-id": i.id },
+        h("div", { class: "main" },
+          h("div", { class: "head" }, h("a", { class: "alias", href: ghUrl(i), target: "_blank", rel: "noopener" }, i.alias), h("span", { class: "title" }, i.title)),
+          itemMeta(i, states), sessionsBlock(i, false), line, picker(i)),
+        h("div", { class: "actions" },
+          launchable ? h("button", { class: "btn primary", "data-main": "1", onclick: () => openLaunch(i) }, "Launch…") : h("a", { class: "btn", "data-main": "1", href: ghUrl(i), target: "_blank", rel: "noopener" }, "Open ↗"),
+          moreMenu(i, ownerExtras(i))));
+    };
+    const sections = [];
+    for (const l of q.levels) {
+      const items = l.items.filter(keep);
+      if (!items.length) continue;
+      sections.push(h("section", { class: "level" }, h("h2", {}, h("span", { class: "badge " + l.level }, l.level === "none" ? "—" : l.level), l.level === "none" ? "No priority" : "Level " + l.level.slice(1), h("span", { class: "muted" }, "· " + items.length)), items.map(row)));
+    }
+    const pulls = q.pulls.filter(keep);
+    if (pulls.length) sections.push(h("section", { class: "level" }, h("h2", {}, "Pull requests", h("span", { class: "muted" }, "· " + pulls.length)), pulls.map(row)));
+    return h("div", { class: "list" }, head, h("div", { class: "note", style: "text-align:left" }, "The next batch and its launch sheet arrive with ordering (phase 2). Until then each level is longest idle first."),
+      sections.length ? sections : h("div", { class: "note" }, "Nothing matches."));
+  }
+
+  function renderKeepFocus() {
+    const pos = $("filter") ? $("filter").selectionStart : null;
+    render();
+    const f = $("filter");
+    if (f) { f.focus(); if (pos != null) f.setSelectionRange(pos, pos); }
+  }
+
+  function renderTrends() {
+    const list = scoped();
+    const t = D.trends(list, new Date(), S.weeks, groups());
+    const period = h("label", { class: "pills" }, h("span", { class: "muted" }, "Period"),
+      h("select", { class: "chip", onchange: (e) => { S.weeks = Number(e.target.value); render(); } },
+        [4, 8, 12, 26].map((w) => h("option", { value: String(w), selected: w === S.weeks }, w + " weeks"))));
+    const based = h("span", { class: "sub" }, "From the snapshot of " + fmtDay(S.meta.taken_at) + " " + fmtTime(S.meta.taken_at) + ". Closed items stay in the snapshot for the history window only.");
+
+    const max = Math.max(1, ...t.weeks.map((w) => Math.max(w.opened, w.closed)));
+    const W = 320, H = 150, pad = 22, bw = (W - pad) / t.weeks.length;
+    const NS = "http://www.w3.org/2000/svg";
+    const svg = document.createElementNS(NS, "svg");
+    svg.setAttribute("viewBox", "0 0 " + W + " " + (H + 18));
+    svg.setAttribute("class", "chart");
+    svg.setAttribute("role", "img");
+    svg.setAttribute("aria-label", "Opened and closed per week: " + t.weeks.map((w) => fmtDay(w.from) + " " + w.opened + " opened, " + w.closed + " closed").join("; "));
+    const el = (tag, a, text) => { const e = document.createElementNS(NS, tag); for (const [k, v] of Object.entries(a)) e.setAttribute(k, v); if (text != null) e.textContent = text; svg.append(e); return e; };
+    el("line", { x1: pad, x2: W, y1: H, y2: H, stroke: "var(--line)" });
+    el("text", { x: 0, y: 10 }, String(max));
+    el("text", { x: 0, y: H }, "0");
+    // A date label is about 46 units wide at this font: label every step-th week so none overlap.
+    const label = 46, step = Math.ceil(label / bw);
+    t.weeks.forEach((w, k) => {
+      const x = pad + k * bw;
+      const one = Math.max(2, bw / 2 - 3);
+      const hO = (w.opened / max) * (H - 8), hC = (w.closed / max) * (H - 8);
+      el("rect", { x: x + 2, y: H - hO, width: one, height: hO, rx: 2, fill: "var(--bar-open)" }).append(Object.assign(document.createElementNS(NS, "title"), { textContent: fmtDay(w.from) + ": " + w.opened + " opened" }));
+      el("rect", { x: x + 4 + one, y: H - hC, width: one, height: hC, rx: 2, fill: "var(--bar-closed)" }).append(Object.assign(document.createElementNS(NS, "title"), { textContent: fmtDay(w.from) + ": " + w.closed + " closed" }));
+      if (k % step === 0 && x + 2 + label <= W) el("text", { x: x + 2, y: H + 14 }, fmtDay(w.from).replace(" ", " "));
+    });
+    const opened = t.weeks.reduce((a, w) => a + w.opened, 0), closed = t.weeks.reduce((a, w) => a + w.closed, 0);
+    const flow = h("section", { class: "panel" }, h("h2", {}, "Opened and closed per week"),
+      h("div", { class: "legend" }, h("span", {}, h("i", { style: "background:var(--bar-open)" }), "opened " + opened), h("span", {}, h("i", { style: "background:var(--bar-closed)" }), "closed " + closed)),
+      svg);
+
+    const pct = t.over.of ? (100 * t.over.n) / t.over.of : 0;
+    const limits = h("section", { class: "panel" }, h("h2", {}, "Over time limit"),
+      h("div", {}, h("span", { class: "big" }, t.over.n + " of " + t.over.of), h("span", { class: "muted" }, " open items")),
+      h("div", { class: "meter", role: "img", "aria-label": t.over.n + " of " + t.over.of + " open items over their time limit" }, h("span", { style: "width:" + pct + "%" })),
+      h("div", { class: "sub" }, "Time limits come from each repo's translation and the project config (1.6)."),
+      h("button", { class: "btn", onclick: () => go("queue", "over") }, "Show them in the Queue"));
+
+    const table = (title, rows, kind) => h("section", { class: "panel" }, h("h2", {}, title),
+      rows.length ? h("div", { class: "scroll" }, h("table", {},
+        h("thead", {}, h("tr", {}, h("th", {}, kind), h("th", { class: "num" }, "open"), h("th", { class: "num" }, "p0"), h("th", { class: "num" }, "waiting"), h("th", { class: "num" }, "over limit"), h("th", {}, ""))),
+        h("tbody", {}, rows.map(([k, v]) => h("tr", {},
+          h("td", { class: "mono" }, kind === "repo" ? shortRepo(k) : k),
+          h("td", { class: "num" }, String(v.open)), h("td", { class: "num" }, String(v.p0_open)), h("td", { class: "num" }, String(v.waiting_on_you)),
+          h("td", { class: "num" }, v.n + " of " + v.of),
+          h("td", {}, h("button", { class: "btn quiet", onclick: () => isolate(kind, k) }, "Isolate"))))))) : h("div", { class: "note" }, "No " + kind + "s with open items."));
+
+    const byGroup = Object.entries(t.byGroup).sort();
+    const byRepo = Object.entries(t.byRepo).sort((a, b) => b[1].open - a[1].open);
+    return h("div", { class: "list" }, h("div", { class: "pills" }, period, based),
+      h("div", { class: "panels" }, flow, limits),
+      h("div", { class: "panels" }, table("By group", byGroup, "group"), table("By repo", byRepo, "repo")),
+      h("div", { class: "note" }, "Outside response times, decision accuracy and session outcomes arrive with their data in phase 2."));
+  }
+
+  function renderFoot() {
+    const parts = [];
+    if (S.load && S.load.generation) parts.push(h("span", {}, "Snapshot " + S.load.generation + (S.meta ? " · taken " + fmtDay(S.meta.taken_at) + " " + fmtTime(S.meta.taken_at) : "")));
+    parts.push(h("span", {}, S.owner ? "You own this page: your actions are recorded." : "Read only: actions are recorded by the page's owner."));
+    if (S.owner && S.viewer) parts.push(h("span", {}, "Your page user id: ", h("span", { class: "mono", style: "user-select:all" }, S.viewer)));
+    parts.push(h("span", {}, "Keys: j/k move · a main action · o open on GitHub · u undo · / filter"));
+    $("foot").replaceChildren(...parts);
+  }
+
+  // --- dialogs -------------------------------------------------------------------------
+
+  const dlg = $("dlg");
+  function showDialog(...kids) {
+    dlg.replaceChildren(h("div", { class: "dlg" }, ...kids));
+    if (!dlg.open) dlg.showModal();
+  }
+  const closeBtn = () => h("button", { class: "btn quiet", "aria-label": "Close", onclick: () => dlg.close() }, "✕");
+
+  function openDetails(i) {
+    const p = i.priority || {};
+    const links = i.links || {};
+    const mine = S.decisions.filter((d) => d.target && d.target.item === i.id).sort((a, b) => (a.created_at < b.created_at ? 1 : -1)).slice(0, 5);
+    const aliasList = (xs) => (xs && xs.length ? xs.join(", ") : "—");
+    showDialog(
+      h("header", {}, h("div", {}, h("a", { class: "alias", href: ghUrl(i), target: "_blank", rel: "noopener" }, i.alias + " ↗"), h("h2", {}, i.title)), closeBtn()),
+      h("div", { class: "meta" }, (i.labels || []).length ? i.labels.map((l) => h("span", { class: "tag" }, l)) : h("span", {}, "no labels")),
+      h("dl", {},
+        h("dt", {}, "Priority"), h("dd", {}, badge(i), " ", p.source ? "from the " + p.source : "none set"),
+        h("dt", {}, "Sources"), h("dd", { class: "mono" }, "label " + (p.label || "—") + " · project " + (p.project || "—") + " · override " + (p.override || "—")),
+        h("dt", {}, "Type · status"), h("dd", {}, (i.type || "no type") + " · " + i.status + (i.areas && i.areas.length ? " · areas " + i.areas.join(", ") : "")),
+        h("dt", {}, "Opened"), h("dd", {}, fmtDay(i.created_at) + " by " + (i.author || "?") + (i.outside ? " (outside)" : "")),
+        h("dt", {}, "Updated"), h("dd", {}, fmtDay(i.updated_at) + " · idle " + (i.idle_days || 0) + " d" + (i.limit_breached ? " · over time limit" : "")),
+        i.closed_at ? h("dt", {}, "Closed") : null, i.closed_at ? h("dd", {}, fmtDay(i.closed_at)) : null,
+        h("dt", {}, "Blocked by"), h("dd", { class: "mono" }, aliasList(links.blocked_by)),
+        h("dt", {}, "Blocks"), h("dd", { class: "mono" }, aliasList(links.blocks)),
+        h("dt", {}, "Parent"), h("dd", { class: "mono" }, links.parent || "—"),
+        h("dt", {}, "Children"), h("dd", { class: "mono" }, aliasList(links.children)),
+        (i.untranslated_labels || []).length ? h("dt", {}, "Untranslated") : null,
+        (i.untranslated_labels || []).length ? h("dd", {}, i.untranslated_labels.join(", ")) : null,
+      ),
+      sessionsBlock(i, true),
+      h("div", { class: "body" }, i.body || "No description."),
+      i.body_truncated ? h("div", { class: "sub muted" }, "The description is cut at 8000 characters; the rest is on GitHub.") : null,
+      mine.length ? h("div", {}, h("div", { class: "muted" }, "Recent decisions"), h("ul", {}, mine.map((d) => h("li", {}, fmtDay(d.created_at) + " " + fmtTime(d.created_at) + ": " + describe(d))))) : null,
+      canClose(i) ? h("div", { class: "actions" }, h("button", { class: "btn", onclick: () => openClose(i) }, "Close…")) : null,
+    );
+  }
+
+  // The close sheet (5.2a): reason, the duplicated issue's number, a comment prefilled per
+  // reason until the owner edits it, and on a public repo who the comment is published as.
+  function openClose(i) {
+    const repo = repoInfo(D.repoOf(i.alias)) || {};
+    let edited = false;
+    const reason = h("select", { "aria-label": "Reason" }, Object.entries(D.CLOSE_REASONS).map(([k, label]) => h("option", { value: k, selected: k === "completed" }, label.replace(/^a /, ""))));
+    const dup = h("input", { inputmode: "numeric", placeholder: "e.g. 12", "aria-label": "Duplicate of issue number" });
+    const dupField = h("label", { class: "field", hidden: true }, "Duplicate of #", dup);
+    const comment = h("textarea", { "aria-label": "Comment", maxlength: "65536", oninput: () => { edited = true; } });
+    const err = h("div", { class: "err", hidden: true, role: "alert" });
+    const refill = () => {
+      dupField.hidden = reason.value !== "duplicate";
+      err.hidden = true;
+      if (!edited) comment.value = D.closeComment(reason.value, dup.value.replace(/^#/, "").trim());
+    };
+    reason.addEventListener("change", refill);
+    dup.addEventListener("input", refill);
+    refill();
+    const go = h("button", { class: "btn primary" }, "Close");
+    go.onclick = () => {
+      const r = D.closeFields(i, reason.value, dup.value, comment.value);
+      if (r.error) { err.textContent = r.error; err.hidden = false; return; }
+      dlg.close();
+      writeDecision(r.fields);
+    };
+    showDialog(
+      h("header", {}, h("div", {}, h("div", { class: "alias" }, i.alias), h("h2", {}, "Close: " + i.title)), closeBtn()),
+      h("label", { class: "field" }, "Reason", reason),
+      dupField,
+      h("label", { class: "field" }, "Comment (posted with the close; empty posts none)", comment),
+      repo.visibility === "public" ? h("div", { class: "phase" }, shortRepo(D.repoOf(i.alias)) + " is public: the comment is published on GitHub in your name.") : null,
+      h("div", { class: "sub muted" }, "The next sync closes it on GitHub. Until then Undo takes it back; after, Reopen is offered while nobody has touched the issue."),
+      err,
+      h("div", { class: "actions" }, go, h("button", { class: "btn quiet", onclick: () => dlg.close() }, "Cancel")));
+    reason.focus();
+  }
+
+  function openSaveView() {
+    const input = h("input", { placeholder: "Name, e.g. Without bridges", "aria-label": "View name", maxlength: "60" });
+    showDialog(h("header", {}, h("h2", {}, "Save this view"), closeBtn()),
+      h("div", { class: "muted" }, scopeSentence(S.scope)),
+      h("label", { class: "field" }, "Name", input),
+      h("div", { class: "actions" }, h("button", { class: "btn primary", onclick: () => { const n = input.value.trim(); if (!n) { input.focus(); return; } dlg.close(); saveView(n); } }, "Save view")));
+    input.focus();
+  }
+
+  const MODELS = ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5", "claude-fable-5-1"];
+  const EFFORTS = ["low", "medium", "high", "xhigh", "max"];
+  const GATE = {
+    no_session: "The dispatcher is not running, so no Claude session would hear the launch.",
+    writers_only: "Only the page's editors can launch.",
+    off: "Sending to Claude is switched off for this page.",
+  };
+
+  async function openLaunch(i) {
+    const status = h("div", { class: "muted" }, "Checking whether a Claude session can hear the launch…");
+    const model = h("select", { "aria-label": "Model" }, MODELS.map((m) => h("option", { value: m }, m)));
+    const effort = h("select", { "aria-label": "Effort" }, EFFORTS.map((e) => h("option", { value: e, selected: e === "medium" }, e)));
+    const go = h("button", { class: "btn primary", disabled: true, "data-anchor": "launch" }, "Launch");
+    showDialog(
+      h("header", {}, h("div", {}, h("div", { class: "alias" }, i.alias), h("h2", {}, "Launch a fix: " + i.title)), closeBtn()),
+      h("div", { class: "grid2" }, h("label", { class: "field" }, "Model", model), h("label", { class: "field" }, "Effort", effort)),
+      h("div", { class: "sub muted" }, "Suggested: the default routing. The tracker suggests a model and effort per issue from phase 2."),
+      h("div", { class: "phase" }, "Phase 1: Launch records the request and posts its id to the launch thread. No dispatcher acts on it yet."),
+      status,
+      h("div", { class: "actions" }, go, h("button", { class: "btn", disabled: true, title: "Brief previews arrive in phase 2" }, "Preview brief"), h("button", { class: "btn quiet", onclick: () => dlg.close() }, "Cancel")));
+    const gate = S.comments ? await S.comments.canSendToClaude().catch(() => "unavailable") : "unavailable";
+    if (gate === "available") {
+      status.textContent = "A Claude session is listening.";
+      go.disabled = false;
+    } else {
+      status.textContent = "Launch is off: " + (GATE[gate] || "comments are not available in this view (" + gate + ").");
+    }
+    go.onclick = async () => {
+      go.disabled = true;
+      // The anchor is taken now, inside the gesture (comments.d.ts).
+      const anchor = S.comments.anchorFor(go);
+      status.textContent = "Recording the launch…";
+      const r = await D.launch({
+        db: S.db, comments: S.comments, who: who(), now: () => new Date(), rand: Math.random, anchor: () => anchor,
+      }, { kind: "fix", items: [i.id], aliases: [i.alias], recipe: "default", routing: { model: model.value, effort: effort.value, reason: "chosen on the launch sheet" } })
+        .catch((e) => ({ ok: false, error: (e && e.code) || "error" }));
+      if (r.ok) { dlg.close(); toast("Launch " + r.launch.id + " recorded and posted to the launch thread." + (r.threadNotRecorded ? " The new thread could not be recorded (" + r.threadNotRecorded + "), so the next launch starts another." : "")); }
+      else if (r.gate) status.textContent = "Launch is off: " + (GATE[r.gate] || r.gate);
+      else status.textContent = "Not sent (" + r.error + ")" + (r.launch ? ": the launch is recorded as not_sent." : ".");
+      render();
+    };
+  }
+
+  // --- keyboard and global events --------------------------------------------------------
+
+  document.addEventListener("click", (e) => {
+    if (S.menu && !e.target.closest(".menu")) { S.menu = null; render(); }
+  });
+  for (const b of document.querySelectorAll(".tab")) b.addEventListener("click", () => go(b.dataset.tab, b.dataset.tab === "inbox" ? S.inboxFilter : S.queueFilter));
+  $("fresh").addEventListener("click", () => {
+    const r = $("repotimes");
+    r.hidden = !r.hidden;
+    $("fresh").setAttribute("aria-expanded", String(!r.hidden));
+  });
+  document.addEventListener("keydown", (e) => {
+    if (dlg.open || e.metaKey || e.ctrlKey || e.altKey) return;
+    if (e.target.matches("input, select, textarea")) { if (e.key === "Escape") e.target.blur(); return; }
+    const navs = [...document.querySelectorAll("[data-nav]")];
+    const cur = navs[S.sel];
+    if (e.key === "j" || e.key === "k") {
+      if (!navs.length) return;
+      S.sel = Math.max(0, Math.min(navs.length - 1, S.sel + (e.key === "j" ? 1 : -1)));
+      for (const n of navs) n.classList.remove("sel");
+      navs[S.sel].classList.add("sel");
+      navs[S.sel].focus();
+      e.preventDefault();
+    } else if (e.key === "a" && cur) {
+      const m = cur.querySelector("[data-main]");
+      if (m) { m.click(); e.preventDefault(); }
+    } else if (e.key === "o" && cur) {
+      const link = cur.querySelector("a.alias");
+      if (link) { link.click(); e.preventDefault(); }
+    } else if (e.key === "u" && cur) {
+      const b = [...cur.querySelectorAll("button")].find((x) => x.textContent === "Undo");
+      if (b) { b.click(); e.preventDefault(); }
+    } else if (e.key === "/") {
+      if (S.tab !== "queue") go("queue", S.queueFilter);
+      const f = $("filter");
+      if (f) { f.focus(); e.preventDefault(); }
+    } else if (e.key === "Escape" && S.menu) { S.menu = null; render(); }
+  });
+
+  render();
+  start().catch((e) => { S.error = "The page could not start (" + ((e && (e.code || e.message)) || "error") + ")."; render(); });
+})();
+</script>

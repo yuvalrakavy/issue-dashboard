@@ -147,3 +147,36 @@ fn a_pages_file_with_an_unknown_collection_exits_1() {
     assert_eq!(out.status.code(), Some(1), "{}", String::from_utf8_lossy(&out.stderr));
     assert!(String::from_utf8_lossy(&out.stderr).contains("launchez"));
 }
+
+#[test]
+fn cycle_records_the_session_list_it_is_given() {
+    let t = Tracker::new();
+    let list = fixtures().join("sessions/list.json");
+    let c = t.ok(&["cycle", "--project", "home", "--sessions", list.to_str().unwrap()]);
+    assert_eq!(c["sessions"]["seen"], 4, "{c}");
+    let again = t.ok(&["cycle", "--project", "home", "--sessions", list.to_str().unwrap()]);
+    assert_eq!(again["sessions"]["seen"], 0, "{again}");
+    let outbox: Value = serde_json::from_str(&fs::read_to_string(c["outbox"].as_str().unwrap()).unwrap()).unwrap();
+    assert!(
+        outbox["issues"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|i| i["sessions"].is_array())
+    );
+}
+
+#[test]
+fn a_sessions_file_without_its_limit_exits_1_and_records_nothing() {
+    let t = Tracker::new();
+    let list = t.dir.path().join("sessions.json");
+    fs::write(
+        &list,
+        json!({"listed_at": "2026-10-23T16:47:00Z", "sessions": []}).to_string(),
+    )
+    .unwrap();
+    let out = t.cmd(&["cycle", "--project", "home", "--sessions", list.to_str().unwrap()]);
+    assert_eq!(out.status.code(), Some(1), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("sessions.json"));
+    assert!(!t.dir.path().join("outbox").exists());
+}

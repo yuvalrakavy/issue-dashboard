@@ -5,7 +5,8 @@ use serde_json::{Value, json};
 
 use crate::canonical::hash_value;
 
-/// The event kinds of phase 1 (10.3). Phase 2 adds the write events.
+/// The event kinds of phase 1 (10.3). The write events are phase 1's one GitHub write, a close
+/// from the page (10.10); phase 2 adds the rest.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Kind {
@@ -23,6 +24,16 @@ pub enum Kind {
     Membership,
     /// A cycle took its outbox sequence number (10.4 step 3); the event's seq is the number.
     Outbox,
+    /// A GitHub write is about to be made (10.9): recorded, under the lock, before the call.
+    WriteIntended,
+    /// A GitHub write was made, or found already made.
+    WriteApplied,
+    /// A GitHub write was refused before it was attempted, or failed.
+    WriteFailed,
+    /// The app's session list showed a session, unarchived, with new content (10.10).
+    SessionSeen,
+    /// A session seen before was archived, or left the list (10.10).
+    SessionGone,
 }
 
 impl Kind {
@@ -40,6 +51,11 @@ impl Kind {
             Kind::Exported => "exported",
             Kind::Membership => "membership",
             Kind::Outbox => "outbox",
+            Kind::WriteIntended => "write_intended",
+            Kind::WriteApplied => "write_applied",
+            Kind::WriteFailed => "write_failed",
+            Kind::SessionSeen => "session_seen",
+            Kind::SessionGone => "session_gone",
         }
     }
 

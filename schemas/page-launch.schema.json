@@ -120,13 +120,24 @@
     {
       "type": "object",
       "additionalProperties": false,
+      "description": "A thread record (5.4): one per launch thread, written once when the thread starts; the newest is the current thread. The first slice's single `_thread` record, rewritten on replacement, still reads as the oldest.",
       "required": [
         "id",
         "thread"
       ],
       "properties": {
         "id": {
-          "const": "_thread"
+          "$ref": "common.schema.json#/$defs/docId"
+        },
+        "project": {
+          "$ref": "common.schema.json#/$defs/projectName"
+        },
+        "author": {
+          "type": "string",
+          "minLength": 1
+        },
+        "created_at": {
+          "$ref": "common.schema.json#/$defs/timestamp"
         },
         "thread": {
           "type": "string",

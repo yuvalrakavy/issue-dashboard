@@ -2,7 +2,10 @@
 //! its own transaction; the GitHub reads run between them without it, and derive runs after
 //! the last commit from a read transaction begun under the lock.
 //!
-//! 1. **ingest**: record the config, then the page documents (10.5).
+//! 1. **ingest**: record the config, the page documents (10.5) and the app's session list
+//!    (10.10).
+//!    - **write** (1a): apply the owner's closes and their undos to GitHub (10.10), holding
+//!      the lock across each one's intent, call and result.
 //! 2. **observe**: plan from the ledger, read GitHub without the lock, record the reads under
 //!    it (chapter 2); then take the cycle's outbox sequence number in the same transaction.
 //! 3. **derive**: build the project's documents from the ledger as of that commit and write
@@ -22,14 +25,20 @@ use crate::github::GitHub;
 use crate::ingest::{self, Pages};
 use crate::ledger::{Dedupe, Tx};
 use crate::root::{Root, parse_time};
+use crate::sessions::{self, SessionList};
 use crate::snapshot::{self, RepoReport};
+use crate::write::{self, IssueWriter, Written};
 
 /// What one cycle did.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct CycleReport {
     pub project: String,
     pub ingest: ingest::Report,
+    /// What the session list recorded; empty when the cycle had none.
+    pub sessions: sessions::Report,
     pub repos: Vec<RepoReport>,
+    /// The GitHub writes the cycle made or settled.
+    pub writes: Vec<Written>,
     pub sequence: i64,
     pub outbox: PathBuf,
 }
@@ -39,7 +48,8 @@ fn begin(
     clock: &dyn Fn() -> DateTime<Utc>,
     project: &str,
     pages: &Pages,
-) -> Result<(ConfigSet, ingest::Report)> {
+    list: Option<&SessionList>,
+) -> Result<(ConfigSet, ingest::Report, sessions::Report)> {
     root.mutate_with_clock(clock, |tx| {
         // Read under the lock (local files only), so a config recorded here is never older
         // than one another command recorded while this one waited.
@@ -47,7 +57,11 @@ fn begin(
         config.record(tx)?;
         let owner = config.project(project)?.owner_id.clone();
         let report = ingest::ingest(tx, project, &owner, pages)?;
-        Ok((config, report))
+        let seen = match list {
+            Some(l) => sessions::ingest(tx, l)?,
+            None => sessions::Report::default(),
+        };
+        Ok((config, report, seen))
     })
 }
 
@@ -79,7 +93,7 @@ pub fn take_sequence(tx: &mut Tx<'_>, project: &str) -> Result<(i64, DateTime<Ut
     Ok((e.seq, parse_time(&taken_at)?))
 }
 
-/// One full cycle of `project`.
+/// One full cycle of `project`, without the write step: a close stays pending.
 pub fn cycle(
     root: &Root,
     gh: &dyn GitHub,
@@ -88,7 +102,40 @@ pub fn cycle(
     clock: &dyn Fn() -> DateTime<Utc>,
     page_size: u32,
 ) -> Result<CycleReport> {
-    let (config, ingested) = begin(root, clock, project, pages)?;
+    cycle_with_writes(root, gh, None, project, pages, clock, page_size)
+}
+
+/// One full cycle of `project`; with a `writer`, the write step applies the owner's closes.
+pub fn cycle_with_writes(
+    root: &Root,
+    gh: &dyn GitHub,
+    writer: Option<&dyn IssueWriter>,
+    project: &str,
+    pages: &Pages,
+    clock: &dyn Fn() -> DateTime<Utc>,
+    page_size: u32,
+) -> Result<CycleReport> {
+    cycle_full(root, gh, writer, project, pages, None, clock, page_size)
+}
+
+/// One full cycle of `project`: [`cycle_with_writes`], also recording the app's session list
+/// when there is one (10.10).
+#[allow(clippy::too_many_arguments)]
+pub fn cycle_full(
+    root: &Root,
+    gh: &dyn GitHub,
+    writer: Option<&dyn IssueWriter>,
+    project: &str,
+    pages: &Pages,
+    list: Option<&SessionList>,
+    clock: &dyn Fn() -> DateTime<Utc>,
+    page_size: u32,
+) -> Result<CycleReport> {
+    let (config, ingested, seen) = begin(root, clock, project, pages, list)?;
+    let writes = match writer {
+        Some(w) => root.session(clock, |s| write::step(s, w, &config, project))?,
+        None => Vec::new(),
+    };
     let plan = observe_plan(root, &config, project, clock)?;
     let fetches = snapshot::fetch(gh, &plan, clock, page_size);
     root.mutate_then_read(
@@ -104,7 +151,9 @@ pub fn cycle(
             Ok(CycleReport {
                 project: project.to_string(),
                 ingest: ingested,
+                sessions: seen,
                 repos,
+                writes,
                 sequence: seq,
                 outbox: path,
             })
@@ -121,7 +170,7 @@ pub fn snapshot(
     clock: &dyn Fn() -> DateTime<Utc>,
     page_size: u32,
 ) -> Result<Vec<RepoReport>> {
-    let (config, _) = begin(root, clock, project, &Pages::default())?;
+    let (config, _, _) = begin(root, clock, project, &Pages::default(), None)?;
     let plan = observe_plan(root, &config, project, clock)?;
     let fetches = snapshot::fetch(gh, &plan, clock, page_size);
     root.mutate_with_clock(clock, |tx| snapshot::record(tx, project, &fetches))

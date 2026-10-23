@@ -1,0 +1,15 @@
+{
+  "seq": 9,
+  "time": "2026-10-23T17:47:01Z",
+  "kind": "session_gone",
+  "subject": "local_23265ad0",
+  "pred": 0,
+  "distinct": {
+    "seen": 7
+  },
+  "identity": "4dc9d5e41985bdce4418e21b3beb95eff68fa4aa4a343fe01cca688b75cdce12",
+  "data": {
+    "why": "archived",
+    "listed_at": "2026-10-23T17:47:00Z"
+  }
+}

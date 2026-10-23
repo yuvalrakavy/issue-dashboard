@@ -1,0 +1,21 @@
+{
+  "seq": 7,
+  "time": "2026-10-23T16:47:01Z",
+  "kind": "session_seen",
+  "subject": "local_23265ad0",
+  "pred": 0,
+  "distinct": {
+    "content": "5555555555555555555555555555555555555555555555555555555555555555"
+  },
+  "identity": "e0b8bac3c7553c6c6c5293c963f49e29d7a170154e0ba5558e3f762a65224bd2",
+  "data": {
+    "title": "Fix gh #403: one parked DeleteStore stops the server",
+    "cwd": "/Users/owner/Projects/Store",
+    "branch": null,
+    "pr_number": null,
+    "running": true,
+    "last_active_at": "2026-10-23T16:46:02.205Z",
+    "link": "claude://claude.ai/epitaxy/local_23265ad0",
+    "listed_at": "2026-10-23T16:47:00Z"
+  }
+}

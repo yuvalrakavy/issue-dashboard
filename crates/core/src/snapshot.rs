@@ -419,7 +419,6 @@ fn fetch_repo(r: &Reader<'_>, rp: &RepoPlan, history_days: u32, started_at: Date
     let mut entering: BTreeSet<String> = set.difference(previous).cloned().collect();
     // A full read reads every member by node id; an incremental one only those entering.
     let read_all: BTreeSet<String> = if full { set.clone() } else { entering.clone() };
-    let leaving: BTreeSet<String> = previous.difference(&set).cloned().collect();
     // A full read checks everything that left since the last full one.
     let unchecked: BTreeSet<String> = if full {
         since_full
@@ -468,9 +467,20 @@ fn fetch_repo(r: &Reader<'_>, rp: &RepoPlan, history_days: u32, started_at: Date
                 prs.remove(&id);
                 entering.remove(&id);
             }
+            // Found by the search but not by id: it leaves the set, and a full read is the
+            // confirmation that it is gone.
+            None if set.contains(&id) => {
+                set.remove(&id);
+                issues.remove(&id);
+                prs.remove(&id);
+                if full && let Some(alias) = rp.aliases.get(&id) {
+                    gone.push((id, alias.clone()));
+                }
+            }
             None => {}
         }
     }
+    let leaving: BTreeSet<String> = previous.difference(&set).cloned().collect();
     Ok(Fetched {
         info,
         full,

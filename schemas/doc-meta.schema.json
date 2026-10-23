@@ -144,6 +144,21 @@
                 ]
               }
             }
+          },
+          "visibility": {
+            "description": "The repo's visibility as last read; a close's comment on a public repo is published (5.2a).",
+            "anyOf": [
+              {
+                "enum": [
+                  "public",
+                  "private",
+                  "internal"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         }
       }
@@ -167,6 +182,28 @@
         {
           "type": "null"
         }
+      ]
+    },
+    "groups": {
+      "description": "Each group a member names, with the tracked repos it holds.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      }
+    },
+    "sync_interval_minutes": {
+      "description": "How often the sync job runs: a decision is applied within this.",
+      "type": "integer",
+      "minimum": 1
+    },
+    "owner_id": {
+      "description": "The project's configured owner_id: only that page user's documents are accepted (10.5). Null while none is set, or while it is the placeholder u_pending.",
+      "type": [
+        "string",
+        "null"
       ]
     }
   }

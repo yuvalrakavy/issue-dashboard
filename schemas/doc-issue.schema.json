@@ -25,7 +25,8 @@
     "author",
     "outside",
     "rank",
-    "score"
+    "score",
+    "closed_at"
   ],
   "properties": {
     "id": {
@@ -344,6 +345,145 @@
     },
     "stale": {
       "type": "boolean"
+    },
+    "labels": {
+      "description": "The item's GitHub labels as read, before translation.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "body": {
+      "description": "The body, trimmed and cut at 8000 characters; null when empty. Outside text is data (4.2): the page shows it as plain text.",
+      "anyOf": [
+        {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8000
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "body_truncated": {
+      "description": "Whether the body was cut.",
+      "type": "boolean"
+    },
+    "closed_at": {
+      "description": "When the item was closed or merged; null while open. The Trends tab counts closes per week from it.",
+      "anyOf": [
+        {
+          "$ref": "common.schema.json#/$defs/timestamp"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "dashboard_close": {
+      "description": "The close the owner made from the dashboard and that still stands (10.10); null when there is none. undo_allowed: Undo would reopen it (the issue is still closed by that close and nobody has commented since).",
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "decision",
+            "reason",
+            "at",
+            "result",
+            "undo_allowed"
+          ],
+          "properties": {
+            "decision": {
+              "$ref": "common.schema.json#/$defs/docId"
+            },
+            "reason": {
+              "enum": [
+                "completed",
+                "not_planned",
+                "duplicate"
+              ]
+            },
+            "at": {
+              "$ref": "common.schema.json#/$defs/timestamp"
+            },
+            "result": {
+              "enum": [
+                "closed",
+                "already_closed"
+              ]
+            },
+            "undo_allowed": {
+              "type": "boolean"
+            }
+          }
+        }
+      ]
+    },
+    "sessions": {
+      "description": "The app's sessions matched to this item (10.10), newest activity first; absent or empty when none. Never the session's working directory or transcript.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "title",
+          "running",
+          "last_active_at",
+          "link",
+          "match"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "title": {
+            "type": "string"
+          },
+          "running": {
+            "type": "boolean"
+          },
+          "last_active_at": {
+            "$ref": "common.schema.json#/$defs/timestamp"
+          },
+          "link": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "match": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "kind",
+              "via"
+            ],
+            "properties": {
+              "kind": {
+                "enum": [
+                  "exact",
+                  "probable"
+                ]
+              },
+              "via": {
+                "enum": [
+                  "launch",
+                  "pull_request",
+                  "title",
+                  "branch"
+                ]
+              }
+            }
+          }
+        }
+      }
     }
   }
 }

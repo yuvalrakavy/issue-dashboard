@@ -1,0 +1,69 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yuvalrakavy/issue-dashboard/schemas/event-write-failed.schema.json",
+  "title": "Ledger event: write_failed",
+  "description": "A GitHub write was refused before it was attempted (stage precondition: with no intent, or after a crash's intent when the decision was undone or its preconditions no longer hold) or failed (stage apply). Not retried: the owner decides again (10.10).",
+  "allOf": [
+    {
+      "$ref": "common.schema.json#/$defs/eventEnvelope"
+    }
+  ],
+  "properties": {
+    "kind": {
+      "const": "write_failed"
+    },
+    "subject": {
+      "description": "The close decision the write carries out.",
+      "$ref": "common.schema.json#/$defs/docId"
+    },
+    "distinct": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "op"
+      ],
+      "properties": {
+        "op": {
+          "$ref": "#/$defs/op"
+        }
+      }
+    },
+    "data": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "project",
+        "op",
+        "stage",
+        "why"
+      ],
+      "properties": {
+        "project": {
+          "$ref": "common.schema.json#/$defs/projectName"
+        },
+        "op": {
+          "$ref": "#/$defs/op"
+        },
+        "stage": {
+          "enum": [
+            "precondition",
+            "apply"
+          ]
+        },
+        "why": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    }
+  },
+  "$defs": {
+    "op": {
+      "description": "close: the decision's close; reopen: its undo (10.10).",
+      "enum": [
+        "close",
+        "reopen"
+      ]
+    }
+  }
+}

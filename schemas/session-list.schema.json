@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yuvalrakavy/issue-dashboard/schemas/session-list.schema.json",
+  "title": "The session list file for `cycle --sessions`",
+  "description": "The sync job's copy of the app's session list (7.2, 10.10): the rows as `list_sessions` returned them, the limit it was called with, and when. Each row is checked against session-row on its own.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "listed_at",
+    "limit",
+    "sessions"
+  ],
+  "properties": {
+    "listed_at": {
+      "$ref": "common.schema.json#/$defs/timestamp"
+    },
+    "limit": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "sessions": {
+      "type": "array",
+      "items": {},
+      "description": "Any values: a row that is not a session row is skipped on its own, never the whole list."
+    }
+  }
+}

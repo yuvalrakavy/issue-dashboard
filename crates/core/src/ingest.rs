@@ -128,9 +128,9 @@ pub fn ingest(tx: &mut Tx<'_>, project: &str, owner_id: &str, pages: &Pages) -> 
     for doc in &pages.launches {
         guarded(&mut skipped, "launches", doc, || {
             schema::validate("page-launch", "launch document", doc)?;
-            if doc.get("not_sent").is_some() || id_of(doc).as_deref() == Some("_thread") {
+            if doc.get("not_sent").is_some() || doc.get("thread").is_some() {
                 return Err(Error::refused(
-                    "not_sent records and the thread document are not ingested in phase 1",
+                    "not_sent records and thread records are not ingested in phase 1",
                 ));
             }
             owned(doc, project, owner_id)?;

@@ -73,6 +73,8 @@ pub enum Action {
     CancelLaunch,
     ReleaseReservation,
     SettleOrphan,
+    /// Close an issue on GitHub (10.0's exception, 10.10).
+    Close,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -108,6 +110,39 @@ pub struct DecisionValue {
     pub areas: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub routing: Option<Routing>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub close: Option<CloseValue>,
+}
+
+/// Why an issue is closed: GitHub's `state_reason`, as `gh issue close --reason` takes it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CloseReason {
+    Completed,
+    NotPlanned,
+    Duplicate,
+}
+
+impl CloseReason {
+    /// The value `gh issue close --reason` takes.
+    pub fn gh(self) -> &'static str {
+        match self {
+            CloseReason::Completed => "completed",
+            CloseReason::NotPlanned => "not planned",
+            CloseReason::Duplicate => "duplicate",
+        }
+    }
+}
+
+/// What a `close` decision asks for: the reason, the issue a duplicate duplicates, and the
+/// comment to post with the close (empty: none).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CloseValue {
+    pub reason: CloseReason,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duplicate_of: Option<u64>,
+    pub comment: String,
 }
 
 /// A `decisions` document: one thing the owner did on the dashboard (5.3, 10.5).

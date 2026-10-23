@@ -53,3 +53,24 @@ Template:
 - improve: for any state shared across readers (a watermark, a cache), the test table gets a
   row "two readers commit out of order": three of round 1's S3s were that interleaving.
 
+## 2026-10-23 phase 1 slice 3: the dashboard page, sync skill, Close, session tracking (T2)
+- time: implement ~45%, tests and harness ~25%, gates and fixes ~30%; friction ~1 h.
+- catches: self-review=3 (three mutation controls that stayed green until lookalikes were added;
+  a branch-ref lookalike that could not reach the digit-tail check; an empty owner_id the config
+  schema already refuses) gate=Close 2 rounds (10 fix items over 4 commits), sessions 2 rounds
+  (round 1: 1 S3 + 3 S2; round 2: 1 S1, filed as #6) user=0 post-merge=0. Biggest: one bad session
+  row aborted the whole cycle, page ingest included; after a repo rename no session matched.
+- DG=n/a IG=sessions 20 (Close not rescored here: severities were not recorded at its gate)
+  post-merge=0
+- friction: the shared target dir served a stale build after a worktree agent built from another
+  tree (GUARDED: `touch crates/*/src/*.rs` before final runs); the `!` shell hook again (GUARDED by
+  habit); creating the tracker root under ~/.claude on a peer-relayed approval was refused as
+  persistence: the owner's yes has to be given in the session that acts (UNGUARDED: briefs that
+  need persistent setup should say the owner answers there).
+- tier-call: right.
+- delegation: mutation finder Sonnet (worktree, heartbeat file, 22 min): 51 mutants, 20 pinned by
+  18 tests, no production bug; depth Codex: 4 findings, all reproduced RED first; round-2
+  confirming Sonnet medium: 0 S3/S2, 1 S1. Controls 22/22 RED on the original mutations.
+- unconsolidated: 3
+- improve: any ingest of an external list gets a test table row "one element malformed, the
+  rest fine": the S3 was a whole-list validation where a per-element one was meant.

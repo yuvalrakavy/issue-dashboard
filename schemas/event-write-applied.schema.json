@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yuvalrakavy/issue-dashboard/schemas/event-write-applied.schema.json",
+  "title": "Ledger event: write_applied",
+  "description": "A GitHub write was made, or found already made (10.10). already_closed: the issue was closed when the tracker came to close it, so nothing was written and no comment posted.",
+  "allOf": [
+    {
+      "$ref": "common.schema.json#/$defs/eventEnvelope"
+    }
+  ],
+  "properties": {
+    "kind": {
+      "const": "write_applied"
+    },
+    "subject": {
+      "description": "The close decision the write carries out.",
+      "$ref": "common.schema.json#/$defs/docId"
+    },
+    "distinct": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "op"
+      ],
+      "properties": {
+        "op": {
+          "$ref": "#/$defs/op"
+        }
+      }
+    },
+    "data": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "project",
+        "op",
+        "result",
+        "reconciled"
+      ],
+      "properties": {
+        "project": {
+          "$ref": "common.schema.json#/$defs/projectName"
+        },
+        "op": {
+          "$ref": "#/$defs/op"
+        },
+        "result": {
+          "enum": [
+            "closed",
+            "already_closed",
+            "reopened"
+          ]
+        },
+        "closed_at": {
+          "description": "The issue's closedAt after a close; null when the read after it failed.",
+          "anyOf": [
+            {
+              "$ref": "common.schema.json#/$defs/timestamp"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reconciled": {
+          "description": "Settled by the next cycle from a fresh read, after a crash left only the intent.",
+          "type": "boolean"
+        }
+      }
+    }
+  },
+  "$defs": {
+    "op": {
+      "description": "close: the decision's close; reopen: its undo (10.10).",
+      "enum": [
+        "close",
+        "reopen"
+      ]
+    }
+  }
+}

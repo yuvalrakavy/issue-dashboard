@@ -283,7 +283,7 @@ Every write to GitHub goes through **plan, then apply**:
 
 How plans carry preconditions, how approval binds to a plan's content, how a crash midway is
 reconciled, and exactly when undo is allowed: 10.9. **All of 1.7 is phase 2** (10.0): in
-phase 1 the tracker writes nothing to GitHub.
+phase 1 the tracker writes nothing to GitHub but the owner's closes from the page (10.10).
 
 ### 1.8 Issue identity and links
 
@@ -387,6 +387,7 @@ appears with its details at once.
 | canonical type, areas, modifiers | translation (1.3), with untranslated labels listed per repo |
 | priority and its source | the three sources in order (1.5), plus every source's value for `explain` |
 | status | `untriaged` (an axis missing), `needs-decision`, `in-progress`, `blocked` (an open blocker), else `ready`; `umbrella` issues carry `umbrella` instead |
+| sessions working on it | the app's sessions matched to the item (7.2, 10.10 "Session tracking"): exact by launch or by pull request, probable by an issue reference in the title or branch; an item that would be `ready` or `blocked` is `in-progress` while one is matched |
 | age and idle time | from created and updated times |
 | time-limit breach | idle time against the project's limit for the issue's priority |
 | link graph | native relationships first, text links second, with the source of each edge recorded |
@@ -715,6 +716,19 @@ repeated in the level lists.
   workspace (editable, with the reason they were suggested), "Preview brief", and Launch.
   After launch the row shows the launch state (`requested`, `queued`, `started`, `landed`).
   When no dispatcher is listening, Launch is disabled with that reason (5.4).
+- **Every issue can be closed** (10.0's exception): "Close…" in each issue card's and row's
+  `⋯` menu and as a button in Details, except on a read-only repo and on pull requests. It
+  opens a sheet: the reason (completed, not planned, duplicate of #N, which requires the
+  number), a comment prefilled per reason and editable, and Close; on a public repo the sheet
+  says the comment is published in the owner's name. The card then shows "Closing · applied on
+  the next sync" with Undo until the ack. Undo of a close already applied reopens the issue,
+  offered only while it is still closed by that close and nobody has commented since; the
+  Inbox lists the last 7 days' dashboard closes for that.
+- **A session working on an issue shows on it.** A card, a row and Details carry "In
+  progress" with each matched session: its title, running or idle, when it was last active,
+  and "probably" when the match is by an issue reference rather than exact (10.10). The
+  session's link is shown as copyable text beside a link to it, since a `claude://` link may
+  not open from inside the page. Sessions matching no item are not listed in phase 1.
 - **Rows show the level and idle time; the score is in `explain`.** Scores only compare
   within a level (6.1), so they are not shown as a column beside the level.
 - **Phone width:** queue rows become cards with one action; nothing scrolls sideways;
@@ -746,7 +760,7 @@ field, never its id, and a page action on it still names the same item.
 | `views` | **page** | saved views (5.6) |
 | `requests` | **page** | brief previews and on-demand triage (10.8) |
 | `acks` | tracker | which page decisions each cycle consumed (10.6) |
-| `launches` | **page** | one per launch request; written once and never changed (a refused send is a second document, `not_sent`, naming the first) |
+| `launches` | **page** | one per launch request; written once and never changed (a refused send is a second document, `not_sent`, naming the first; each launch thread is a thread record of its own) |
 | `launch_status` | tracker | each launch's current transition (10.7) |
 
 "Tracker" in this table means the tracker's documents as written by the sync job (7.2),
@@ -776,10 +790,11 @@ The comment carries nothing but the id: the dispatcher reads the request from th
 so nothing typed into the thread can change what is launched.
 
 **One thread, not one per launch.** An artifact has a limit on its threads and replies, so
-launches reply into a single launch thread whose id the page keeps in `launches/_thread`
-(the page owns `launches`, see 5.3; the comments
+launches reply into a single launch thread whose id the page keeps in a thread record in
+`launches` (the page owns `launches`, see 5.3; the comments
 capability does not hand a thread id back on a later visit). When that thread is refused
-for being full, the page starts a new one and records its id. The dispatcher answers each
+for being full, the page starts a new one and writes a new thread record; the newest record is
+the current thread, so no record is ever rewritten. The dispatcher answers each
 launch in the thread with what it started. `sendToClaude` works for the
 artifact's editors only, so a person the page is shared with read-only cannot launch.
 
@@ -852,6 +867,10 @@ the kind:
 anything that closes an issue or posts a comment is visible to others and harder to undo, so
 it comes back once more as a plan. "Apply all labels at or above a confidence" acts only on
 label and priority suggestions, never on closes.
+
+**Closing by hand is not a suggestion.** The owner's own "Close…" (5.2a) is the decision and
+its approval at once: the sheet already shows the reason and the exact comment, so the cycle
+applies it without a further plan. The plans above remain for closes the tracker proposes.
 
 ---
 
@@ -1002,9 +1021,15 @@ does not go through this seam.
 
 | Job | What it is | When |
 |---|---|---|
-| **Sync** | a scheduled Claude task on the smallest model: reads the page documents from the dashboard database, runs `issue-dashboard cycle` on them (10.4), then publishes the cycle's outbox as a new generation (10.6) | every `sync_interval` (default 5 min); this is the cycle that applies your decisions |
+| **Sync** | a scheduled Claude task on the smallest model: reads the page documents from the dashboard database and the app's session list, runs `issue-dashboard cycle` on them (10.4), then publishes the cycle's outbox as a new generation (10.6) | every `sync_interval` (default 5 min); this is the cycle that applies your decisions |
 | **Triage** | a Claude session: reads the snapshot, makes suggestions through the decision seam, checks claims against the code, groups defect classes and batches, and records all of it with `record-suggestions`; it applies nothing (10.4) | daily, and on demand from the dashboard |
 | **Dispatcher** | a long-lived Claude session watching each project's dashboard | always on while you want launches to work |
+
+**The session list.** The sync job is a Claude session, so it can read the app's session
+list (`list_sessions`, archived ones included) and hand it to the cycle as a file
+(`cycle --sessions <file>`, 10.10); the CLI never calls the app, so 10.1's rule holds. The
+file holds each session's id, title, working directory, branch, pull-request number, whether
+it runs, whether it is archived, when it was last active and its link; never a transcript.
 
 **Why a sync job exists.** The dashboard's database is reachable through Claude's artifact
 tools; no route from a plain program to it is known (**unverified**: it is the first probe
@@ -1044,7 +1069,7 @@ event; chapter 10):
 4. `issue-dashboard brief --launch <id>` returns the brief (7.5); start the session with the
    routed model and effort and the token in its title.
 5. `issue-dashboard launch-started --token … --session …`, and reply in the thread with a
-   link to the session. In phase 1 the tracker writes nothing to GitHub; the launched session
+   link to the session. In phase 1 the tracker writes nothing to GitHub but closes (10.10); the launched session
    follows its repo's own process, including any in-progress label (10.0). In phase 2 the
    write engine can take over the label, under the repo's write policy (10.9).
 6. When the app continues the dispatcher because the session ended its turn for good,
@@ -1233,9 +1258,14 @@ second.
 
 | Phase | Toward GitHub | What it contains |
 |---|---|---|
-| **1** | **read-only: the tracker writes nothing to GitHub** | the ledger, the cycle, the snapshot, the dashboard, triage suggestions, priorities and overrides kept in the tracker, views, forks, launches and reservations, briefs, outcomes, `explain` |
+| **1** | **read-only, but for one write: the owner's close of an issue from the page (10.10)** | the ledger, the cycle, the snapshot, the dashboard, triage suggestions, priorities and overrides kept in the tracker, views, forks, launches and reservations, briefs, outcomes, `explain` |
 | **2** | the write engine (10.9): labels and priority write-back, label sync, plans, undo | built test-first against a scratch repository, so its timing questions are answered by running code and its review is a review of code |
 | **3** | closes, comments and reviews in the maintainer's name | the open-source writes of chapter 4 |
+
+**The one exception: closing an issue** (owner, 2026-10-23: "I need to be able to close an
+issue from the dashboard"). Phase 1 closes, and reopens on Undo, an issue the owner closed on
+the page: a deterministic CLI step with no model, under 10.9's intent-then-result rule (10.10,
+*Closing from the page*). Nothing else is written to GitHub in phase 1.
 
 In phase 1 a launched session still works on its issue the way it does today, under its
 repo's own process (the in-progress label, its commits, its pull request); the tracker
@@ -1254,6 +1284,7 @@ dashboard says it is not written to GitHub yet.
 | tracker documents (everything else in the database) | the sync job, carrying an outbox | the page | an outbox is written only if its sequence is newer than the published one (10.6) | the page shows the previous outbox |
 | sessions (fix, review, triage) | the dispatcher, through `start_session` | the dispatcher | a launch holds a reservation first (10.7) | the reservation stays held until the dispatcher reconciles it (10.7) |
 | comments in the launch thread | the page (requests) and the dispatcher (replies) | the dispatcher, you | replies carry the launch id | none; the thread is a notification channel, not state |
+| the app's session list | the app | the sync job (`list_sessions`), then the CLI (`cycle --sessions`) | a session whose content is unchanged records nothing (10.3) | nothing is recorded; the next cycle reads a newer list |
 | GitHub | **nobody, in phase 1**; the write engine, in phase 2 (10.9) | the snapshot | — | — |
 
 **The rule:** no ledger state changes except through a CLI command. The triage session and
@@ -1319,6 +1350,8 @@ stays unique per event and is what the backup and `rebuild` verify.
 | `launch` | launch id + transition (`requested`, `reserved`, `queued`, `started`, `ended`, `released`, `unconfirmed`, `withdrawn`, `orphan`, `orphan_settled`) + token (+ the session, for `started` and the orphan transitions) | 10.7; only the transitions in 10.7's table are legal, and a command refuses any other |
 | `outcome` | launch id | a session records its outcome |
 | `exported` | the export cursor's new value | 10.2 |
+| `session_seen` | session id + a hash of the observed fields (title, working directory, branch, pull-request number, running, the hour of the last activity) | a cycle's session list shows a session unarchived whose content differs from its latest `session_seen`, or which was gone since |
+| `session_gone` | session id + the `session_seen` it ends | a session seen before is archived, or is missing from a list that would have shown it (10.10) |
 
 Phase 2 adds the write events (10.9). The full field list per kind is the build's first
 artifact: JSON Schema files in `schemas/`, which the CLI, the sync job and the page validate
@@ -1620,7 +1653,9 @@ them rather than refusing.
   `freshness`): `watermarks` (per repo node: the start of the last complete read) and `reads`
   (per project and configured repo: node id, view hash, mode, attempt, last good and last full
   read with the ledger seq it was recorded at, error) and `rereads`. After `rebuild` they are
-  empty, so the next read of each repo is full.
+  empty, so the next read of each repo is full. A ledger whose `reads` table predates the
+  `full_seq` column has it dropped and recreated when the ledger opens: it is derived, so the
+  cost is one full read.
 - *Full reads:* the first read, a changed view or translation (hashed), a missing watermark,
   and once every 24 hours. A full read reads the whole set by node id and checks every item that
   was in the set at any time since the last full read and is not now (including items that left
@@ -1628,8 +1663,14 @@ them rather than refusing.
   last full read" is by ledger order: the sets from the one current at the full read's seq on,
   never a time compare (event times carry milliseconds, read times do not). An item that
   resolves elsewhere (transferred) is observed under its new alias, not gone. An item entering
-  the set that GitHub does not resolve is not a member (it enters when it resolves); a member
-  that does not resolve at a full read stays one until it leaves the set.
+  the set that GitHub does not resolve is not a member (it enters when it resolves). A member
+  the search still finds but GitHub does not resolve by id leaves the set at whichever read
+  meets it; a full read records it `item_gone`. A later read meets it as an entrant that does
+  not resolve, so it is recorded gone once.
+- *The read report:* `entered` counts only true entrants (in the set now, not in the previous
+  set, and resolved), on a full read as on an incremental one, though a full read reads every
+  member by id; `left` counts the previous members not in the set now; `gone` the `item_gone`
+  events this read recorded.
 - *Renames:* searches, `also` numbers and the since-lists use the repo's current
   `nameWithOwner` from the repo query, not the configured name, so a renamed repo keeps its
   items. Config keeps naming the repo by its old name until the owner edits it.
@@ -1641,7 +1682,7 @@ them rather than refusing.
   requests}`; an unknown collection is refused): launches first, then decisions, then the
   cancels, then views and requests. A document that fails its schema or the owner check is
   skipped and reported; one bad document never stops the rest. `not_sent` launch records and
-  the `_thread` document are not ingested in phase 1. Views and requests become `view_saved` and
+  thread records are not ingested in phase 1. Views and requests become `view_saved` and
   `request` events, one per document id.
 - *Cancels* are applied by `apply_cancels`, run on every ingest and after `reserve --request`,
   which withdraws each requested or queued launch an effective `cancel_launch` names, whichever
@@ -1661,10 +1702,129 @@ them rather than refusing.
   needs-decision, in-progress, blocked, ready. `waiting-on-author` needs the changes requested
   on the head commit ("since the last push"): the read takes each reviewer's latest
   change-requesting review commit (`latestOpinionatedReviews`, probed on rhaiscript/rhai#1194,
-  stored as `changes_requested_on`); an observation without it keeps GitHub's aggregate
-  `reviewDecision`. Only the latest 50 comments of an issue are read, so an issue with more is
+  stored as `changes_requested_on`); an observation without it, or where GitHub answered the
+  field `null`, keeps GitHub's aggregate `reviewDecision`. Only the latest 50 comments of an issue are read, so an issue with more is
   not "new" (an earlier inside comment may be unseen). Priority is override, then the project's
   priority, then the label. Closed items older than the history window are left out.
+- *Page fields (slice 3):* the observation keeps the body, trimmed and cut at 8000 characters
+  (`body_truncated` says so; `body_hash` stays the hash of the whole body), because Details
+  shows it (5.x). Adding it changed every item's content hash once, so the first read after the
+  upgrade records each item again. The issue document carries `body`, `body_truncated` and the
+  raw `labels`; meta carries `groups` (each group a member names, with the tracked repos it
+  holds) and the effective `sync_interval_minutes` (default 5), which the page uses for
+  "applied on the next run (in N min)". The page shows a body as plain text, never as HTML
+  (4.2). The issue document also carries `closed_at` (null while open), since Trends counts
+  closes per week and `updated_at` moves on later activity.
+- *The page database layout and publish (slice 3).* A program cannot write the artifact's
+  database (claims table), so the sync job is a skill (`skills/issue-dashboard-sync`) that
+  performs, with `ArtifactData`, what three CLI helpers plan, none of which needs a root:
+  `pages` (the four page collections, listed with `out_dir`, into the `--pages` file),
+  `publish-plan` and `cleanup-plan`. A generation is a marker `gens/gen-<seq>` (sequence,
+  project, `created_at`, per-collection `counts`), written in the first batch, then every
+  outbox document at `gens/gen-<seq>/<collection>/<id>`, in batches of at most 50 entries and
+  900 KiB of files; then the switch: `meta/active` set to the outbox's meta, pinned to the
+  version the skill read (unpinned on the first publish, which the database refuses if the
+  document exists). An outbox no newer than the active generation is a stop that writes
+  nothing; a marker for the outbox's own generation is refused (a name is never reused: a run
+  that failed after its first batch is abandoned, and the next cycle has a new sequence).
+  Probed on the page (2026-10-23): an unpinned write to an existing document is refused, an
+  `out_dir` file holds only the document (its version comes in the tool's reply), and a pinned
+  delete of a missing document fails its whole batch. So generation documents, created once
+  and never edited, are deleted pinned to version 1, and cleanup is planned from a listing of
+  what is there, which finishes a cleanup that stopped part way. Cleanup runs only after a
+  successful switch and keeps the new generation and the previous active one; it deletes a
+  generation older than the previous active one, or one whose marker is more than an hour old
+  (abandoned), each generation's documents before its marker. A younger generation newer than
+  the active one may be another run's and is kept. Access rule: everyone who can open the page
+  reads, only the owner writes (`[{path: "", read: "view", write: "owner"}]`).
+- *Closing from the page (slice 3, 10.0's exception).* A `close` decision carries
+  `value.close = {reason: completed | not_planned | duplicate, duplicate_of, comment}`. The cycle
+  gains a write step between ingest and observe, so the same cycle's read and outbox already
+  show the result. The step holds the root lock across each operation's intent, GitHub call
+  and result (10.9), each a committed transaction of its own, and takes the repo and number
+  from the item's latest observation, never from the page's alias. Event kinds:
+  `write_intended` (subject the decision; the operation, repo, number, reason, comment),
+  `write_applied` (`closed`, `already_closed`, `reopened`), `write_failed` (stage
+  `precondition` or `apply`, and why). Preconditions, refused as `write_failed` without an
+  intent: the item is an observed issue (not a pull request) in one of the project's repos, and
+  the repo is not read-only (declared, or the viewer's permission below write). Then a fresh
+  read (`gh issue view`): already closed records `already_closed` and posts no comment;
+  otherwise `gh issue close <n> -R <repo> --reason completed|"not planned"|duplicate`
+  (`--duplicate-of N` for a duplicate) with `--comment`. A failure is recorded and not retried:
+  the ack says refused with GitHub's error, and the owner can press Close again. A read that
+  follows a write (the `closed_at` after the close, the precondition read before a reopen) is
+  read again after 1, 2 and 4 s while it does not show what the write did, since GitHub's read
+  can lag its own write: without it a lagging read records no `closed_at`, and every Undo of
+  that close is refused. **A crash** leaves
+  an intent with no result; the next cycle's step reconciles it first from a fresh read: closed
+  at or after the intent's time is `closed` (reconciled); still open with a comment of the
+  intended text posted after the intent is a close re-sent without the comment; otherwise the
+  close is applied as new. **Undo.** An undo cancels its close; a cancelled close with no
+  intent writes nothing, and one already closed on GitHub is reversed by a reopen, applied only if a fresh read shows the issue still closed at the close's recorded
+  `closed_at` with no comment since, and only for a `closed` result (an `already_closed` one was
+  someone else's close, so its undo is refused). Each issue document carries `dashboard_close`
+  (the decision, its reason and time, and `undo_allowed` from the latest observation), and
+  `meta.repos[]` carries `visibility` for the public-repo notice. **Residuals:** a person's
+  comment or reopen landing between the fresh read and the write is not seen (GitHub has no
+  conditional close); a crash after `gh` posted the comment and before it closed is caught by
+  the comment-text match, but a person posting the same text in that window would make it
+  skip the comment. The per-run cap of 1.7 does not apply: each close is one explicit decision.
+- **Session tracking** (slice 3, owner-directed). `cycle --sessions <file>` takes
+  `{"listed_at", "limit", "sessions": [...]}`, the rows exactly as `list_sessions` returns them
+  (`sessionId`, `title`, `cwd`, `branch`, `prNumber`, `isRunning`, `isArchived`,
+  `lastActivityAt`, `link`; other fields are dropped, and a row that does not validate is
+  skipped with its reason). Ingest, in the cycle's first transaction: an unarchived row records
+  `session_seen` unless the session's latest session event is a `session_seen` with the same
+  content; an archived row, and a seen session missing from the list, record `session_gone`
+  when its latest session event is a `session_seen`. The list is sorted by last activity and
+  cut at `limit`, so a missing session is gone only when the list is complete (fewer rows than
+  `limit`) or its last seen activity is no older than the oldest listed row: a session that
+  only fell off the end stays as it was. The hash takes the last activity to the hour, so a
+  running session records at most about one event an hour, not one a sync. Matching is in
+  derive, so a change of config re-matches every session, and it is deterministic. A session's
+  **repo** is the project member whose `local_path` is its working directory or a parent of it
+  (a worktree under the checkout); the longest such path wins. **Exact:** the session is a
+  launch's (its id is the launch's `started` session, or its title holds the launch's token):
+  the launch's items; or its `prNumber` is a pull request of its repo in the project: that pull
+  request and the issues it closes. **Probable** (only when there is no exact match): the title
+  and branch name one item: `owner/repo#N` (a member repo), and against the session's repo
+  `#N`, `gh #N`, `issue N`, and `issue-N` or `gh-N` in a branch name; two different items, a
+  reference with no repo to resolve against, or a number not in the project match nothing.
+  Each issue document carries `sessions`: id, title, running, last active, link, and the match
+  (`exact` via `launch` or `pull_request`, `probable` via `title` or `branch`), newest first.
+  As built, the working directory is kept in the ledger for matching (the page never gets it);
+  the rest is the list above. `list_sessions` leaves out the session that calls it, so a sync
+  run by hand from a session shows that session as gone until a later run lists it; the
+  scheduled task's own session works on no issue. Without `--sessions` nothing is ingested and
+  nothing is taken for gone. **Page:** a card or Queue row shows its newest session ("In
+  progress", the title linking to the session, running or idle, how long since it was active,
+  and "probably" for a probable match) and a count of the rest; Details shows each, with its
+  link as selectable text and a Copy link button, since a `claude://` link may not open from
+  the page. The Queue's "In progress" pill keeps the items with a session or the
+  `in-progress` status.
+- *Corrections from slice 3's gate (round 1).* A refused send's `not_sent` outranks the
+  tracker's `requested` (every ingested launch is `requested`, heard or not); only a later
+  transition supersedes it. Each launch thread gets its own thread record (`T_…`, written once;
+  the first slice's rewritten `_thread` still reads, as the oldest). The page reads the current
+  thread before it writes the launch document, so a failed read records nothing, and a thread
+  record that fails after a send that succeeded is reported, not turned into `not_sent`. A
+  decision older than the ack window (`ACK_DAYS`, 30 days before the generation was taken) with
+  no ack is settled, not pending: its ack has aged out. A generation announced while the page
+  loads another is loaded after it. Page ids carry 8 random base-36 characters (there is no
+  create-only write, so the randomness keeps two writes in one second apart).
+- *Corrections from slice 3's gate (round 2).* A close older than the ack window is refused,
+  not made: the page stopped showing it as pending. A crash's dangling close intent on an issue
+  still open is closed only if the decision still stands and its preconditions still hold (an
+  undo since, or a repo made read-only since, records the close refused). Of two closes of one
+  issue, the one that closed it stays the one shown, with its Undo, over a later one that found
+  it already closed. Left open (S1): a close by someone else inside the moment between the
+  fresh read and `gh issue close` is recorded as ours, as is a close inside a crash's gap; the
+  intent's time is the local clock, compared with GitHub's.
+- **Open (for the owner):** found by the gate and left for after landing: an upload abandoned
+  for over an hour and resumed after a cleanup leaves documents no marker names, which no later
+  cleanup finds; the page's own collections (`decisions`, `launches`, `views`) are read to
+  1000 documents with no partial notice; a group names repos by their configured name, so a
+  repo renamed on GitHub drops out of its group's scope.
 - **Open (for the owner):** "new" is approximated as open, with no comment by an inside author
   and no labels; a closed or merged pull request still gets a pull-request status (e.g.
   `needs-review`); `commits`, `rank` and `score` are empty; the `flow` and history snapshot files

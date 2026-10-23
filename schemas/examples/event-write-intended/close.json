@@ -1,0 +1,20 @@
+{
+  "seq": 50,
+  "time": "2026-10-23T08:00:00.000Z",
+  "kind": "write_intended",
+  "subject": "D_close_7f3a",
+  "pred": 0,
+  "distinct": {
+    "op": "close"
+  },
+  "identity": "5848b6009bf5cb3ac2e2243f5712314b9d1daffa772e74c758b3cd59ff7bc0d0",
+  "data": {
+    "project": "home",
+    "op": "close",
+    "item": "I_kwDOissueA",
+    "repo": "yuvalrakavy/Store",
+    "number": 184,
+    "reason": "not_planned",
+    "comment": "Closed from the issue dashboard: no longer relevant."
+  }
+}

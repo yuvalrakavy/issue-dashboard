@@ -18,8 +18,11 @@ use issue_dashboard_core::github::{GhCli, GitHub, Recorder, Replay};
 use issue_dashboard_core::ingest::{self, Pages};
 use issue_dashboard_core::launch::{self, EndState, Via};
 use issue_dashboard_core::outcome::{self, GateRuns, Outcome, RecordedBy};
+use issue_dashboard_core::publish::{self, Active};
 use issue_dashboard_core::read;
 use issue_dashboard_core::root::{Options, parse_time};
+use issue_dashboard_core::sessions::SessionList;
+use issue_dashboard_core::write::{GhIssues, IssueWriter};
 use issue_dashboard_core::{Error, Root};
 use serde_json::{Value, json};
 
@@ -104,11 +107,53 @@ enum Command {
         /// {"decisions": [], "launches": [], "views": [], "requests": []}.
         #[arg(long)]
         pages: Option<PathBuf>,
+        /// The app's session list the sync job wrote, as JSON
+        /// {"listed_at": "...", "limit": N, "sessions": [rows as list_sessions returns them]}.
+        #[arg(long)]
+        sessions: Option<PathBuf>,
     },
     /// Only the read of GitHub (chapter 2): record what changed; no ingest, no outbox.
     Snapshot {
         #[arg(long)]
         project: String,
+    },
+    /// The sync job (7.2): the page documents listed into DIR (`<dir>/<collection>/<id>.json`)
+    /// as one file for `cycle --pages`. Needs no root.
+    Pages {
+        #[arg(long)]
+        dir: PathBuf,
+        #[arg(long)]
+        out: PathBuf,
+    },
+    /// The sync job (7.2): plan the publish of an outbox as a generation of page documents:
+    /// batch files of `ArtifactData` writes, a switch of `meta/active` pinned to the version
+    /// read, and the generations to clean afterwards. Needs no root.
+    PublishPlan {
+        #[arg(long)]
+        outbox: PathBuf,
+        /// `meta/active` as read (`get` with `out_dir`); absent before the first publish.
+        #[arg(long, requires = "active_version")]
+        active: Option<PathBuf>,
+        /// The version that read returned.
+        #[arg(long, requires = "active")]
+        active_version: Option<u64>,
+        /// The `out_dir` of a listing of the `gens` collection.
+        #[arg(long)]
+        markers: Option<PathBuf>,
+        #[arg(long)]
+        out: PathBuf,
+    },
+    /// The sync job (7.2): after a successful switch, plan the deletes of the generations a
+    /// publish plan marks for cleaning, from the listings of them. Needs no root.
+    CleanupPlan {
+        /// The publish plan's plan.json.
+        #[arg(long)]
+        plan: PathBuf,
+        /// The `out_dir` the listings of the generations went into.
+        #[arg(long)]
+        listing: PathBuf,
+        #[arg(long)]
+        out: PathBuf,
     },
 }
 
@@ -260,7 +305,64 @@ fn outcome_of(a: &OutcomeArgs) -> Result<Outcome, Error> {
     })
 }
 
+/// The sync helpers: files in, files out, no tracker root.
+fn run_sync(command: &Command, now: DateTime<Utc>) -> anyhow::Result<Option<Value>> {
+    let read_json = |path: &PathBuf| -> anyhow::Result<Value> {
+        let text = std::fs::read_to_string(path).with_context(|| path.display().to_string())?;
+        Ok(serde_json::from_str(&text).map_err(|e| Error::refused(format!("{}: not JSON: {e}", path.display())))?)
+    };
+    Ok(Some(match command {
+        Command::Pages { dir, out } => {
+            let p = publish::pages(dir)?;
+            std::fs::write(out, serde_json::to_string(&p)?).with_context(|| out.display().to_string())?;
+            json!({
+                "out": out,
+                "decisions": p.decisions.len(),
+                "launches": p.launches.len(),
+                "views": p.views.len(),
+                "requests": p.requests.len(),
+            })
+        }
+        Command::PublishPlan {
+            outbox,
+            active,
+            active_version,
+            markers,
+            out,
+        } => {
+            let outbox = read_json(outbox)?;
+            let active = match (active, active_version) {
+                (Some(path), Some(version)) => Some(Active {
+                    meta: read_json(path)?,
+                    version: *version,
+                }),
+                _ => None,
+            };
+            let mut found = std::collections::BTreeMap::new();
+            if let Some(dir) = markers {
+                let gens = dir.join("gens");
+                if gens.is_dir() {
+                    for e in std::fs::read_dir(&gens)? {
+                        let path = e?.path();
+                        if path.extension().is_some_and(|x| x == "json")
+                            && let Some(stem) = path.file_stem().and_then(|s| s.to_str())
+                        {
+                            found.insert(stem.to_string(), read_json(&path)?);
+                        }
+                    }
+                }
+            }
+            publish::plan(&outbox, active.as_ref(), &found, now, out)?
+        }
+        Command::CleanupPlan { plan, listing, out } => publish::cleanup(plan, listing, out)?,
+        _ => return Ok(None),
+    }))
+}
+
 fn run(cli: Cli) -> anyhow::Result<Value> {
+    if let Some(v) = run_sync(&cli.command, clock()?())? {
+        return Ok(v);
+    }
     let dir = cli
         .root
         .context("no tracker root: pass --root or set ISSUE_DASHBOARD_ROOT")?;
@@ -275,6 +377,9 @@ fn run(cli: Cli) -> anyhow::Result<Value> {
         Command::RecordOutcome(_) => "record-outcome",
         Command::Cycle { .. } => "cycle",
         Command::Snapshot { .. } => "snapshot",
+        Command::Pages { .. } | Command::PublishPlan { .. } | Command::CleanupPlan { .. } => {
+            unreachable!("run_sync answered")
+        }
     };
     let root = Root::new(&dir, options(name)?);
 
@@ -376,7 +481,11 @@ fn run(cli: Cli) -> anyhow::Result<Value> {
             let r = root.mutate_with_clock(now, |tx| outcome::record(tx, &o))?;
             json!({"launch": o.launch, "seq": r.event().seq, "repeat": !r.is_new(), "missing": o.missing})
         }
-        Command::Cycle { project, pages } => {
+        Command::Cycle {
+            project,
+            pages,
+            sessions,
+        } => {
             let pages: Pages = match &pages {
                 Some(path) => {
                     let text = std::fs::read_to_string(path).with_context(|| path.display().to_string())?;
@@ -385,12 +494,38 @@ fn run(cli: Cli) -> anyhow::Result<Value> {
                 }
                 None => Pages::default(),
             };
+            let sessions: Option<SessionList> = match &sessions {
+                Some(path) => {
+                    let text = std::fs::read_to_string(path).with_context(|| path.display().to_string())?;
+                    Some(
+                        serde_json::from_str(&text)
+                            .map_err(|e| Error::refused(format!("{}: not a session list: {e}", path.display())))?,
+                    )
+                }
+                None => None,
+            };
             let gh = github()?;
-            serde_json::to_value(cycle::cycle(&root, gh.as_ref(), &project, &pages, &now, page_size()?)?)?
+            // A replayed GitHub is never written to: a close then stays pending.
+            let writer = std::env::var(ENV_REPLAY)
+                .is_err()
+                .then_some(&GhIssues as &dyn IssueWriter);
+            serde_json::to_value(cycle::cycle_full(
+                &root,
+                gh.as_ref(),
+                writer,
+                &project,
+                &pages,
+                sessions.as_ref(),
+                &now,
+                page_size()?,
+            )?)?
         }
         Command::Snapshot { project } => {
             let gh = github()?;
             json!({"repos": cycle::snapshot(&root, gh.as_ref(), &project, &now, page_size()?)?})
+        }
+        Command::Pages { .. } | Command::PublishPlan { .. } | Command::CleanupPlan { .. } => {
+            unreachable!("run_sync answered")
         }
     })
 }

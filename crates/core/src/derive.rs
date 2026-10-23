@@ -5,7 +5,7 @@
 //! `forks` and `metrics` are written empty until the steps that produce them exist. Every
 //! document is checked against its schema before the file is written.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -17,15 +17,17 @@ use serde_json::{Value, json};
 
 use crate::config::{ConfigSet, View};
 use crate::decision::{self, Status};
-use crate::docs::{Action, DecisionValue, Priority};
+use crate::docs::{Action, Decision, DecisionValue, Priority};
 use crate::event::Kind;
 use crate::launch::{self, State};
 use crate::ledger;
-use crate::observe::ObservedData;
+use crate::observe::{ItemKind, ObservedData};
 use crate::root::{format_time, parse_time};
 use crate::schema;
+use crate::sessions;
 use crate::snapshot::{self, DEFAULT_HISTORY_DAYS};
 use crate::translate::Translation;
+use crate::write;
 use crate::{Error, Result};
 
 /// `sync_interval_minutes` when the project config does not set it (7.2).
@@ -33,6 +35,9 @@ pub const DEFAULT_SYNC_MINUTES: u32 = 5;
 
 /// Acks are carried for this long after the cycle that consumed the decision (10.6).
 pub const ACK_DAYS: i64 = 30;
+
+/// The `owner_id` a project config holds until the owner's page user id is known.
+pub const PENDING_OWNER: &str = "u_pending";
 
 /// Inside authors by association (4.1).
 const INSIDE: [&str; 3] = ["OWNER", "MEMBER", "COLLABORATOR"];
@@ -112,6 +117,7 @@ struct Context<'a> {
     overrides: &'a BTreeMap<String, (DecisionValue, Option<String>)>,
     taken_at: DateTime<Utc>,
     stale: bool,
+    closes: &'a BTreeMap<String, Value>,
 }
 
 impl Context<'_> {
@@ -221,6 +227,10 @@ impl Context<'_> {
             "status": status,
             "created_at": whole_seconds(created)?,
             "updated_at": whole_seconds(&o.updated_at)?,
+            "closed_at": match c.get("closed_at").and_then(Value::as_str) {
+                Some(at) => json!(whole_seconds(at)?),
+                None => Value::Null,
+            },
             "idle_days": idle_days,
             "limit_breached": limit_breached,
             "links": {
@@ -235,7 +245,11 @@ impl Context<'_> {
             "rank": null,
             "score": null,
             "untranslated_labels": canon.untranslated,
+            "labels": labels,
+            "body": c.get("body").cloned().unwrap_or(Value::Null),
+            "body_truncated": c.get("body_truncated").and_then(Value::as_bool).unwrap_or(false),
             "stale": self.stale,
+            "dashboard_close": self.closes.get(id).cloned().unwrap_or(Value::Null),
         }))
     }
 
@@ -288,6 +302,32 @@ fn limits(config: &ConfigSet, project: &str) -> Result<BTreeMap<Priority, u32>> 
     Ok(out)
 }
 
+/// The repo's node id: from its read state, else from any observation of it.
+fn repo_node(conn: &Connection, project: &str, repo: &str) -> Result<Option<String>> {
+    match snapshot::read_state(conn, project, repo)?.and_then(|s| s.repo_node) {
+        Some(n) => Ok(Some(n)),
+        None => snapshot::repo_node_of(conn, repo),
+    }
+}
+
+/// Why the tracker must not write to the repo (1.4), if it must not: `declared` in the config,
+/// or `no_write_access` from the viewer's permission as last read.
+pub fn read_only(conn: &Connection, project: &str, view: &View) -> Result<Option<&'static str>> {
+    if view.read_only {
+        return Ok(Some("declared"));
+    }
+    let permission = match repo_node(conn, project, &view.repo)? {
+        Some(n) => observed(conn, &n)?.and_then(|o| {
+            o.content
+                .get("viewer_permission")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        }),
+        None => None,
+    };
+    Ok(matches!(permission.as_deref(), Some("READ" | "TRIAGE" | "NONE")).then_some("no_write_access"))
+}
+
 /// The read state of one configured repo, for `meta` (2.5).
 fn repo_meta(
     conn: &Connection,
@@ -297,10 +337,7 @@ fn repo_meta(
     taken_at: DateTime<Utc>,
 ) -> Result<(Value, Option<String>, bool)> {
     let state = snapshot::read_state(conn, project, &view.repo)?;
-    let node = match state.as_ref().and_then(|s| s.repo_node.clone()) {
-        Some(n) => Some(n),
-        None => snapshot::repo_node_of(conn, &view.repo)?,
-    };
+    let node = repo_node(conn, project, &view.repo)?;
     let good_at = state.as_ref().and_then(|s| s.good_at.clone());
     let error = state.as_ref().and_then(|s| s.error.clone());
     let stale = error.is_some()
@@ -308,21 +345,15 @@ fn repo_meta(
             None => true,
             Some(g) => taken_at - parse_time(g)? > Duration::minutes(2 * sync_minutes as i64),
         };
-    let permission = match &node {
-        Some(n) => observed(conn, n)?.and_then(|o| {
-            o.content
-                .get("viewer_permission")
-                .and_then(Value::as_str)
-                .map(str::to_string)
-        }),
-        None => None,
+    let read_only = match read_only(conn, project, view)? {
+        Some(why) => json!({"value": true, "why": why}),
+        None => json!({"value": false, "why": null}),
     };
-    let read_only = if view.read_only {
-        json!({"value": true, "why": "declared"})
-    } else if matches!(permission.as_deref(), Some("READ" | "TRIAGE" | "NONE")) {
-        json!({"value": true, "why": "no_write_access"})
-    } else {
-        json!({"value": false, "why": null})
+    let visibility = match &node {
+        Some(n) => {
+            observed(conn, n)?.and_then(|o| o.content.get("visibility").and_then(Value::as_str).map(str::to_string))
+        }
+        None => None,
     };
     let mut m = json!({
         "repo": view.repo,
@@ -331,6 +362,7 @@ fn repo_meta(
         "error": error,
         "stale": stale,
         "read_only": read_only,
+        "visibility": visibility,
     });
     if let Some(n) = &node {
         m["id"] = json!(n);
@@ -352,8 +384,10 @@ fn acks(conn: &Connection, project: &str, taken_at: DateTime<Utc>) -> Result<Vec
             .find(|e| e.data.get("transition").and_then(Value::as_str) == Some("withdrawn"))
             .and_then(|e| e.data.get("decision").and_then(Value::as_str).map(str::to_string)))
     };
+    let resolved = decision::resolved(conn, project)?;
+    let by_id: HashMap<String, Decision> = resolved.iter().map(|(_, d, _)| (d.id.clone(), d.clone())).collect();
     let mut out = Vec::new();
-    for (seq, d, status) in decision::resolved(conn, project)? {
+    for (seq, d, status) in resolved {
         // The cycle that consumed it: the first outbox of the project after it was recorded.
         let Some((cycle, at)) = outboxes.iter().find(|(s, _)| *s > seq) else {
             continue;
@@ -361,25 +395,32 @@ fn acks(conn: &Connection, project: &str, taken_at: DateTime<Utc>) -> Result<Vec
         if taken_at - *at > Duration::days(ACK_DAYS) {
             continue;
         }
-        let (result, reason) = match status {
-            Status::Applied if d.action == Action::CancelLaunch => {
-                let target = d.target.launch.clone().unwrap_or_default();
-                match launches.get(&target) {
-                    Some(l) if withdrawn_by(&target)?.as_deref() != Some(d.id.as_str()) => (
-                        "refused",
-                        Some(match l.state {
-                            State::Withdrawn => format!("launch {target} was already withdrawn by another decision"),
-                            other => format!(
-                                "launch {target} is {other}; only a requested or queued launch can be cancelled"
-                            ),
-                        }),
-                    ),
-                    _ => ("applied", None),
+        let (result, reason) = match write::ack(conn, &d, &status, &by_id)? {
+            // A close still waiting for its write: no ack yet.
+            Some(None) => continue,
+            Some(Some((result, reason))) => (result, reason),
+            None => match status {
+                Status::Applied if d.action == Action::CancelLaunch => {
+                    let target = d.target.launch.clone().unwrap_or_default();
+                    match launches.get(&target) {
+                        Some(l) if withdrawn_by(&target)?.as_deref() != Some(d.id.as_str()) => (
+                            "refused",
+                            Some(match l.state {
+                                State::Withdrawn => {
+                                    format!("launch {target} was already withdrawn by another decision")
+                                }
+                                other => format!(
+                                    "launch {target} is {other}; only a requested or queued launch can be cancelled"
+                                ),
+                            }),
+                        ),
+                        _ => ("applied", None),
+                    }
                 }
-            }
-            Status::Applied => ("applied", None),
-            Status::Refused { reason } => ("refused", Some(reason)),
-            Status::Cancelled { by } => ("cancelled", Some(format!("undone by {by}"))),
+                Status::Applied => ("applied", None),
+                Status::Refused { reason } => ("refused", Some(reason)),
+                Status::Cancelled { by } => ("cancelled", Some(format!("undone by {by}"))),
+            },
         };
         let mut ack = json!({"id": d.id, "decision": d.id, "cycle": cycle, "result": result});
         if let Some(r) = reason.filter(|r| !r.is_empty()) {
@@ -414,6 +455,67 @@ fn launch_status(conn: &Connection, project: &str) -> Result<Vec<Value>> {
     Ok(out)
 }
 
+/// Each group a member of `project` names, with the tracked repos it holds (the page's scope
+/// pills and "by group" panel).
+fn groups(config: &ConfigSet, project: &str) -> Result<BTreeMap<String, Vec<String>>> {
+    let p = config.project(project)?;
+    let views = config.views(project)?;
+    let mut out = BTreeMap::new();
+    for group in p.member.iter().filter_map(|m| m.group.as_deref()) {
+        let repos = p.groups.get(group).or_else(|| config.registry.groups.get(group));
+        let tracked: Vec<String> = repos
+            .into_iter()
+            .flatten()
+            .filter(|r| views.contains_key(*r))
+            .cloned()
+            .collect();
+        out.insert(group.to_string(), tracked);
+    }
+    Ok(out)
+}
+
+/// Puts each item's matched live sessions on its document (10.10); a ready or blocked issue
+/// with one is in progress (2.3).
+fn attach_sessions(conn: &Connection, config: &ConfigSet, project: &str, issues: &mut [Value]) -> Result<()> {
+    let mut tracked = BTreeMap::new();
+    for i in issues.iter() {
+        let id = i["id"].as_str().unwrap_or_default().to_string();
+        let kind = if i["kind"] == "pull_request" {
+            ItemKind::PullRequest
+        } else {
+            ItemKind::Issue
+        };
+        let closes = match kind {
+            ItemKind::PullRequest => observed(conn, &id)?
+                .map(|o| strings(o.content.get("pull_request").unwrap_or(&Value::Null), "closes"))
+                .unwrap_or_default(),
+            _ => Vec::new(),
+        };
+        tracked.insert(
+            i["alias"].as_str().unwrap_or_default().to_string(),
+            sessions::Tracked { id, kind, closes },
+        );
+    }
+    // Each member repo's name now, from its observation: its items' aliases use it.
+    let mut current = BTreeMap::new();
+    for repo in config.views(project)?.into_keys() {
+        if let Some(node) = repo_node(conn, project, &repo)?
+            && let Some(o) = observed(conn, &node)?
+        {
+            current.insert(repo, o.alias);
+        }
+    }
+    let mut matched = sessions::matches(conn, config, project, &current, &tracked)?;
+    for i in issues.iter_mut() {
+        let shown = matched.remove(i["id"].as_str().unwrap_or_default()).unwrap_or_default();
+        if !shown.is_empty() && i["kind"] == "issue" && matches!(i["status"].as_str(), Some("ready" | "blocked")) {
+            i["status"] = json!("in-progress");
+        }
+        i["sessions"] = json!(shown);
+    }
+    Ok(())
+}
+
 /// Builds the outbox of `project` for the cycle whose `outbox` event has sequence `seq`.
 pub fn derive(
     conn: &Connection,
@@ -430,6 +532,7 @@ pub fn derive(
     let project_priorities = decision::project_priorities(conn, project)?;
     let overrides: BTreeMap<String, (DecisionValue, Option<String>)> = decision::overrides(conn, project)?;
     let window = taken_at - Duration::days(history_days as i64);
+    let closes = write::standing_closes(conn, project)?;
 
     let mut repos = Vec::new();
     let mut issues = Vec::new();
@@ -450,6 +553,7 @@ pub fn derive(
             overrides: &overrides,
             taken_at,
             stale,
+            closes: &closes,
         };
         for id in members.all() {
             let Some(o) = observed(conn, &id)? else { continue };
@@ -466,6 +570,7 @@ pub fn derive(
         }
     }
     issues.sort_by(|a, b| a["alias"].as_str().cmp(&b["alias"].as_str()));
+    attach_sessions(conn, config, project, &mut issues)?;
 
     let open: Vec<&Value> = issues.iter().filter(|i| i["state"] == "open").collect();
     let count = |f: &dyn Fn(&Value) -> bool| open.iter().filter(|i| f(i)).count();
@@ -488,6 +593,10 @@ pub fn derive(
         "repos": repos,
         "dispatcher_seen_at": null,
         "default_view": p.default_view,
+        "groups": groups(config, project)?,
+        "sync_interval_minutes": sync_minutes,
+        // The page tells a viewer whose actions would all be refused (10.5): none is set yet.
+        "owner_id": Some(p.owner_id.as_str()).filter(|o| !o.is_empty() && *o != PENDING_OWNER),
     });
     let out = Outbox {
         project: project.to_string(),

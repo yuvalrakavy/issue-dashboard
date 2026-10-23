@@ -1,0 +1,17 @@
+{
+  "seq": 52,
+  "time": "2026-10-23T08:00:00.000Z",
+  "kind": "write_failed",
+  "subject": "D_close_7f3a",
+  "pred": 0,
+  "distinct": {
+    "op": "close"
+  },
+  "identity": "44fece9f139ff52ef87f70dc451c81f53983a1345d0191baddd1b502793cf5ae",
+  "data": {
+    "project": "home",
+    "op": "close",
+    "stage": "precondition",
+    "why": "rhaiscript/rhai is read-only (declared)"
+  }
+}

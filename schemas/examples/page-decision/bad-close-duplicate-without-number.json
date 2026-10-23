@@ -1,0 +1,17 @@
+{
+  "id": "D_close_7f3a",
+  "project": "home",
+  "author": "user_owner",
+  "created_at": "2026-10-23T08:00:00Z",
+  "action": "close",
+  "target": {
+    "item": "I_kwDOissueA",
+    "alias": "yuvalrakavy/Store#184"
+  },
+  "value": {
+    "close": {
+      "reason": "duplicate",
+      "comment": ""
+    }
+  }
+}
