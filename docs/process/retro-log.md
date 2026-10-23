@@ -32,3 +32,24 @@ Template:
 - unconsolidated: 1
 - improve: write the "what state does the recovery path leave?" row into the test table for any
   crash-safety mechanism: every round-1 S3 was a recovery path's own end state.
+
+## 2026-10-23 phase 1 slice 2: GitHub trait, snapshot, ingest, derive, outbox, cycle (T2)
+- time: implement ~40%, fixtures and tests ~30%, gate and fixes ~30%; friction ~1 h.
+- catches: self-review=3 (vacuous priority asserts comparing objects to strings; a control that
+  stayed green because the fixture dropped the item itself; a hung lease control) gate=14
+  user=0 post-merge=0. Biggest: details kept by configured repo name rather than node id; an
+  entrant's change lost behind another project's newer watermark; an undo chain reviving a
+  withdrawn launch.
+- DG=n/a IG=76 post-merge=0 (2 rounds; round 2 found S1 only)
+- friction: the mutation finder stalled with no process for ~30 min before the parent noticed
+  (UNGUARDED: give the finder a wall-clock budget and a heartbeat file); the shell hook on `!`
+  again pushed edits through Python scripts (GUARDED by habit); a patch script failed on
+  rustfmt-reflowed SQL (~10 min).
+- tier-call: right.
+- delegation: mutation finder Sonnet (worktree), 58 pinning tests and no production bug, then
+  stalled; depth Codex (codex-rescue), 10 findings, all real, and it returned properly this time;
+  round-2 confirming Sonnet medium, 0 S3/S2 and 4 S1.
+- unconsolidated: 2
+- improve: for any state shared across readers (a watermark, a cache), the test table gets a
+  row "two readers commit out of order": three of round 1's S3s were that interleaving.
+
