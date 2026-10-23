@@ -81,7 +81,10 @@ fn publish_plan_pins_the_version_read_and_cleans_from_the_marker_listing() {
     assert_eq!(s["decision"], "publish", "{s}");
     let switch = read(s["switch"][0].as_str().unwrap());
     assert_eq!(switch[0]["if_version"], json!(4));
-    assert_eq!(s["clean"], json!([{"generation": "gen-3", "list": ["gens/gen-3/issues"]}]));
+    assert_eq!(
+        s["clean"],
+        json!([{"generation": "gen-3", "list": ["gens/gen-3/issues"]}])
+    );
 }
 
 // Kills: the clock (ISSUE_DASHBOARD_NOW) not reaching the abandon test.
@@ -146,7 +149,13 @@ fn cleanup_plan_deletes_what_the_listing_holds_for_the_generations_the_plan_name
         .map(|w| (w["collection"].as_str().unwrap(), w["doc_id"].as_str().unwrap()))
         .collect();
     assert_eq!(ids, [("gens/gen-3/issues", "I_1"), ("gens", "gen-3")]);
-    assert!(batch.as_array().unwrap().iter().all(|w| w["op"] == "delete" && w["if_version"] == json!(1)));
+    assert!(
+        batch
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|w| w["op"] == "delete" && w["if_version"] == json!(1))
+    );
 }
 
 // Kills: `cleanup-plan` accepting a plan that stopped.

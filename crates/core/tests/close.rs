@@ -111,7 +111,14 @@ impl IssueWriter for FakeGh {
         self.waits.lock().unwrap().push(d.as_millis() as u64);
     }
 
-    fn close(&self, repo: &str, number: u64, reason: CloseReason, duplicate_of: Option<u64>, comment: Option<&str>) -> Result<()> {
+    fn close(
+        &self,
+        repo: &str,
+        number: u64,
+        reason: CloseReason,
+        duplicate_of: Option<u64>,
+        comment: Option<&str>,
+    ) -> Result<()> {
         self.calls.lock().unwrap().push(format!(
             "close {repo}#{number} {reason:?} dup={duplicate_of:?} comment={comment:?}"
         ));
@@ -121,7 +128,10 @@ impl IssueWriter for FakeGh {
         let now = self.now.lock().unwrap().clone();
         let mut issues = self.issues.lock().unwrap();
         let i = issues.get_mut(&(repo.to_string(), number)).unwrap();
-        self.before_close.lock().unwrap().insert((repo.to_string(), number), i.clone());
+        self.before_close
+            .lock()
+            .unwrap()
+            .insert((repo.to_string(), number), i.clone());
         if let Some(c) = comment {
             i.comments.push(CommentNow {
                 author: "yuvalrakavy".into(),
@@ -236,7 +246,13 @@ fn a_close_decision_records_the_intent_closes_the_issue_and_records_the_result()
     let t = fixture_root();
     let w = FakeGh::new();
     let (x, alias) = tracked(&t, &w, STORE, "issue");
-    let r = run(&t, &w, &pages(&[close("D_close", &x, &alias, CloseReason::NotPlanned, None, NOT_PLANNED)]), 10).unwrap();
+    let r = run(
+        &t,
+        &w,
+        &pages(&[close("D_close", &x, &alias, CloseReason::NotPlanned, None, NOT_PLANNED)]),
+        10,
+    )
+    .unwrap();
 
     let (repo, n) = split(&alias);
     assert_eq!(
@@ -272,10 +288,17 @@ fn a_duplicate_close_passes_the_other_issue_and_an_empty_comment_posts_none() {
     let t = fixture_root();
     let w = FakeGh::new();
     let (x, alias) = tracked(&t, &w, STORE, "issue");
-    run(&t, &w, &pages(&[close("D_dup", &x, &alias, CloseReason::Duplicate, Some(12), "")]), 10).unwrap();
+    run(
+        &t,
+        &w,
+        &pages(&[close("D_dup", &x, &alias, CloseReason::Duplicate, Some(12), "")]),
+        10,
+    )
+    .unwrap();
     let (repo, n) = split(&alias);
     assert!(
-        w.writes().contains(&format!("close {repo}#{n} Duplicate dup=Some(12) comment=None")),
+        w.writes()
+            .contains(&format!("close {repo}#{n} Duplicate dup=Some(12) comment=None")),
         "{:?}",
         w.calls()
     );
@@ -290,7 +313,13 @@ fn an_issue_already_closed_is_recorded_closed_and_gets_no_comment() {
         i.state = "CLOSED".into();
         i.closed_at = Some(format_time(at(5)));
     });
-    let r = run(&t, &w, &pages(&[close("D_close", &x, &alias, CloseReason::Completed, None, "done")]), 10).unwrap();
+    let r = run(
+        &t,
+        &w,
+        &pages(&[close("D_close", &x, &alias, CloseReason::Completed, None, "done")]),
+        10,
+    )
+    .unwrap();
     assert!(w.writes().is_empty(), "nothing is written: {:?}", w.calls());
     assert!(w.get(&alias).comments.is_empty());
     let ev = write_events(&t, "D_close");
@@ -367,7 +396,10 @@ fn a_crash_after_the_comment_but_before_the_close_closes_without_a_second_commen
     let healed = Root::new(t.path(), Options::default());
     cycle::cycle_with_writes(&healed, &gh(), Some(&w), "home", &p, &|| at(20), PAGE).unwrap();
     let (repo, n) = split(&alias);
-    assert_eq!(w.writes(), vec![format!("close {repo}#{n} NotPlanned dup=None comment=None")]);
+    assert_eq!(
+        w.writes(),
+        vec![format!("close {repo}#{n} NotPlanned dup=None comment=None")]
+    );
     assert_eq!(w.get(&alias).comments.len(), 1);
 }
 
@@ -385,7 +417,13 @@ fn a_close_on_a_read_only_repo_is_refused_without_an_intent() {
         .expect("a rhai issue");
     let (x, alias) = (i["id"].as_str().unwrap(), i["alias"].as_str().unwrap());
     w.open(alias);
-    let r = run(&t, &w, &pages(&[close("D_rhai", x, alias, CloseReason::Completed, None, "done")]), 10).unwrap();
+    let r = run(
+        &t,
+        &w,
+        &pages(&[close("D_rhai", x, alias, CloseReason::Completed, None, "done")]),
+        10,
+    )
+    .unwrap();
     assert!(w.calls().is_empty(), "GitHub is not touched: {:?}", w.calls());
     let ev = write_events(&t, "D_rhai");
     assert_eq!(kinds(&t, "D_rhai"), vec![Kind::WriteFailed]);
@@ -410,7 +448,13 @@ fn a_close_of_a_pull_request_is_refused() {
         .expect("a pull request");
     let (x, alias) = (pr["id"].as_str().unwrap(), pr["alias"].as_str().unwrap());
     w.open(alias);
-    run(&t, &w, &pages(&[close("D_pr", x, alias, CloseReason::Completed, None, "")]), 10).unwrap();
+    run(
+        &t,
+        &w,
+        &pages(&[close("D_pr", x, alias, CloseReason::Completed, None, "")]),
+        10,
+    )
+    .unwrap();
     assert!(w.calls().is_empty());
     let ev = write_events(&t, "D_pr");
     assert_eq!(kinds(&t, "D_pr"), vec![Kind::WriteFailed]);
@@ -423,9 +467,26 @@ fn the_repo_and_number_come_from_the_observation_not_the_page() {
     let w = FakeGh::new();
     let (x, alias) = tracked(&t, &w, STORE, "issue");
     w.open("yuvalrakavy/airzoned#1");
-    run(&t, &w, &pages(&[close("D_close", &x, "yuvalrakavy/airzoned#1", CloseReason::Completed, None, "")]), 10).unwrap();
+    run(
+        &t,
+        &w,
+        &pages(&[close(
+            "D_close",
+            &x,
+            "yuvalrakavy/airzoned#1",
+            CloseReason::Completed,
+            None,
+            "",
+        )]),
+        10,
+    )
+    .unwrap();
     let (repo, n) = split(&alias);
-    assert!(w.writes()[0].starts_with(&format!("close {repo}#{n} ")), "{:?}", w.calls());
+    assert!(
+        w.writes()[0].starts_with(&format!("close {repo}#{n} ")),
+        "{:?}",
+        w.calls()
+    );
     assert_eq!(w.get("yuvalrakavy/airzoned#1").state, "OPEN");
 }
 
@@ -467,7 +528,10 @@ fn an_undo_before_the_close_was_applied_writes_nothing() {
     let r = run(
         &t,
         &w,
-        &pages(&[close("D_close", &x, &alias, CloseReason::Completed, None, ""), undo("D_undo", "D_close")]),
+        &pages(&[
+            close("D_close", &x, &alias, CloseReason::Completed, None, ""),
+            undo("D_undo", "D_close"),
+        ]),
         10,
     )
     .unwrap();
@@ -483,14 +547,19 @@ fn an_undo_after_the_close_reopens_the_issue() {
     let w = FakeGh::new();
     let (x, alias) = tracked(&t, &w, STORE, "issue");
     let c = close("D_close", &x, &alias, CloseReason::NotPlanned, None, NOT_PLANNED);
-    run(&t, &w, &pages(&[c.clone()]), 10).unwrap();
+    run(&t, &w, &pages(std::slice::from_ref(&c)), 10).unwrap();
     let r = run(&t, &w, &pages(&[c, undo("D_undo", "D_close")]), 20).unwrap();
     let (repo, n) = split(&alias);
     assert_eq!(w.writes().last().unwrap(), &format!("reopen {repo}#{n}"));
     assert_eq!(w.get(&alias).state, "OPEN");
     assert_eq!(
         kinds(&t, "D_close"),
-        vec![Kind::WriteIntended, Kind::WriteApplied, Kind::WriteIntended, Kind::WriteApplied]
+        vec![
+            Kind::WriteIntended,
+            Kind::WriteApplied,
+            Kind::WriteIntended,
+            Kind::WriteApplied
+        ]
     );
     assert_eq!(write_events(&t, "D_close")[3].1["result"], "reopened");
     let d = doc(&r);
@@ -506,7 +575,7 @@ fn a_read_that_lags_the_close_is_read_again_so_undo_still_reopens() {
     let (x, alias) = tracked(&t, &w, STORE, "issue");
     let c = close("D_close", &x, &alias, CloseReason::NotPlanned, None, NOT_PLANNED);
     *w.stale_reads.lock().unwrap() = 2;
-    run(&t, &w, &pages(&[c.clone()]), 10).unwrap();
+    run(&t, &w, &pages(std::slice::from_ref(&c)), 10).unwrap();
     assert_eq!(*w.waits.lock().unwrap(), vec![1000, 2000]);
     assert_eq!(write_events(&t, "D_close")[1].1["closed_at"], format_time(at(0)));
     // The reopen's own precondition read lags too.
@@ -540,7 +609,7 @@ fn an_undo_is_refused_once_someone_commented_after_the_close() {
     let w = FakeGh::new();
     let (x, alias) = tracked(&t, &w, STORE, "issue");
     let c = close("D_close", &x, &alias, CloseReason::NotPlanned, None, NOT_PLANNED);
-    run(&t, &w, &pages(&[c.clone()]), 10).unwrap();
+    run(&t, &w, &pages(std::slice::from_ref(&c)), 10).unwrap();
     w.set(&alias, |i| {
         i.comments.push(CommentNow {
             author: "someone".into(),
@@ -566,7 +635,7 @@ fn an_undo_of_a_close_someone_else_made_is_refused() {
         i.closed_at = Some(format_time(at(5)));
     });
     let c = close("D_close", &x, &alias, CloseReason::Completed, None, "");
-    run(&t, &w, &pages(&[c.clone()]), 10).unwrap();
+    run(&t, &w, &pages(std::slice::from_ref(&c)), 10).unwrap();
     let r = run(&t, &w, &pages(&[c, undo("D_undo", "D_close")]), 20).unwrap();
     assert!(w.writes().is_empty(), "{:?}", w.calls());
     assert_eq!(ack(&doc(&r), "D_undo")["result"], "refused");
@@ -578,7 +647,7 @@ fn an_undo_is_refused_when_the_issue_was_reopened_on_github_since() {
     let w = FakeGh::new();
     let (x, alias) = tracked(&t, &w, STORE, "issue");
     let c = close("D_close", &x, &alias, CloseReason::Completed, None, "");
-    run(&t, &w, &pages(&[c.clone()]), 10).unwrap();
+    run(&t, &w, &pages(std::slice::from_ref(&c)), 10).unwrap();
     // GitHub keeps the last closedAt on a reopened issue.
     w.set(&alias, |i| i.state = "OPEN".into());
     let r = run(&t, &w, &pages(&[c, undo("D_undo", "D_close")]), 20).unwrap();
@@ -595,7 +664,7 @@ fn an_undo_is_refused_when_the_issue_was_reopened_and_closed_again() {
     let w = FakeGh::new();
     let (x, alias) = tracked(&t, &w, STORE, "issue");
     let c = close("D_close", &x, &alias, CloseReason::Completed, None, "");
-    run(&t, &w, &pages(&[c.clone()]), 10).unwrap();
+    run(&t, &w, &pages(std::slice::from_ref(&c)), 10).unwrap();
     w.set(&alias, |i| i.closed_at = Some(format_time(at(15))));
     let r = run(&t, &w, &pages(&[c, undo("D_undo", "D_close")]), 20).unwrap();
     assert!(!w.writes().iter().any(|c| c.starts_with("reopen")));
@@ -605,11 +674,21 @@ fn an_undo_is_refused_when_the_issue_was_reopened_and_closed_again() {
 #[test]
 fn a_duplicate_close_without_the_other_issue_is_refused_by_the_schema() {
     let mut d = serde_json::to_value(close("D", "I_x", "a/b#1", CloseReason::Duplicate, None, "")).unwrap();
-    assert!(!schema_errors("page-decision", &d).is_empty(), "a duplicate needs duplicate_of");
+    assert!(
+        !schema_errors("page-decision", &d).is_empty(),
+        "a duplicate needs duplicate_of"
+    );
     d["value"]["close"]["duplicate_of"] = json!(3);
-    assert!(schema_errors("page-decision", &d).is_empty(), "{:?}", schema_errors("page-decision", &d));
+    assert!(
+        schema_errors("page-decision", &d).is_empty(),
+        "{:?}",
+        schema_errors("page-decision", &d)
+    );
     d["value"] = json!({});
-    assert!(!schema_errors("page-decision", &d).is_empty(), "a close needs value.close");
+    assert!(
+        !schema_errors("page-decision", &d).is_empty(),
+        "a close needs value.close"
+    );
 }
 
 fn schema_errors(stem: &str, v: &Value) -> Vec<String> {
@@ -622,8 +701,17 @@ fn meta_names_each_repos_visibility() {
     let w = FakeGh::new();
     let r = run(&t, &w, &Pages::default(), 0).unwrap();
     let d = doc(&r);
-    let store = d["meta"]["repos"].as_array().unwrap().iter().find(|m| m["repo"] == STORE).unwrap().clone();
-    assert!(matches!(store["visibility"].as_str(), Some("public" | "private")), "{store}");
+    let store = d["meta"]["repos"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["repo"] == STORE)
+        .unwrap()
+        .clone();
+    assert!(
+        matches!(store["visibility"].as_str(), Some("public" | "private")),
+        "{store}"
+    );
 }
 
 /// Sets the node `id` closed at `closed_at`, updated at `updated`, with these comments
@@ -647,7 +735,9 @@ fn closed_on_github(v: &mut Value, id: &str, closed_at: &str, updated: &str, com
                 closed_on_github(c, id, closed_at, updated, comments);
             }
         }
-        Value::Array(a) => a.iter_mut().for_each(|c| closed_on_github(c, id, closed_at, updated, comments)),
+        Value::Array(a) => a
+            .iter_mut()
+            .for_each(|c| closed_on_github(c, id, closed_at, updated, comments)),
         _ => {}
     }
 }
@@ -663,15 +753,21 @@ fn undo_is_offered_while_the_observation_shows_the_dashboards_close_and_no_comme
     let cycle = |minutes: i64, p: &Pages| {
         cycle::cycle_with_writes(&t.root, &sw.gh(), Some(&w), "home", p, &move || at(minutes), PAGE).unwrap()
     };
-    cycle(10, &pages(&[c.clone()]));
+    cycle(10, &pages(std::slice::from_ref(&c)));
     let (id, at0) = (x.clone(), closed_at.clone());
     sw.set(move |_, v| {
         let mut v = v?;
-        closed_on_github(&mut v, &id, &at0, &format_time(at(24 * 60)), &[("yuvalrakavy", format_time(at(0)))]);
+        closed_on_github(
+            &mut v,
+            &id,
+            &at0,
+            &format_time(at(24 * 60)),
+            &[("yuvalrakavy", format_time(at(0)))],
+        );
         Ok(v)
     });
     // A day later, so the daily full read reads it by node id.
-    let d = doc(&cycle(24 * 60 + 20, &pages(&[c.clone()])));
+    let d = doc(&cycle(24 * 60 + 20, &pages(std::slice::from_ref(&c))));
     let dc = &issue(&d, &x)["dashboard_close"];
     assert_eq!(issue(&d, &x)["state"], "closed", "the read shows the close");
     assert_eq!(dc["result"], "closed");
@@ -680,11 +776,21 @@ fn undo_is_offered_while_the_observation_shows_the_dashboards_close_and_no_comme
     let (id, at0) = (x.clone(), closed_at.clone());
     sw.set(move |_, v| {
         let mut v = v?;
-        closed_on_github(&mut v, &id, &at0, &format_time(at(48 * 60)), &[("yuvalrakavy", format_time(at(0))), ("someone", format_time(at(15)))]);
+        closed_on_github(
+            &mut v,
+            &id,
+            &at0,
+            &format_time(at(48 * 60)),
+            &[("yuvalrakavy", format_time(at(0))), ("someone", format_time(at(15)))],
+        );
         Ok(v)
     });
     let d = doc(&cycle(48 * 60 + 30, &pages(&[c])));
-    assert_eq!(issue(&d, &x)["dashboard_close"]["undo_allowed"], false, "a comment since the close");
+    assert_eq!(
+        issue(&d, &x)["dashboard_close"]["undo_allowed"],
+        false,
+        "a comment since the close"
+    );
 }
 
 #[test]
@@ -717,7 +823,13 @@ fn without_a_writer_a_close_stays_pending() {
     let p = pages(&[close("D_close", &x, &alias, CloseReason::Completed, None, "")]);
     let r = cycle::cycle(&t.root, &gh(), "home", &p, &|| at(10), PAGE).unwrap();
     assert!(kinds(&t, "D_close").is_empty());
-    assert!(doc(&r)["acks"].as_array().unwrap().iter().all(|a| a["decision"] != "D_close"));
+    assert!(
+        doc(&r)["acks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|a| a["decision"] != "D_close")
+    );
 }
 
 use issue_dashboard_core::Root;
@@ -731,7 +843,13 @@ fn a_close_older_than_the_ack_window_is_refused_and_never_written() {
     let (x, alias) = tracked(&t, &w, STORE, "issue");
     // The decision is from 08:00 on the recording day; the cycle runs 31 days later.
     let late = 31 * 24 * 60;
-    run(&t, &w, &pages(&[close("D_old", &x, &alias, CloseReason::Completed, None, "done")]), late).unwrap();
+    run(
+        &t,
+        &w,
+        &pages(&[close("D_old", &x, &alias, CloseReason::Completed, None, "done")]),
+        late,
+    )
+    .unwrap();
     assert!(w.writes().is_empty(), "{:?}", w.calls());
     let ev = write_events(&t, "D_old");
     assert_eq!(kinds(&t, "D_old"), vec![Kind::WriteFailed]);
@@ -741,7 +859,13 @@ fn a_close_older_than_the_ack_window_is_refused_and_never_written() {
     let t2 = fixture_root();
     let w2 = FakeGh::new();
     let (x2, alias2) = tracked(&t2, &w2, STORE, "issue");
-    run(&t2, &w2, &pages(&[close("D_new", &x2, &alias2, CloseReason::Completed, None, "done")]), 29 * 24 * 60).unwrap();
+    run(
+        &t2,
+        &w2,
+        &pages(&[close("D_new", &x2, &alias2, CloseReason::Completed, None, "done")]),
+        29 * 24 * 60,
+    )
+    .unwrap();
     assert_eq!(w2.writes().len(), 1, "{:?}", w2.calls());
 }
 
@@ -755,13 +879,17 @@ fn an_undo_after_a_crash_left_the_close_intended_never_closes_the_issue() {
     let w = FakeGh::new();
     let (x, alias) = tracked(&t, &w, STORE, "issue");
     let c = close("D_close", &x, &alias, CloseReason::NotPlanned, None, NOT_PLANNED);
-    assert!(run(&t, &w, &pages(&[c.clone()]), 10).is_err());
+    assert!(run(&t, &w, &pages(std::slice::from_ref(&c)), 10).is_err());
     assert_eq!(kinds(&t, "D_close"), vec![Kind::WriteIntended]);
 
     let healed = Root::new(t.path(), Options::default());
     let p = pages(&[c, undo("D_undo", "D_close")]);
     let r = cycle::cycle_with_writes(&healed, &gh(), Some(&w), "home", &p, &|| at(20), PAGE).unwrap();
-    assert!(w.writes().is_empty(), "nothing is closed, commented or reopened: {:?}", w.calls());
+    assert!(
+        w.writes().is_empty(),
+        "nothing is closed, commented or reopened: {:?}",
+        w.calls()
+    );
     assert_eq!(w.get(&alias).state, "OPEN");
     assert_eq!(kinds(&t, "D_close"), vec![Kind::WriteIntended, Kind::WriteFailed]);
     let d = doc(&r);
@@ -783,7 +911,11 @@ fn a_dangling_intent_on_a_repo_made_read_only_since_is_not_closed() {
 
     let home = t.path().join("projects/home.toml");
     let text = std::fs::read_to_string(&home).unwrap();
-    let marked = text.replacen("repo = \"yuvalrakavy/Store\"\n", "repo = \"yuvalrakavy/Store\"\nread_only = true\n", 1);
+    let marked = text.replacen(
+        "repo = \"yuvalrakavy/Store\"\n",
+        "repo = \"yuvalrakavy/Store\"\nread_only = true\n",
+        1,
+    );
     assert_ne!(text, marked, "the fixture names Store as a member");
     std::fs::write(&home, marked).unwrap();
 

@@ -150,7 +150,10 @@ fn a_document_of_exactly_the_database_limit_is_accepted_and_one_byte_more_is_ref
     let dir = out.path().join("over");
     let e = publish::plan(&over, None, &BTreeMap::new(), now(), &dir).unwrap_err();
     assert!(e.to_string().contains("256 KiB"), "{e}");
-    assert!(!dir.exists(), "an over-limit document is refused before any file is written");
+    assert!(
+        !dir.exists(),
+        "an over-limit document is refused before any file is written"
+    );
 }
 
 // Kills: `(bytes + size) > BATCH_BYTES` becoming `>=`.
@@ -174,7 +177,11 @@ fn a_batch_may_hold_exactly_the_byte_limit() {
     let out = tempfile::tempdir().unwrap();
     let s = publish::plan(&outbox, None, &BTreeMap::new(), now(), out.path()).unwrap();
     let bs = batches(&s, "batches");
-    assert_eq!(batch_bytes(&bs[0]), BATCH_BYTES, "the setup must fill the batch exactly");
+    assert_eq!(
+        batch_bytes(&bs[0]),
+        BATCH_BYTES,
+        "the setup must fill the batch exactly"
+    );
     assert_eq!(bs.len(), 1, "a batch of exactly the limit is not split");
     assert_eq!(bs[0].len(), 5);
 }
@@ -199,7 +206,11 @@ fn a_new_batch_starts_counting_bytes_from_zero() {
     }
     // 4 documents of ~200 KiB fit under 900 KiB, a fifth does not: 20 documents are 5 batches.
     assert_eq!(bs.len(), 5, "{:?}", bs.iter().map(Vec::len).collect::<Vec<_>>());
-    assert_eq!(bs.iter().map(Vec::len).sum::<usize>(), 21, "the marker and 20 documents");
+    assert_eq!(
+        bs.iter().map(Vec::len).sum::<usize>(),
+        21,
+        "the marker and 20 documents"
+    );
 }
 
 // Kills: the marker's project, created_at.
@@ -237,7 +248,7 @@ fn cleanup_only_plans_well_named_markers_and_waits_for_a_generation_with_no_acti
     renamed["generation"] = json!("gen-300");
     let markers = BTreeMap::from([
         ("notes".to_string(), odd),
-        ("gen-300".to_string(), renamed), // key says 300, its sequence says 200
+        ("gen-300".to_string(), renamed),          // key says 300, its sequence says 200
         marker(310, now() - Duration::minutes(5)), // in flight: nothing is active to be older than
         marker(320, now() - Duration::hours(1)),   // exactly the abandon age: not over it
         marker(330, now() - Duration::hours(1) - Duration::seconds(1)),
@@ -262,7 +273,8 @@ fn plan_naming(dir: &Path, generation: &str) -> std::path::PathBuf {
     let p = dir.join("plan.json");
     fs::write(
         &p,
-        json!({"decision": "publish", "generation": "gen-500", "clean": [{"generation": generation, "list": []}]}).to_string(),
+        json!({"decision": "publish", "generation": "gen-500", "clean": [{"generation": generation, "list": []}]})
+            .to_string(),
     )
     .unwrap();
     p

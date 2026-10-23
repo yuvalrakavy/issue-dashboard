@@ -59,7 +59,16 @@ fn cycle(t: &TempRoot, decisions: &[Decision]) -> (CycleReport, Value) {
 }
 
 fn issue_now(repo: &str, n: &str) -> Value {
-    serde_json::from_str(&gh(&["issue", "view", n, "-R", repo, "--json", "state,stateReason,comments"])).unwrap()
+    serde_json::from_str(&gh(&[
+        "issue",
+        "view",
+        n,
+        "-R",
+        repo,
+        "--json",
+        "state,stateReason,comments",
+    ]))
+    .unwrap()
 }
 
 #[test]
@@ -70,9 +79,25 @@ fn a_close_and_its_undo_against_a_scratch_repository() {
     }
     let owner = gh(&["api", "user", "--jq", ".login"]);
     let repo = format!("{owner}/issue-dashboard-e2e-{}", Utc::now().format("%Y%m%d%H%M%S"));
-    gh(&["repo", "create", &repo, "--private", "--description", "issue-dashboard close e2e; deleted by the test"]);
+    gh(&[
+        "repo",
+        "create",
+        &repo,
+        "--private",
+        "--description",
+        "issue-dashboard close e2e; deleted by the test",
+    ]);
     let _scratch = Scratch(repo.clone());
-    let url = gh(&["issue", "create", "-R", &repo, "-t", "e2e: close me", "-b", "Created by the close e2e test."]);
+    let url = gh(&[
+        "issue",
+        "create",
+        "-R",
+        &repo,
+        "-t",
+        "e2e: close me",
+        "-b",
+        "Created by the close e2e test.",
+    ]);
     let number = url.rsplit('/').next().unwrap().to_string();
 
     let t = temp_root();
@@ -91,10 +116,18 @@ fn a_close_and_its_undo_against_a_scratch_repository() {
     let start = Instant::now();
     let id = loop {
         let (_, d) = cycle(&t, &[]);
-        if let Some(i) = d["issues"].as_array().unwrap().iter().find(|i| i["alias"] == alias.as_str()) {
+        if let Some(i) = d["issues"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|i| i["alias"] == alias.as_str())
+        {
             break i["id"].as_str().unwrap().to_string();
         }
-        assert!(start.elapsed() < Duration::from_secs(120), "the issue never showed up: {d}");
+        assert!(
+            start.elapsed() < Duration::from_secs(120),
+            "the issue never showed up: {d}"
+        );
         std::thread::sleep(Duration::from_secs(5));
     };
 
@@ -120,13 +153,16 @@ fn a_close_and_its_undo_against_a_scratch_repository() {
         }),
         reason: None,
     };
-    let (r, _) = cycle(&t, &[close.clone()]);
+    let (r, _) = cycle(&t, std::slice::from_ref(&close));
     assert_eq!(r.writes.len(), 1, "{:?}", r.writes);
     assert_eq!(r.writes[0].outcome, "closed", "{:?}", r.writes);
     let now = issue_now(&repo, &number);
     assert_eq!(now["state"], "CLOSED");
     assert_eq!(now["stateReason"], "NOT_PLANNED");
-    assert!(now["comments"].as_array().unwrap().iter().any(|c| c["body"] == comment), "{now}");
+    assert!(
+        now["comments"].as_array().unwrap().iter().any(|c| c["body"] == comment),
+        "{now}"
+    );
 
     let undo = Decision {
         id: "D_e2e_undo".into(),
@@ -139,9 +175,20 @@ fn a_close_and_its_undo_against_a_scratch_repository() {
         ..close.clone()
     };
     let (r, d) = cycle(&t, &[close, undo]);
-    assert_eq!(r.writes.iter().map(|w| w.outcome.as_str()).collect::<Vec<_>>(), ["reopened"], "{:?}", r.writes);
+    assert_eq!(
+        r.writes.iter().map(|w| w.outcome.as_str()).collect::<Vec<_>>(),
+        ["reopened"],
+        "{:?}",
+        r.writes
+    );
     assert_eq!(issue_now(&repo, &number)["state"], "OPEN");
-    let ack = d["acks"].as_array().unwrap().iter().find(|a| a["decision"] == "D_e2e_undo").unwrap().clone();
+    let ack = d["acks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["decision"] == "D_e2e_undo")
+        .unwrap()
+        .clone();
     assert_eq!(ack["result"], "applied", "{ack}");
 }
 

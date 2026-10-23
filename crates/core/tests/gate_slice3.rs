@@ -59,11 +59,19 @@ fn a_body_that_is_empty_or_blank_is_null_and_the_hash_covers_the_whole_body() {
     assert_eq!(item_with_body(None)["body_hash"], Value::Null);
     assert_eq!(item_with_body(Some(""))["body_hash"], Value::Null);
     let blank = "  \n\t ";
-    assert_eq!(item_with_body(Some(blank))["body_hash"], json!(sha256_hex(blank)), "a blank body still has a hash");
+    assert_eq!(
+        item_with_body(Some(blank))["body_hash"],
+        json!(sha256_hex(blank)),
+        "a blank body still has a hash"
+    );
     let padded = "  text \n";
     let c = item_with_body(Some(padded));
     assert_eq!(c["body"], json!("text"));
-    assert_eq!(c["body_hash"], json!(sha256_hex(padded)), "the hash is of the body as GitHub has it");
+    assert_eq!(
+        c["body_hash"],
+        json!(sha256_hex(padded)),
+        "the hash is of the body as GitHub has it"
+    );
     assert_eq!(c["body_truncated"], json!(false));
 }
 
@@ -79,7 +87,11 @@ fn a_body_of_exactly_the_cap_is_whole_and_one_more_character_is_cut() {
     let c = item_with_body(Some(&over));
     assert_eq!(c["body"], json!(exact));
     assert_eq!(c["body_truncated"], json!(true));
-    assert_eq!(c["body_hash"], json!(sha256_hex(&over)), "the hash is of the whole body, not the kept part");
+    assert_eq!(
+        c["body_hash"],
+        json!(sha256_hex(&over)),
+        "the hash is of the whole body, not the kept part"
+    );
 }
 
 // Kills: the project's group not winning over the registry's of the same name; the registry

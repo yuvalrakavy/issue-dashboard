@@ -47,7 +47,14 @@ pub trait IssueWriter {
     /// A fresh read of one issue.
     fn issue_now(&self, repo: &str, number: u64) -> Result<IssueNow>;
     /// Closes the issue, posting `comment` first when there is one.
-    fn close(&self, repo: &str, number: u64, reason: CloseReason, duplicate_of: Option<u64>, comment: Option<&str>) -> Result<()>;
+    fn close(
+        &self,
+        repo: &str,
+        number: u64,
+        reason: CloseReason,
+        duplicate_of: Option<u64>,
+        comment: Option<&str>,
+    ) -> Result<()>;
     fn reopen(&self, repo: &str, number: u64) -> Result<()>;
     /// The pause between reads in [`READ_BACK_MS`].
     fn wait(&self, d: Duration) {
@@ -101,7 +108,11 @@ impl IssueWriter for GhIssues {
                 .into_iter()
                 .flatten()
                 .map(|c| CommentNow {
-                    author: c.pointer("/author/login").and_then(Value::as_str).unwrap_or("").to_string(),
+                    author: c
+                        .pointer("/author/login")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_string(),
                     at: text(c, "createdAt"),
                     body: text(c, "body"),
                 })
@@ -109,7 +120,14 @@ impl IssueWriter for GhIssues {
         })
     }
 
-    fn close(&self, repo: &str, number: u64, reason: CloseReason, duplicate_of: Option<u64>, comment: Option<&str>) -> Result<()> {
+    fn close(
+        &self,
+        repo: &str,
+        number: u64,
+        reason: CloseReason,
+        duplicate_of: Option<u64>,
+        comment: Option<&str>,
+    ) -> Result<()> {
         let n = number.to_string();
         let dup = duplicate_of.map(|d| d.to_string());
         let mut args = vec!["issue", "close", &n, "-R", repo, "--reason", reason.gh()];
@@ -260,7 +278,11 @@ fn close_target(
     if o.item != ItemKind::Issue {
         return Ok(Err(format!("{} is not an issue; only an issue can be closed", o.alias)));
     }
-    let Some((repo, number)) = o.alias.split_once('#').and_then(|(r, n)| Some((r.to_string(), n.parse::<u64>().ok()?))) else {
+    let Some((repo, number)) = o
+        .alias
+        .split_once('#')
+        .and_then(|(r, n)| Some((r.to_string(), n.parse::<u64>().ok()?)))
+    else {
         return Ok(Err(format!("{} is not an owner/repo#number alias", o.alias)));
     };
     let views = config.views(project)?;
@@ -268,7 +290,11 @@ fn close_target(
         return Ok(Err(format!("{repo} is not one of {project}'s repos")));
     };
     if let Some(why) = derive::read_only(conn, project, view)? {
-        let why = if why == "declared" { "declared" } else { "no write access" };
+        let why = if why == "declared" {
+            "declared"
+        } else {
+            "no write access"
+        };
         return Ok(Err(format!("{repo} is read-only ({why})")));
     }
     match (v.reason, v.duplicate_of) {
@@ -296,7 +322,12 @@ fn same_time(a: Option<&str>, b: Option<&str>) -> Result<bool> {
 
 /// Reads the issue until `settled` holds, pausing between reads ([`READ_BACK_MS`]). Returns the
 /// last read.
-fn read_back(writer: &dyn IssueWriter, repo: &str, number: u64, settled: impl Fn(&IssueNow) -> bool) -> Result<IssueNow> {
+fn read_back(
+    writer: &dyn IssueWriter,
+    repo: &str,
+    number: u64,
+    settled: impl Fn(&IssueNow) -> bool,
+) -> Result<IssueNow> {
     let mut last = Err(Error::GitHub("not read".into()));
     for ms in READ_BACK_MS {
         if ms > 0 {
@@ -484,7 +515,13 @@ impl Step<'_, '_, '_> {
     /// Settles a close whose intent has no result. Returns false when GitHub could not be read.
     /// An issue still open is closed only if the decision still stands and its preconditions
     /// still hold: an undo, or a repo made read-only, since the crash means no close.
-    fn reconcile_close(&mut self, intent: &Event, status: &Status, decision: &Decision, config: &ConfigSet) -> Result<bool> {
+    fn reconcile_close(
+        &mut self,
+        intent: &Event,
+        status: &Status,
+        decision: &Decision,
+        config: &ConfigSet,
+    ) -> Result<bool> {
         let d = &intent.data;
         let issue = Issue {
             item: d["item"].as_str().unwrap_or("").to_string(),
@@ -645,7 +682,9 @@ pub fn standing_closes(conn: &Connection, project: &str) -> Result<BTreeMap<Stri
 /// Whether the item's latest observation still shows the dashboard's close: closed at that
 /// time, with no comment since but the close's own.
 fn observed_still_ours(conn: &Connection, item: &str, closed: &Value) -> Result<bool> {
-    let Some(o) = observed(conn, item)? else { return Ok(false) };
+    let Some(o) = observed(conn, item)? else {
+        return Ok(false);
+    };
     let c = &o.content;
     if c.get("state").and_then(Value::as_str) == Some("open") {
         return Ok(false);
@@ -669,6 +708,9 @@ fn observed_still_ours(conn: &Connection, item: &str, closed: &Value) -> Result<
     Ok(reopen_refusal(&now, closed, "")?.is_none())
 }
 
+/// An ack's result and its reason.
+pub type AckResult = (&'static str, Option<String>);
+
 /// The ack of a close decision, or of an undo of one, from its writes (10.5, 10.10): `None`
 /// when the decision is not a close's and its ack is the usual one; `Some(None)` while the
 /// write is still pending (no ack yet); `Some(Some((result, reason)))` otherwise.
@@ -677,7 +719,7 @@ pub fn ack(
     d: &Decision,
     status: &Status,
     targets: &HashMap<String, Decision>,
-) -> Result<Option<Option<(&'static str, Option<String>)>>> {
+) -> Result<Option<Option<AckResult>>> {
     match d.action {
         Action::Close => {
             let p = progress(conn, &d.id)?;

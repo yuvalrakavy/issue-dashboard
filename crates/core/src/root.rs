@@ -410,7 +410,8 @@ impl Session<'_> {
         };
         let root = self.root;
         root.failpoint(Failpoint::AfterCommit)?;
-        self.backup.catch_up(&mut self.ledger, &now, &mut |at| root.failpoint(at))?;
+        self.backup
+            .catch_up(&mut self.ledger, &now, &mut |at| root.failpoint(at))?;
         Ok(out)
     }
 
