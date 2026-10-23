@@ -9,6 +9,8 @@
   const COLLECTIONS = ["issues", "acks", "launch_status", "suggestions", "plans", "forks", "metrics"];
   const LIST_LIMIT = 1000;
   const GENERATION = /^gen-[0-9]+$/;
+  // How long a generation keeps a decision's ack (derive.rs ACK_DAYS).
+  const ACK_DAYS = 30;
 
   // Reads the generation `meta/active` names. A sync run may switch generations and delete
   // the old one while this read is under way, so a generation that comes back short of its
@@ -49,6 +51,27 @@
       if (why.endsWith("more than " + LIST_LIMIT)) break;
     }
     return Object.assign({ status: "partial" }, last);
+  }
+
+  // Follows `meta/active`: one load at a time, and an announcement that arrives while a load
+  // runs gets one more load after it, so the page never settles on the older generation.
+  function follower(load) {
+    let busy = false;
+    let asked = 0;
+    return async function follow() {
+      asked++;
+      if (busy) return;
+      busy = true;
+      try {
+        let seen;
+        do {
+          seen = asked;
+          await load();
+        } while (asked !== seen);
+      } finally {
+        busy = false;
+      }
+    };
   }
 
   function emptyData() {
@@ -121,12 +144,23 @@
     return a < b ? -1 : a > b ? 1 : 0;
   }
 
-  // Which decisions a cycle has consumed (acks, 10.6) and which an undo cancelled. Returns
-  // { byId: {id: {doc, ack, undoneBy}}, latestFor(item) }.
-  function decisionStates(decisions, acks) {
+  // The oldest decision time whose ack the generation still carries; null with no snapshot.
+  function ackHorizon(meta) {
+    const t = Date.parse(meta && meta.taken_at);
+    return Number.isNaN(t) ? null : new Date(t - ACK_DAYS * 86400000).toISOString().replace(/\.\d{3}Z$/, "Z");
+  }
+
+  // Which decisions a cycle has consumed (acks, 10.6) and which an undo cancelled. A decision
+  // older than `horizon` with no ack is `settled`: its ack has aged out of the generation, and
+  // the absence says nothing about whether a cycle consumed it. Returns
+  // { byId: {id: {doc, ack, undoneBy, settled}}, latestFor(item) }.
+  function decisionStates(decisions, acks, horizon) {
     const ackFor = new Map((acks || []).map((a) => [a.decision, a]));
     const byId = {};
-    for (const d of decisions || []) byId[d.id] = { doc: d, ack: ackFor.get(d.id) || null, undoneBy: null };
+    for (const d of decisions || []) {
+      const ack = ackFor.get(d.id) || null;
+      byId[d.id] = { doc: d, ack, undoneBy: null, settled: !ack && !!horizon && d.created_at < horizon };
+    }
     for (const d of decisions || []) {
       if (d.action === "undo" && d.target && byId[d.target.decision]) {
         const t = byId[d.target.decision];
@@ -137,7 +171,7 @@
       let best = null;
       for (const s of Object.values(byId)) {
         const d = s.doc;
-        if (d.action === "undo" || !d.target || d.target.item !== item || s.undoneBy) continue;
+        if (d.action === "undo" || !d.target || d.target.item !== item || s.undoneBy || s.settled) continue;
         if (s.ack && s.ack.result !== "applied") continue;
         if (!best || d.created_at > best.doc.created_at || (d.created_at === best.doc.created_at && d.id > best.doc.id)) best = s;
       }
@@ -196,7 +230,9 @@
     for (const l of launches || []) {
       if (!Array.isArray(l.items)) continue;
       const s = status.get(l.id);
-      const state = s ? s.state : notSent.has(l.id) ? "not_sent" : "requested";
+      // The tracker reports every launch it ingested as `requested`, heard or not: only a later
+      // transition outranks the page's record of a refused send.
+      const state = s && !(s.state === "requested" && notSent.has(l.id)) ? s.state : notSent.has(l.id) ? "not_sent" : "requested";
       const entry = { launch: l, state, error: notSent.get(l.id) || null };
       for (const item of l.items) {
         const cur = byItem[item];
@@ -208,9 +244,11 @@
 
   const pad = (n, w) => String(n).padStart(w || 2, "0");
 
-  // A page document id (5.3): <prefix>_<yyyymmdd>_<hhmmss>_<4 random>, letters, digits and _.
+  // A page document id (5.3): <prefix>_<yyyymmdd>_<hhmmss>_<8 random>, letters, digits and _.
+  // There is no create-only write (db.d.ts), so the randomness is what keeps two writes in one
+  // second apart: 36^8 values.
   function newId(prefix, now, rand) {
-    const r = (rand || Math.random)().toString(36).replace(/[^a-z0-9]/g, "").slice(-4).padStart(4, "0");
+    const r = Math.min(36 ** 8 - 1, Math.floor((rand || Math.random)() * 36 ** 8)).toString(36).padStart(8, "0");
     return (
       prefix + "_" +
       now.getUTCFullYear() + pad(now.getUTCMonth() + 1) + pad(now.getUTCDate()) + "_" +
@@ -281,19 +319,43 @@
     return doc;
   }
 
-  // Launch (5.4): the gate, the launches document, then a comment holding only its id into
-  // the one launch thread. A refused send writes a not_sent document naming the launch. A
-  // thread refused as gone or full starts a new one, recorded in launches/_thread.
+  // A thread record (5.4): one per launch thread, written once when the thread starts.
+  function threadDoc(thread, who, now, rand) {
+    return { id: newId("T", now, rand), project: who.project, author: who.author, created_at: stamp(now), thread };
+  }
+
+  // The launch thread: the newest thread record in `launches`. The first slice kept one record
+  // at `launches/_thread` and rewrote it; it still counts, as the oldest.
+  async function currentThread(db) {
+    const q = await db.collection("launches").limit(LIST_LIMIT).get();
+    let best = null;
+    for (const snap of q.docs) {
+      const d = snap.data() || {};
+      if (typeof d.thread !== "string") continue;
+      const at = d.created_at || "";
+      if (!best || at > best.at || (at === best.at && d.id > best.id)) best = { at, id: d.id, thread: d.thread };
+    }
+    return best && best.thread;
+  }
+
+  // Launch (5.4): the gate, the current thread, the launches document, then a comment holding
+  // only its id into that thread. A refused send writes a not_sent document naming the launch.
+  // A thread refused as gone or full starts a new one, which gets its own thread record.
   async function launch(deps, fields) {
     const gate = await deps.comments.canSendToClaude().catch(() => "unavailable");
     if (gate !== "available") return { ok: false, gate };
+    // Read before anything is written: a launch document is always followed by a send or a
+    // not_sent.
+    let thread;
+    try {
+      thread = await currentThread(deps.db);
+    } catch (e) {
+      return { ok: false, error: (e && e.code) || "unavailable" };
+    }
     const doc = launchDoc(fields, deps.who, deps.now(), deps.rand);
     await deps.db.doc("launches/" + doc.id).set(doc);
-    const threadRef = deps.db.doc("launches/_thread");
-    const known = await threadRef.get();
-    const thread = known.exists ? (known.data() || {}).thread : null;
+    let sent;
     try {
-      let sent;
       try {
         if (!thread) throw { code: "not_found" };
         sent = await deps.comments.sendToClaude({ threadId: thread, text: doc.id });
@@ -302,17 +364,23 @@
         // new thread.
         if (!e || (e.code !== "not_found" && e.code !== "upstream_error")) throw e;
         sent = await deps.comments.sendToClaude({ anchor: await deps.anchor(), text: doc.id });
-        const t = { id: "_thread", thread: sent.threadId };
-        if (thread) t.replaced_at = stamp(deps.now());
-        await threadRef.set(t);
       }
-      return { ok: true, launch: doc, threadId: sent.threadId };
     } catch (e) {
       const code = (e && e.code) || "upstream_error";
       const refused = notSentDoc(doc.id, code, deps.who, deps.now(), deps.rand);
       await deps.db.doc("launches/" + refused.id).set(refused);
       return { ok: false, launch: doc, error: code };
     }
+    if (sent.threadId && sent.threadId !== thread) {
+      // The launch was heard; a record that fails only means the next launch starts a thread.
+      const t = threadDoc(sent.threadId, deps.who, deps.now(), deps.rand);
+      try {
+        await deps.db.doc("launches/" + t.id).set(t);
+      } catch (e) {
+        return { ok: true, launch: doc, threadId: sent.threadId, threadNotRecorded: (e && e.code) || "error" };
+      }
+    }
+    return { ok: true, launch: doc, threadId: sent.threadId };
   }
 
   // --- closing (5.2a, 10.10) -------------------------------------------------------------
@@ -351,9 +419,9 @@
   }
 
   // The item's close decision no cycle has acked and no undo took back, if any.
-  function pendingClose(decisions, acks, item) {
-    const st = decisionStates(decisions, acks);
-    const open = Object.values(st.byId).filter((s) => s.doc.action === "close" && s.doc.target && s.doc.target.item === item && !s.ack && !s.undoneBy);
+  function pendingClose(decisions, acks, item, horizon) {
+    const st = decisionStates(decisions, acks, horizon);
+    const open = Object.values(st.byId).filter((s) => s.doc.action === "close" && s.doc.target && s.doc.target.item === item && !s.ack && !s.undoneBy && !s.settled);
     open.sort((a, b) => cmp(b.doc.created_at, a.doc.created_at));
     return open.length ? open[0].doc : null;
   }
@@ -374,8 +442,8 @@
   }
 
   const api = {
-    PRIORITIES, COLLECTIONS, LIST_LIMIT, CLOSE_REASONS,
-    loadGeneration, repoOf, inScope, tiles, inbox, queue, decisionStates, nextRunMinutes,
+    PRIORITIES, COLLECTIONS, LIST_LIMIT, CLOSE_REASONS, ACK_DAYS,
+    loadGeneration, follower, ackHorizon, threadDoc, repoOf, inScope, tiles, inbox, queue, decisionStates, nextRunMinutes,
     trends, launchStates, newId, decisionDoc, launchDoc, notSentDoc, viewDoc, requestDoc, launch,
     closable, closeComment, closeFields, describeClose, pendingClose, recentCloses,
   };

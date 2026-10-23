@@ -34,19 +34,20 @@ const jan = new Date("2026-01-05T03:04:05.678Z");
 // Kills: month not +1, date parts not zero padded, local time instead of UTC, the random part
 // not four characters, "D"/"L"/"V"/"R" prefixes swapped.
 test("an id is prefix_yyyymmdd_hhmmss_rand with every part zero padded, in UTC", () => {
-  assert.equal(D.newId("D", jan, () => 0), "D_20260105_030405_0000");
-  assert.equal(D.newId("X", new Date("2026-12-31T23:59:59Z"), () => 0), "X_20261231_235959_0000");
+  assert.equal(D.newId("D", jan, () => 0), "D_20260105_030405_00000000");
+  assert.equal(D.newId("X", new Date("2026-12-31T23:59:59Z"), () => 0), "X_20261231_235959_00000000");
   const r = D.newId("D", jan, () => 0.123456789).split("_")[3];
-  assert.equal(r.length, 4);
-  assert.match(r, /^[a-z0-9]{4}$/);
-  assert.equal(D.newId("D", jan, () => 0.5).slice(-4), D.newId("D", jan, () => 0.5).slice(-4));
-  // A random value with a short base-36 form is padded, not shortened.
-  assert.equal(D.newId("D", jan, () => 0.5).length, "D_20260105_030405_".length + 4);
+  assert.equal(r.length, 8);
+  assert.match(r, /^[a-z0-9]{8}$/);
+  assert.equal(D.newId("D", jan, () => 0.5).slice(-8), D.newId("D", jan, () => 0.5).slice(-8));
+  // A small random value is padded, not shortened.
+  assert.equal(D.newId("D", jan, () => 1e-9).length, "D_20260105_030405_".length + 8);
 });
 
-// Kills: the random part taken from the front of the base-36 string (always a leading "0").
-test("the random part of an id is the tail of the random number", () => {
-  assert.equal(D.newId("D", jan, () => 0.123456789), "D_20260105_030405_ylrx");
+// Kills: the random part not scaled to all 8 base-36 digits.
+test("the random part of an id is the random number in 8 base-36 digits", () => {
+  assert.equal(D.newId("D", jan, () => 0.5), "D_20260105_030405_i0000000");
+  assert.equal(D.newId("D", jan, () => 1 / 36), "D_20260105_030405_10000000");
 });
 
 // Kills: the `exists` filter on a listed collection (a document deleted between the listing
@@ -87,7 +88,7 @@ test("only an outside pull request's review, or a decision, waits on the owner",
 test("a decision document carries exactly the fields it was given", () => {
   const f = { action: "set_priority", target: { item: "I_1", alias: "a/b#1" }, value: { priority: "p1" }, reason: "why" };
   assert.deepEqual(D.decisionDoc(f, who, jan, rand), {
-    id: "D_20260105_030405_" + D.newId("D", jan, rand).slice(-4),
+    id: "D_20260105_030405_" + D.newId("D", jan, rand).slice(-8),
     project: "villa-rakavy",
     author: "user_1",
     created_at: "2026-01-05T03:04:05Z",
@@ -310,12 +311,16 @@ function fakeDb(docs) {
       get: async () => ({ exists: store.has(p), data: () => (store.has(p) ? JSON.parse(JSON.stringify(store.get(p))) : undefined) }),
       set: async (d) => void store.set(p, JSON.parse(JSON.stringify(d))),
     }),
+    collection: (c) => {
+      const q = { limit: () => q, get: async () => ({ docs: [...store.keys()].filter((k) => k.startsWith(c + "/")).map((k) => ({ data: () => store.get(k) })) }) };
+      return q;
+    },
   };
 }
 
-// Kills: replaced_at written on a first thread, or not written on a replaced one; its value
-// not the stamp of the replacement; the new thread id not recorded.
-test("the thread record says when a thread was replaced, and only then", async () => {
+// Kills: a thread record not written for a new thread, or written for a reply; its time not
+// the stamp of when the thread started; the new thread id not recorded.
+test("a thread record is written when a thread starts, and only then", async () => {
   const t0 = new Date("2026-10-23T08:00:00Z");
   let tick = 0;
   const deps = (db, comments) => ({
@@ -334,18 +339,19 @@ test("the thread record says when a thread was replaced, and only then", async (
       return { threadId: "thr_new" };
     },
   });
+  const records = (db) => [...db.store.entries()].filter(([, v]) => typeof v.thread === "string");
   const first = fakeDb({});
   await D.launch(deps(first, comments(null)), fields);
-  assert.deepEqual(first.store.get("launches/_thread"), { id: "_thread", thread: "thr_new" });
+  // now() is read for the launch document (0), then for the thread record (1 minute later).
+  assert.deepEqual(records(first), [["launches/T_20261023_080100_i0000000",
+    { id: "T_20261023_080100_i0000000", project: "villa-rakavy", author: "user_1", created_at: "2026-10-23T08:01:00Z", thread: "thr_new" }]]);
   tick = 0;
   const replaced = fakeDb({ "launches/_thread": { id: "_thread", thread: "thr_old" } });
   await D.launch(deps(replaced, comments("thr_old")), fields);
-  const rec = replaced.store.get("launches/_thread");
-  assert.equal(rec.thread, "thr_new");
-  // now() is read for the launch document (0), then for the replacement (1 minute later).
-  assert.equal(rec.replaced_at, "2026-10-23T08:01:00Z");
+  assert.deepEqual(replaced.store.get("launches/_thread"), { id: "_thread", thread: "thr_old" }, "the old record is never rewritten");
+  assert.deepEqual(records(replaced).map(([, v]) => v.thread), ["thr_old", "thr_new"]);
   tick = 0;
   const same = fakeDb({ "launches/_thread": { id: "_thread", thread: "thr_new" } });
   await D.launch(deps(same, comments("thr_old")), fields);
-  assert.deepEqual(same.store.get("launches/_thread"), { id: "_thread", thread: "thr_new" }, "a reply into the thread leaves the record alone");
+  assert.equal(records(same).length, 1, "a reply into the thread writes no record");
 });

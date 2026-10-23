@@ -202,7 +202,7 @@ footer .wrap { padding-block: 0 32px; font-size: .82rem; color: var(--muted); di
     decisions: [], launches: [], views: [],
     tab: "inbox", inboxFilter: "all", queueFilter: "all", text: "",
     scope: null, scopeName: null, savedScope: null,
-    openCard: null, menu: null, sel: 0, error: null, busy: false, weeks: 8,
+    openCard: null, menu: null, sel: 0, error: null, weeks: 8,
   };
 
   try { const t = localStorage.getItem("tab"); if (t) S.tab = t; } catch (e) { /* no storage */ }
@@ -232,10 +232,12 @@ footer .wrap { padding-block: 0 32px; font-size: .82rem; color: var(--muted); di
     S.comments = await claude.use("comments");
     await reload();
     // One subscription each: the active generation, and the two page collections whose
-    // state a card shows. Each runs once; a snapshot only re-renders.
+    // state a card shows. Each runs once; a snapshot only re-renders. A generation announced
+    // while one loads is loaded after it (D.follower).
+    const follow = D.follower(reload);
     S.db.doc("meta/active").onSnapshot((snap) => {
       const g = snap.exists ? (snap.data() || {}).generation : null;
-      if (S.load && g && g !== S.load.generation && !S.busy) reload();
+      if (S.load && g && g !== S.load.generation) follow();
     }, () => {});
     S.db.collection("decisions").limit(1000).onSnapshot((q) => { S.decisions = q.docs.map((d) => d.data()); render(); }, () => {});
     S.db.collection("launches").limit(1000).onSnapshot((q) => { S.launches = q.docs.map((d) => d.data()); render(); }, () => {});
@@ -244,7 +246,6 @@ footer .wrap { padding-block: 0 32px; font-size: .82rem; color: var(--muted); di
   }
 
   async function reload() {
-    S.busy = true;
     try {
       const r = await D.loadGeneration(S.db);
       S.load = r;
@@ -258,8 +259,6 @@ footer .wrap { padding-block: 0 32px; font-size: .82rem; color: var(--muted); di
       if (S.meta && S.meta.name) document.title = S.meta.name + " · Issue Board";
     } catch (e) {
       S.error = "Could not read the snapshot (" + ((e && (e.code || e.message)) || "error") + ").";
-    } finally {
-      S.busy = false;
     }
     render();
   }
@@ -427,14 +426,15 @@ footer .wrap { padding-block: 0 32px; font-size: .82rem; color: var(--muted); di
 
   // One card's or row's decision state: pending until a cycle acks it (5.2a).
   function decisionLine(i) {
-    const st = D.decisionStates(S.decisions, S.acks);
+    const horizon = D.ackHorizon(S.meta);
+    const st = D.decisionStates(S.decisions, S.acks, horizon);
     const s = st.latestFor(i.id);
     const refused = Object.values(st.byId).filter((x) => x.doc.target && x.doc.target.item === i.id && x.ack && x.ack.result === "refused" && !x.undoneBy)
       .sort((a, b) => (a.doc.created_at < b.doc.created_at ? 1 : -1))[0];
     if (refused && (!s || refused.doc.created_at > s.doc.created_at)) {
       return h("div", { class: "pending refused" }, "Refused by the tracker: " + describe(refused.doc) + (refused.ack.reason ? " (" + refused.ack.reason + ")" : ""));
     }
-    const closing = D.pendingClose(S.decisions, S.acks, i.id);
+    const closing = D.pendingClose(S.decisions, S.acks, i.id, horizon);
     if (closing) {
       const pendingUndo = Object.values(st.byId).some((x) => x.doc.action === "undo" && x.doc.target.decision === closing.id);
       return h("div", { class: "pending", role: "status" },
@@ -515,7 +515,7 @@ footer .wrap { padding-block: 0 32px; font-size: .82rem; color: var(--muted); di
 
   // Close is the page's one GitHub write (10.0): the owner's, on an open issue in a writable repo,
   // and not while a close of it is already waiting for the sync.
-  const canClose = (i) => S.owner && D.closable(i, repoInfo(D.repoOf(i.alias))) && !D.pendingClose(S.decisions, S.acks, i.id);
+  const canClose = (i) => S.owner && D.closable(i, repoInfo(D.repoOf(i.alias))) && !D.pendingClose(S.decisions, S.acks, i.id, D.ackHorizon(S.meta));
 
   function picker(i) {
     const oc = S.openCard;
@@ -807,7 +807,7 @@ footer .wrap { padding-block: 0 32px; font-size: .82rem; color: var(--muted); di
         db: S.db, comments: S.comments, who: who(), now: () => new Date(), rand: Math.random, anchor: () => anchor,
       }, { kind: "fix", items: [i.id], aliases: [i.alias], recipe: "default", routing: { model: model.value, effort: effort.value, reason: "chosen on the launch sheet" } })
         .catch((e) => ({ ok: false, error: (e && e.code) || "error" }));
-      if (r.ok) { dlg.close(); toast("Launch " + r.launch.id + " recorded and posted to the launch thread."); }
+      if (r.ok) { dlg.close(); toast("Launch " + r.launch.id + " recorded and posted to the launch thread." + (r.threadNotRecorded ? " The new thread could not be recorded (" + r.threadNotRecorded + "), so the next launch starts another." : "")); }
       else if (r.gate) status.textContent = "Launch is off: " + (GATE[r.gate] || r.gate);
       else status.textContent = "Not sent (" + r.error + ")" + (r.launch ? ": the launch is recorded as not_sent." : ".");
       render();

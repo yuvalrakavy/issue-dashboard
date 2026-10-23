@@ -276,8 +276,8 @@ const who = { project: "villa-rakavy", author: "user_1" };
 const now = new Date("2026-10-23T08:14:05.123Z");
 
 test("page ids are prefix_date_time_rand and every written document fits its schema", () => {
-  assert.match(D.newId("D", now, () => 0.5), /^D_20261023_081405_[a-z0-9]{4}$/);
-  assert.match(D.newId("D", now, () => 0), /^D_20261023_081405_0000$/);
+  assert.match(D.newId("D", now, () => 0.5), /^D_20261023_081405_[a-z0-9]{8}$/);
+  assert.match(D.newId("D", now, () => 0), /^D_20261023_081405_00000000$/);
   const d = D.decisionDoc({ action: "set_priority", target: { item: "I_1", alias: "a/b#1" }, value: { priority: "p1" } }, who, now);
   assert.equal(d.created_at, "2026-10-23T08:14:05Z");
   shapeOf("page-decision.schema.json", d);
@@ -285,6 +285,7 @@ test("page ids are prefix_date_time_rand and every written document fits its sch
   const l = D.launchDoc({ kind: "fix", items: ["I_1"], aliases: ["a/b#1"], recipe: "default", routing: { model: "m", effort: "medium" } }, who, now);
   shapeOf("page-launch.schema.json", l, 0);
   shapeOf("page-launch.schema.json", D.notSentDoc(l.id, "no_session", who, now), 1);
+  shapeOf("page-launch.schema.json", D.threadDoc("thr_1", who, now), 2);
   shapeOf("page-view.schema.json", D.viewDoc("Without bridges", { exclude: [{ group: "bridges" }] }, who, now));
   shapeOf("page-request.schema.json", D.requestDoc({ kind: "triage", items: ["I_1"] }, who, now));
 });
@@ -330,7 +331,7 @@ test("the first launch starts the thread and records it; the next replies into i
   const db = fakeDb({});
   const r1 = await D.launch(launchDeps(db, comments), fields);
   assert.ok(r1.ok);
-  assert.deepEqual(db.store.get("launches/_thread"), { id: "_thread", thread: "thr_1" });
+  assert.deepEqual(launches(db).filter((l) => l.thread).map((l) => l.thread), ["thr_1"]);
   assert.deepEqual(sends[0].text, r1.launch.id, "the comment holds only the launch id");
   assert.ok(sends[0].anchor);
   const r2 = await D.launch(launchDeps(db, comments), fields);
@@ -338,7 +339,7 @@ test("the first launch starts the thread and records it; the next replies into i
   assert.equal(launches(db).filter((l) => l.kind).length, 2);
 });
 
-test("a thread gone or full starts a new one, recorded with when it was replaced", async () => {
+test("a thread gone or full starts a new one, recorded beside the old", async () => {
   for (const code of ["not_found", "upstream_error"]) {
     const comments = {
       canSendToClaude: async () => "available",
@@ -350,8 +351,10 @@ test("a thread gone or full starts a new one, recorded with when it was replaced
     const db = fakeDb({ "launches/_thread": { id: "_thread", thread: "thr_old" } });
     const r = await D.launch(launchDeps(db, comments), fields);
     assert.ok(r.ok, code);
-    assert.equal(db.store.get("launches/_thread").thread, "thr_new");
-    assert.ok(db.store.get("launches/_thread").replaced_at);
+    assert.equal(db.store.get("launches/_thread").thread, "thr_old");
+    const rec = launches(db).filter((l) => l.thread && l.id !== "_thread");
+    assert.deepEqual(rec.map((l) => l.thread), ["thr_new"]);
+    assert.ok(rec[0].created_at);
   }
 });
 
@@ -367,7 +370,7 @@ test("a refused send leaves a not_sent document naming the launch", async () => 
     assert.equal(ns.length, 1);
     assert.deepEqual(ns[0].not_sent, { launch: r.launch.id, error: code });
     assert.notEqual(ns[0].id, r.launch.id);
-    assert.equal(db.store.get("launches/_thread").thread, "thr_1", "a refusal other than a lost thread keeps the thread");
+    assert.equal(launches(db).filter((l) => l.thread).length, 1, "a refusal other than a lost thread starts no thread");
   }
   // The retry into a new thread failing too is one not_sent, not two.
   const comments = { canSendToClaude: async () => "available", sendToClaude: async () => Promise.reject({ code: "upstream_error" }) };
