@@ -84,7 +84,8 @@
         "CONTRIBUTOR",
         "FIRST_TIME_CONTRIBUTOR",
         "FIRST_TIMER",
-        "NONE"
+        "NONE",
+        "MANNEQUIN"
       ]
     },
     "launchTransition": {
@@ -302,7 +303,9 @@
             "suggested",
             "launch",
             "outcome",
-            "exported"
+            "exported",
+            "membership",
+            "outbox"
           ]
         },
         "subject": {

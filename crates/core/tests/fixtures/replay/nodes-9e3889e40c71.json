@@ -1,0 +1,3232 @@
+{
+  "name": "nodes",
+  "response": {
+    "data": {
+      "nodes": [
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "## Observed\n\nThe new template-value check only looks at a property's default editing rules, missing per-value exceptions; and a non-blessing save can stamp an unnormalised local cache with the normalised file's fingerprint.\n\n## Detail (verbatim from the chip filed 2026-07-26, id `task_4065a316`)\n\nTwo findings from the deep-gate review of the `[TemplateUnset]`/`[TemplateValue]` feature (branch feat/template-value-attribute, base 8324691a). Both were deliberately deferred as latent; neither is live today. Design docs: docs/superpowers/specs/2026-07-26-template-value-attribute-design.md and docs/guides/value-authority.md.\n\nFINDING A — the commit-time gate reads per-DEFINITION authority only, and a replacement strips a per-VALUE override. CONFIRMED.\n`store_server/src/command/schema_change.rs::validate_template_value_applicability` calls `crate::command::value_authority::value_authority(store, property_id)`, which reads the two CLASS_PROPERTY booleans on the property object (`value_authority.rs:47-59`) — the v1 per-definition axis. The v2 model adds a per-VALUE `ValueAuthorityOverride` (SDL value position `Prop: const value`; Rhai `frozen(v)` / `managed(v)`), and the validator never consults it. Meanwhile `store_artifact/src/lib.rs::apply_substitutions` writes a replacement with `ValueFlags::with_provenance(ValueProvenance::Plain)` = `{ provenance: Plain, authority: Inherit, secret: false }`.\nFailure scenario: property P is `editable` at the definition, but one framework-owned value was stamped `frozen(v)` (authority = Const). `[TemplateValue=\"x\"]` on P passes the gate — authority != Const, not readonly, not [Secret] — and at bless that record is rewritten with `authority: Inherit`. In the fixture the value is now user-writable where the source's was kernel-locked, and the write-gate that would have rejected a User write no longer fires. This is the very hazard the validator exists to prevent (\"the literal spends the write-once seed inside the fixture\"), reached through the axis the validator does not look at.\nWhy deferred: adoption of per-value overrides in `data/` is thin (CLAUDE.md calls the annotation pass a follow-on), so no live value hits it. But the gate is asymmetric with the model it guards.\nFix direction: the gate is per-PROPERTY while the hazard is per-VALUE, so a definition-time check cannot see it — either check at bless (where the specific record's flags are readable) and refuse, or preserve the source record's authority override on replacement instead of resetting it. Decide which, and say why in the commit.\nRelated, currently unreachable but unenforced: `apply_substitutions` also clears the Secret bit. Safe today only because the bless is the sole caller passing a non-empty table and always pairs it with `SecretsPolicy::Scrubbed`, so a secret record is already deleted before the pass runs. Nothing enforces that pairing — `WriteSpec` admits `substitutions` + `SecretsPolicy::Included`. Consider a debug_assert or a typed pairing.\n\nFINDING B — an unblessed save leaves the local db cache unnormalised while stamping it with the normalised artifact's hash. PLAUSIBLE (structural asymmetry CONFIRMED; the trigger not reproduced).\n`store_server/src/manager.rs`: `SnapshotDb` writes `tpl_db_dir` unconditionally from the source store (~:2284-2308). The re-materialize-from-the-artifact step — added precisely because \"a bless whose scrub deleted anything leaves the UNSCRUBBED snapshot as the db cache, stamped with the SCRUBBED artifact's hash — a stamp that lies\" — sits inside `if bless` (~:2409-2444). On the `bless=false` path the preserved artifact is written back and the stamp is set to ITS hash (~:2486-2497), so `ensure_template_materialized` considers the raw snapshot current.\nFailure scenario: an auto-rebake restores the scratch from an already-normalised artifact, reconciles, and something latches during that reconcile (a Schedule whose handler throws — the live 2026-07-25 failure this feature descends from). The snapshot carries Failed=true; the tracked artifact does not; the stamp says they match. A local `reset_store` serves the latch while CI (which materializes from the artifact) does not — the same \"template behaves differently on the blessing machine\" class the bless path already fixed.\nVerify first: reproduce by latching during a rebake reconcile, then diff the db cache against the artifact. If it reproduces, the fix is to apply the same re-materialize on the non-bless path (or to stamp with the SNAPSHOT's hash there, so a mismatch is detected rather than asserted away).\n\n## Confirmed\n\n(empty — this was migrated from a chip and its claims have NOT been re-grounded against the current tree)\n\n## Hypotheses — UNVERIFIED, do not trust\n\n- Everything above reflects what was believed on 2026-07-26. Chip claims DECAY: across one earlier chip-clearing span ~6 of ~7 were wrong as written (shrunk / redirected / already-done / widened).\n- **This may already be fixed.** Re-ground before doing any work: reproduce the problem, enumerate the real state, confirm the scope. If already done, close as `completed` citing the commit.\n",
+          "closedAt": "2026-09-30T16:26:33Z",
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-08-01T11:06:52Z"
+              },
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-08-10T08:16:02Z"
+              },
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-08-29T20:15:16Z"
+              },
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-09-30T16:26:32Z"
+              }
+            ],
+            "totalCount": 4
+          },
+          "createdAt": "2026-08-01T10:47:33Z",
+          "id": "I_kwDONszNXs8AAAABLDUbJg",
+          "labels": {
+            "nodes": [
+              {
+                "name": "bug"
+              },
+              {
+                "name": "p2"
+              },
+              {
+                "name": "kernel"
+              },
+              {
+                "name": "partial"
+              }
+            ],
+            "totalCount": 4
+          },
+          "milestone": null,
+          "number": 34,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "CLOSED",
+          "stateReason": "COMPLETED",
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABLDUbJs8AAAAGtZWODw"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABLDUbJs8AAAAGtZWONg"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABLDUbJs8AAAAGtZWObg"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABLDUbJs8AAAAHCT4X3Q"
+              }
+            ]
+          },
+          "title": "Close two gaps in bless-time value normalisation",
+          "updatedAt": "2026-09-30T16:26:33Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "## Observed\n\n#15 established the invariant *\"a channel may be closed only after every producer that\ncan write to it has stopped producing\"* and quiesced the producers it inventoried\n(timers, timer-failure dispatch, file_watcher; MQTT by ordering). The design gate found\n**two more command producers that were not in that inventory** and can still write after\nthe command channel closes.\n\nNeither is high-frequency — both measured **0** occurrences in a 331-test corpus slice —\nwhich is why they were deliberately deferred rather than folded into #15. Filing so the\ninventory is complete rather than silently partial.\n\n### 1. `ServiceStarted` is fired from a detached, untracked spawn\n\n`store_server/src/service_manager.rs:222-231` — `start_service` fires the\n`ServiceStarted` event inside a bare `tokio::spawn` whose `JoinHandle` is dropped.\n`stop_all()` cannot wait on it.\n\nThe *stop* path is clean: `stop_service` awaits the monitor handle and then fires\n`ServiceStopped` inline, and the monitor's unexpected-exit branch is inside that awaited\nhandle. Only the **start** path is undrained.\n\nReachable when a service starts and the store is torn down promptly after — e.g.\n`reset_store_from_template` → `start_store_services` → teardown. Note #15's §2.1 lists\nmanaged services as already handled; that is true of the stop path only.\n\nSharpest consequence: it means \"port `stop_all()` verbatim\" — which #15's design\nexplicitly held up as the proven reference — propagates this gap rather than the fix.\n\n### 2. The MQTT event loop writes commands via `update_status`\n\n`store_server/src/mqtt.rs:317-341` — `update_status` calls `execute_from` and logs\n`kind = \"invariant_violation\"` at ERROR on failure. Called from `mqtt.rs:1299` and\n`:1515`.\n\nThis is **not** the inbound-dispatch surface #15 §6 deferred. The event loop stays in\nits main select until Phase C cancels it, so a broker event landing between the\ncommand-processor ack and that cancel produces exactly the `channel closed` ERROR #15\nremoves elsewhere.\n\n## Suggested fix\n\nBoth fit #15's existing shape:\n\n- Track the `ServiceStarted` handle the same way #15 tracks timer-failure dispatches\n  (`Vec<JoinHandle>` under a std mutex on the owning struct), and await it in the\n  services drain.\n- Give the MQTT event loop a quiesce signal distinct from `cancel` — the same\n  distinction #15 draws between *stop producing* and *stop existing*. Note #15 §6\n  records that no such seam exists today and that building one is its own chapter.\n\n## Do not\n\nDo not \"fix\" these by moving MQTT or services teardown earlier. #15 established that\nMQTT teardown must come **last** (`MqttClient.publish` throws rather than no-ops, and\ndrivers publish from timer bodies), and that services must stop **first** (their\n`ServiceStopped` handlers write through the command channel). Both orderings are\nload-bearing and were arrived at by killing the alternatives.\n\nFound by the design gate on #15, 2026-08-02.\n",
+          "closedAt": "2026-09-30T16:26:36Z",
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-08-29T19:56:25Z"
+              },
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-09-30T16:26:35Z"
+              },
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-09-30T17:09:02Z"
+              }
+            ],
+            "totalCount": 3
+          },
+          "createdAt": "2026-08-02T13:58:29Z",
+          "id": "I_kwDONszNXs8AAAABLJJbUA",
+          "labels": {
+            "nodes": [
+              {
+                "name": "bug"
+              },
+              {
+                "name": "p3"
+              },
+              {
+                "name": "kernel"
+              },
+              {
+                "name": "self-contained"
+              },
+              {
+                "name": "partial"
+              }
+            ],
+            "totalCount": 5
+          },
+          "milestone": null,
+          "number": 56,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "CLOSED",
+          "stateReason": "COMPLETED",
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABLJJbUM8AAAAGt46IHQ"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABLJJbUM8AAAAGt46ISA"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABLJJbUM8AAAAGt46IZw"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABLJJbUM8AAAAGt46IlA"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABLJJbUM8AAAAHCT4WEA"
+              }
+            ]
+          },
+          "title": "Two command producers outside #15's teardown inventory: detached ServiceStarted spawn, MQTT event-loop update_status",
+          "updatedAt": "2026-09-30T17:09:02Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "Post-transaction net-effect event derivation (#111 phase 3) does full event-handler resolution **twice** per transaction and then discards it again for events nobody subscribes to. Measured end-to-end cost is ~10% at the median, so this is an optimization rather than a blocker — but it is provably wasted work on the commit path, and the design had already specified the cheap shape.\n\n## Measured\n\nSame workload (`tests/workflows/interactive.tests`, 11 tests), same tree, both arms at production defaults, `execute` span from logmon:\n\n| arm | p50 | p80 | p95 |\n|---|---|---|---|\n| `event_derivation=1` | 1.036 ms | 2.447 ms | 18.08 ms |\n| `event_derivation=0` | 0.937 ms | 2.305 ms | 15.10 ms |\n\n~10% at p50. (An earlier apparent 61x was `event_audit=strict` contaminating the derivation arm — see the note in `scripts/pre-merge-check.sh`; the oracle costs ~55x and must never be armed over the full corpus.)\n\n## The mechanism\n\nThe parent spec (`2026-08-08-post-transaction-net-effect-events-design.md` §7) designed a cheap `TxRecord { touches, edges, deleted }` to REPLACE per-step narration, with the cost claim stated at §7.4: *\"per step → per (object, round)\"*. The implementation spec (`2026-08-09-...-derivation-design.md` §1.1) dropped it — *\"The per-step stream IS the touch log\"* — and §3 deliberately chose `add_event` as the derived emitter. Both choices are defensible alone. Their product keeps the expensive thing and adds it: there is no subtraction anywhere on the resolution axis.\n\n`add_event` (`store_server/src/command/precommit_store.rs:2952-3238`) is still called per write from `set_property.rs:1618/1660/1675/1733/1774`, `create.rs:627/632`. `derive_post_transaction_events` then does `mem::take` (`:4471`), discards five of the seven kinds, and re-emits through the same body (`:4716-4720`).\n\nResolutions per transaction:\n\n| shape | before | after |\n|---|---|---|\n| K single writes (the common shape) | K | **2K** |\n| create with K properties | K+4 | **2K+8** |\n| one property written 10x (the collapse case) | 10 | 11 |\n| pure deletion | D | D |\n\nThe only shape where the derivation *reduces* resolution work is repeated writes to one property — which the branch's own `repeat_writes` counter exists to show is rare.\n\n## Why it is safe to fix\n\n**Nothing reads `Event::triggered_scripts` before the derivation runs.** `compute_tx_filter_fireset` (`:3628-3789`) reads only `event_data` and `class_ids`; the fixpoint loop consumes the narrated stream as a pure touch log, exactly as the spec's §3 table says. The only production reader is post-commit dispatch (`processor.rs:260`), after `get_events()`.\n\nAnd the side effects are separable: finalizers (`:2962-2963`), ref-rewire (`:2970-3009`) and auto-grow/shrink (`:3199-3229`) live in their own blocks, and nothing in the resolution path (`:3011-3184`) feeds them.\n\n## Ranked remedies\n\n1. **Split `add_event` into `narrate_touch` + `resolve_and_push`.** Narration keeps the side effects and pushes with an empty `triggered_scripts`; the derivation resolves once. `Triggered` and `ObjectDeleted` keep the full path — they are the two kinds carried forward, and their resolved scripts ARE the capture-at-destruction. Recovers the entire duplicate. No new data structure.\n2. **Skip resolution where no handler can match.** The terminal `retain` (`:3599`) drops every event with no subscriber, after the cost is paid twice. `get_store_scripts()` is already the index (`ScriptMap = HashMap<ScriptKey, …>`); what is missing is a cheap probe, since reaching it currently costs an owned `object_name` plus 2-4 key constructions. Suggested: a per-transaction `HashMap<PropertyId, DispatchPlan>` memo, with the two wildcard keys (`AnyPropertyChanged` / `ChildAnyPropertyChanged`) probed once per transaction as an escape hatch, invalidated where `script_overlay` is mutated.\n3. **`reference_deltas` clones each touched target's inbound referrer set twice** (`:4398-4412`, via the cloning accessor at `store_layer/imp.rs:240`). The `Cow`-borrowing sibling `references_of` (`:1218`) was written for exactly this and its own doc says the cloning form \"was assumed to be a slow path; it is the opposite\". Two accessor swaps; fully isolated from (1), so it is the best standalone A/B.\n4. **`get_class_inheritance_chain` rebuilt per property instead of per object** (`:4582`, also `:4619`, `:4662`). It is an uncached BFS allocating three collections per call. An object with 20 changed properties pays 19 redundant builds.\n5. **`narrated_identities` built even when the oracle is off** (`:4472-4480`, discarded at `mod.rs:658`). Gate on the mode.\n6. `context_string()` — a `join` plus two allocations — now runs twice per first-touch write (`:5402-5403` and `:2943`). Folds into (1).\n7. `Vec<ClassId>` cloned per emission (`:4610`, `:4645`, `:4684`). Folds into (4) via `Arc<[ClassId]>`.\n\n(1) recovers the most and restores the cost model the parent spec actually designed. (3) is the cheapest to land.\n\n## Note for whoever measures this\n\nUse the `execute` span via logmon, not `test-body time` (gh #130: varies ~50% run-to-run and cannot attribute a perf change). Confirm both arms' tunables by asking the server — `store-cli script --eval 'store.tunables'` — not by reading the launch command. And check the logs for `kind=event_derivation_engagement`: if it appears, the audit was armed and the run is contaminated.\n",
+          "closedAt": null,
+          "comments": {
+            "nodes": [],
+            "totalCount": 0
+          },
+          "createdAt": "2026-08-11T02:49:11Z",
+          "id": "I_kwDONszNXs8AAAABMPKhJg",
+          "labels": {
+            "nodes": [
+              {
+                "name": "todo"
+              },
+              {
+                "name": "p3"
+              },
+              {
+                "name": "kernel"
+              }
+            ],
+            "totalCount": 3
+          },
+          "milestone": null,
+          "number": 142,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "OPEN",
+          "stateReason": null,
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABMPKhJs8AAAAHCT2n0Q"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABMPKhJs8AAAAHCT2n6Q"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABMPKhJs8AAAAHCT2n9A"
+              }
+            ]
+          },
+          "title": "Event derivation resolves handlers twice per transaction, then discards it for events with no subscriber",
+          "updatedAt": "2026-08-29T20:27:41Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "Two residuals raised by the P2 pre-merge gate. Neither is a live defect — both are named\nhere so they are not rediscovered as surprises.\n\n## 1. The write gate tests `TYPE_IMAGE` by exact id, so a future Image subtype bypasses it\n\n`store_server/src/command/validate.rs` gates on `type_class_id == TYPE_IMAGE`. A type\n*derived* from `Image` would not match, and a descriptor-less blob could reach it.\n\nNo such subtype exists today (`boot_xml/boot.xml` — `Image` has no descendants), so this\nis a residual rather than a bug. The hardening is one line: `is_of_type_id(…,\nTYPE_IMAGE)`.\n\nWorth doing deliberately rather than incidentally, because it widens what the gate\nrejects — anything currently storing a raw blob on an Image-derived type would start\nfailing, and that is exactly the behaviour we want but it should land with its own test\nrather than inside an unrelated change.\n\n## 2. `images { }` entries are ingested eagerly on every reconcile\n\n`codegen.rs::generate_images_block` resolves every entry — read, decode, resample,\nre-encode for a raster — and codegen always runs. The incremental skip is a *post-pass*\nover emitted commands, so it does not prevent the ingest. A module with N raster entries\npays N full ingests on a **no-change** reconcile.\n\n`data/` has zero `file(…)` images today, so nothing regresses now. It becomes real with\nthe curated media catalog this feature exists for.\n\n**MAGNITUDE UNMEASURED — do not act on this without a number.** The rule this repo\nlearned the expensive way is that a mechanism traced is not an impact measured: state the\naddressable market as a fraction of end-to-end reconcile time and multiply, before\ndesigning anything. The measurement is cheap once a catalog with real artwork exists;\nuntil then this is a note, not a task.\n\nIf it does turn out to matter, the shape is probably a digest-keyed ingest cache rather\nthan laziness — the digest is already computed for the node-hash fold (`file_digests`),\nso the expensive half is the only part that would need memoising.\n\nSpec: `docs/superpowers/specs/2026-08-16-image-support-design.md` §7, §16w.\nRelated: #171 (the annotation family), #168 (G1's hook position).\n",
+          "closedAt": null,
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-08-18T05:40:40Z"
+              }
+            ],
+            "totalCount": 1
+          },
+          "createdAt": "2026-08-17T05:13:14Z",
+          "id": "I_kwDONszNXs8AAAABNBGbrA",
+          "labels": {
+            "nodes": [
+              {
+                "name": "todo"
+              },
+              {
+                "name": "p3"
+              },
+              {
+                "name": "kernel"
+              }
+            ],
+            "totalCount": 3
+          },
+          "milestone": null,
+          "number": 172,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "OPEN",
+          "stateReason": null,
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABNBGbrM8AAAAHCT2uZg"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABNBGbrM8AAAAHCT2ufg"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABNBGbrM8AAAAHCT2uiQ"
+              }
+            ]
+          },
+          "title": "Image residuals from the P2 gate: exact-id write gate, and eager images{} ingest",
+          "updatedAt": "2026-08-29T20:27:46Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "The ingest core applies the key colour **after** the resample. Its design says the opposite, and the order is not cosmetic — it decides whether keyed artwork gets a halo.\n\n## What the design says\n\n`docs/superpowers/specs/2026-08-16-image-support-design.md:797`, §4.4 \"Key colour at ingest, with tolerance\":\n\n> Applied **once, before the resample**, into a real alpha channel.\n\nThe same claim is repeated in the doc comment on `PartialIngestParams::key` (`shared/src/image_annotations.rs:114`): *\"Keying is applied before the resample, into a real alpha channel, and the original is discarded\"* — which is the stated reason that field carries a two-level `Option` at all.\n\n## What the code does\n\n`store_server/src/image_ingest.rs:173-176`:\n\n```rust\nimg = resample(img, &params);\nif let Some(key) = params.key {\n    img = apply_key_color(img, key);\n}\n```\n\nResample first, key second — the reverse of both texts.\n\n## Why it matters\n\n`apply_key_color` matches within `TOLERANCE: 12` (`store_server/src/image_ingest.rs:281`). Resampling first blends key-coloured background pixels with adjacent content pixels, so the blended edge pixels fall **outside** that tolerance and stay opaque. The result is a fringe of near-key-coloured pixels tracing every edge — the classic green-screen halo — and it is worse the more the image is downscaled, because more blending happens.\n\nKeying first avoids it by construction: alpha is punched on crisp pixels at full resolution, and the resample then interpolates RGBA, producing soft partial-alpha edges rather than a fringe.\n\nThere is a second-order effect too: `effective_format` is overridden away from JPEG when `params.key.is_some()` (`image_ingest.rs:181`), which is correct either way, but the halo means the stored PNG carries the fringe permanently — the original is discarded, so it is not recoverable.\n\n## How it surfaced\n\nFound by the design gate for image P5b (Web UI upload). P5b puts a **preview of the keyed result** in front of a user for the first time, so this becomes visible rather than merely stored — and the natural reading is that the upload tool damaged the image.\n\n## Scope\n\nMoving the `apply_key_color` call above the `resample` call is the fix. It changes the stored bytes of **future** ingests that use a key colour; existing stored values are untouched (the write gate is a write gate, and a re-ingest is what would refresh them).\n\nWorth a test that asserts the edge behaviour rather than just the call order — e.g. a small image with a keyed background and a hard-edged shape, downscaled, asserting no near-key opaque pixels remain adjacent to the shape.\n",
+          "closedAt": null,
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-08-19T15:29:26Z"
+              },
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-08-19T17:59:56Z"
+              }
+            ],
+            "totalCount": 2
+          },
+          "createdAt": "2026-08-18T23:47:11Z",
+          "id": "I_kwDONszNXs8AAAABNTHXmA",
+          "labels": {
+            "nodes": [
+              {
+                "name": "bug"
+              },
+              {
+                "name": "p3"
+              },
+              {
+                "name": "kernel"
+              }
+            ],
+            "totalCount": 3
+          },
+          "milestone": null,
+          "number": 191,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "OPEN",
+          "stateReason": null,
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABNTHXmM8AAAAG52hCiw"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABNTHXmM8AAAAHCT3NAA"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABNTHXmM8AAAAHCT3NEw"
+              }
+            ]
+          },
+          "title": "Ingest keys the image AFTER the resample; its design says before, and the difference is a halo",
+          "updatedAt": "2026-08-29T20:28:11Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "`IngestImage` carries its ingest parameters as a serde JSON string (`params_json`). That was a deliberate decision — `IngestParams` already crosses a durability boundary as serde JSON inside a stored `StoredImage` descriptor, and mirroring the family in proto would create a second encoding of one struct with the persisted one as the contract of record.\n\nThe cost of that decision is that **the grammar exists only in Rust `#[derive]`s**. A non-Rust client has to know all of the following, none of which appears in the `.proto`, in `docs/guides/images.md`, or in the design spec:\n\n- field names are `snake_case` (`max_edge`, not `maxEdge`) — and since `deny_unknown_fields` landed, getting this wrong is now a loud error rather than a silent empty rung, which helps but does not teach\n- `key` is an externally-tagged serde enum with four spellings: `\"inherit\"`, `\"none\"`, `{\"colour\": 16711680}`, `{\"corner\": \"tl\"}`\n- the serde spellings of `FitMode` (`fit` / `fill`), `FormatPolicy` (`keep` / `png`), `ResampleFilter` (`lanczos3` / `triangle` / `nearest`), and `Corner` (`tl` / `tr` / `bl` / `br`)\n- `null` is an **error**, not \"unset\" — `{\"key\": null}` fails to parse. That is the opposite of the usual JSON convention and the most likely thing a client author assumes\n- the wire spells the key-colour variant `colour` while the rest of the tree spells the concept `Color`\n\n## Why this matters more than it looks\n\nThe `key` parameter destroys pixels: keying is applied into a real alpha channel and the original is discarded. A client author who guesses the grammar wrong for that field does not get an approximate result, they get an irreversible one.\n\n## Suggested fix\n\nWrite the grammar into the `.proto` comment on `params_json`, since that is the file a non-Rust client actually reads, and cross-link it from `docs/guides/images.md`. A worked example of each `key` spelling would carry most of the weight.\n\nThe alternative — mirroring the rung as proto messages — was considered and rejected in the P5b design (§D2); this issue is about documenting the choice that was made, not revisiting it.\n\nFound by the P5b pre-merge deep gate.\n",
+          "closedAt": null,
+          "comments": {
+            "nodes": [],
+            "totalCount": 0
+          },
+          "createdAt": "2026-08-19T11:03:49Z",
+          "id": "I_kwDONszNXs8AAAABNXY84A",
+          "labels": {
+            "nodes": [
+              {
+                "name": "docs"
+              },
+              {
+                "name": "p2"
+              },
+              {
+                "name": "kernel"
+              }
+            ],
+            "totalCount": 3
+          },
+          "milestone": null,
+          "number": 194,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "OPEN",
+          "stateReason": null,
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABNXY84M8AAAAG6OhH0w"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABNXY84M8AAAAG6OhIfA"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABNXY84M8AAAAHCT3PcQ"
+              }
+            ]
+          },
+          "title": "IngestImage's params_json grammar exists only in Rust derives; a non-Rust client cannot discover it",
+          "updatedAt": "2026-08-29T20:28:13Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "Found by the deep gate of the store-side `ArtHash` consumer (memo `docs/superpowers/specs/2026-09-07-art-hash-consumer-memo.md` §7, Codex rounds 3 and 4). Two residuals share one root cause and are recorded here rather than papered over in SDL.\n\n## The gap\n\nAn inbound MQTT message carries no identity of the CONNECTION (or subscription round) it arrived on. `DispatchItem` in `store_server/src/mqtt.rs` has topic, payload and retain flag; a handler cannot tell a message queued from the previous connection from one belonging to the retained replay of the new connection.\n\n## Where it bites\n\n`AudioMediaSystem` keeps a per-session, memory-only `ArtSinceDocument` flag: \"a picture arrived after the last state document\", which makes a null `ArtHash` in the NEXT document not clear the picture (the defence against a retained replay delivering the new picture and then the previous, null, document). The flag is reset on every replay boundary the SDL can see — the client's `Status` flipping to `Connected` (the ConnAck arm awaits that write before it resubscribes) and the system's `MqttClient` reference being re-pointed (which starts a retained delivery through `refresh_subscription` with no `Status` transition).\n\n- **Residual A (round 3, S1):** an Art message from the OLD connection still sitting in the dispatch queue when the connect reset runs is dispatched afterwards and re-arms the protection; the new replay's genuine null is then absorbed and the previous track's cover strands beside a null mirror.\n- **Residual B (round 4, S1):** one transaction that enables a client and then points the system at it can let CONNACK, the replay and the Art dispatch all run before the pending `PropertyChanged(MqttClient)` handler does; same outcome.\n\nBoth are narrow (they need a queued stale picture or a same-transaction enable-and-point) and both are unfixable from SDL: every sound remedy needs the connection identity the store does not expose, and the obvious SDL guards contradict each other (round 4's own S3).\n\n## A shape\n\nStamp each `DispatchItem` with a per-client connection generation (bumped on ConnAck) and expose it to handlers — e.g. a `connection_gen` key beside `retain` in the `+props` map — so a handler can drop, or treat as stale, a message from a generation older than the one it last saw the boundary event for. The `+props` handler form already exists (`docs/guides/mqtt.md`); a retained-replay marker would be a second consumer of the same field. Sizing: kernel + guide + one SDL consumer; T2 because it is a wire-adjacent handler contract.\n",
+          "closedAt": null,
+          "comments": {
+            "nodes": [],
+            "totalCount": 0
+          },
+          "createdAt": "2026-09-07T18:38:48Z",
+          "id": "I_kwDONszNXs8AAAABQI5aAA",
+          "labels": {
+            "nodes": [
+              {
+                "name": "todo"
+              },
+              {
+                "name": "p3"
+              },
+              {
+                "name": "kernel"
+              }
+            ],
+            "totalCount": 3
+          },
+          "milestone": null,
+          "number": 278,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "OPEN",
+          "stateReason": null,
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABQI5aAM8AAAAHJmdbrQ"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABQI5aAM8AAAAHJmdb5g"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABQI5aAM8AAAAHJmdcMQ"
+              }
+            ]
+          },
+          "title": "Inbound MQTT dispatch carries no connection identity, so a handler cannot tell a stale queued message from the new connection's retained replay",
+          "updatedAt": "2026-09-07T18:38:48Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "## What happened\n\nDuring a routine post-merge sync of home (restart, `reload-config`, restart onto `583e21a7`), ht_server logged two ERRORs:\n\n```\n06:19:47 ERROR Execute consumer timed out responding to CallMethod after 30s\n    kind=invariant_violation  method=GenerateScript  span_panel_name=pi_1  consecutive=1\n06:19:47 ERROR Execute consumer timed out responding to CallMethod after 30s\n    kind=invariant_violation  method=GenerateScript  span_panel_name=pi_2  consecutive=1\n```\n\nTimeline, from the home log (domain `default`):\n\n| time | event |\n|---|---|\n| 06:19:12 | store_server boots after the first restart; preloads TLV and media_m0 |\n| 06:19:14 | ht_server starts for TLV; panels connect and request `GenerateScript` (~06:19:17) |\n| ~06:19:1x | `store-cli reload-config` runs and reconciles TLV and media_m0 (the merge changed SDL) |\n| 06:19:47 | both `GenerateScript` calls hit the 30 s reply timeout |\n| 06:20:38 | second restart; no further errors |\n\n## Why it is a defect\n\n`ht_server/src/renderer.rs` (the `Err(_)` arm of the `handle_call_method` reply timeout) says a 30 s\ntimeout means *\"the serial execute consumer is stuck\"*. It logs `kind=invariant_violation` at ERROR and\ncounts toward the renderer wedge threshold. Here the consumer was not stuck: it was most likely waiting\nbehind a legitimate long reconcile. That makes a documented post-merge step produce ERRORs that the\nlogging policy classifies as code-fix-warranted, plus progress toward a wedge kill.\n\n## Unverified\n\n- That the call was blocked by the reconcile rather than by something else in the boot window. The\n  timing fits, but it has not been probed.\n- Whether a third consecutive timeout during a longer reconcile would kill a healthy renderer.\n\n## To decide\n\nEither make the wait reconcile-aware (don't count toward the wedge threshold, and don't log\n`invariant_violation`, while a reconcile holds the store), or make `GenerateScript` not wait on it.\nFirst step: reproduce on a lane with `reload-config` after an SDL change, with a panel connected.\n",
+          "closedAt": "2026-09-26T19:06:00Z",
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-09-24T06:55:16Z"
+              },
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-09-24T10:56:31Z"
+              },
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-09-25T22:16:02Z"
+              },
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-09-26T05:28:52Z"
+              },
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-09-26T05:28:55Z"
+              },
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-09-26T17:59:45Z"
+              },
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-09-26T19:05:59Z"
+              }
+            ],
+            "totalCount": 7
+          },
+          "createdAt": "2026-09-14T06:23:59Z",
+          "id": "I_kwDONszNXs8AAAABRJqy2A",
+          "labels": {
+            "nodes": [
+              {
+                "name": "bug"
+              },
+              {
+                "name": "p2"
+              },
+              {
+                "name": "kernel"
+              },
+              {
+                "name": "hometouch"
+              },
+              {
+                "name": "partial"
+              }
+            ],
+            "totalCount": 5
+          },
+          "milestone": null,
+          "number": 305,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "CLOSED",
+          "stateReason": "COMPLETED",
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABRJqy2M8AAAAHPJFDOw"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABRJqy2M8AAAAHPJFDug"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABRJqy2M8AAAAHUf5Z_A"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABRJqy2M8AAAAHY44QRw"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABRJqy2M8AAAAHY44Qfg"
+              },
+              {
+                "id": "UNLE_lADONszNXs8AAAABRJqy2M8AAAAHZGsKUw"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABRJqy2M8AAAAHZGsKXg"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABRJqy2M8AAAAHa4O9fw"
+              },
+              {
+                "id": "UNLE_lADONszNXs8AAAABRJqy2M8AAAAHbDX4rA"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABRJqy2M8AAAAHbGSx4Q"
+              },
+              {
+                "id": "UNLE_lADONszNXs8AAAABRJqy2M8AAAAHbY6_fg"
+              }
+            ]
+          },
+          "title": "GenerateScript times out as invariant_violation while reload-config reconciles",
+          "updatedAt": "2026-09-26T19:06:02Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "A hand-written catalog bundle can give `SpotifyUri` as an `open.spotify.com` link. Every import of that bundle then reports the value as `written`, even when nothing changes.\n\n**Why.** The importer decides `unchanged` by comparing the bundle's text with the stored value (`import/bundle.rs`, `values_match`). The stored value is always the canonical `spotify:` URI, because the `FilterSet` guard on `SpotifyUri` stores a link as its URI (`amend`). The link text therefore never equals what's stored. The importer emits the write, the guard amends it back to the same URI, and the write gate elides it.\n\n**Measured (gate p5, breadth probe 4).** Three imports of the same one-entry bundle each reported `SpotifyUri=written`. `ResolveGen` stayed at 1 throughout, so no resolve fired and no data changed.\n\n**Impact.** Report noise only: `values_written` over-counts, and a dry run of an already-applied bundle doesn't read as a no-op. The exporter always writes the URI, so a bundle this store produced never meets it.\n\n**Fix options.**\n\n- Compare after the value's own normalisation. That's not generic today: the guard is SDL, and the comparison runs before any command exists.\n- Or accept the noise and document that a bundle should carry URIs.\n",
+          "closedAt": "2026-09-30T12:19:53Z",
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-09-30T12:19:52Z"
+              }
+            ],
+            "totalCount": 1
+          },
+          "createdAt": "2026-09-15T22:41:19Z",
+          "id": "I_kwDONszNXs8AAAABReyYlQ",
+          "labels": {
+            "nodes": [
+              {
+                "name": "bug"
+              },
+              {
+                "name": "p3"
+              },
+              {
+                "name": "kernel"
+              }
+            ],
+            "totalCount": 3
+          },
+          "milestone": null,
+          "number": 312,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "CLOSED",
+          "stateReason": "COMPLETED",
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABReyYlc8AAAAHUf5gaw"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABReyYlc8AAAAHUf5ggQ"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABReyYlc8AAAAHUf5glA"
+              }
+            ]
+          },
+          "title": "bundle import: a SpotifyUri given as a link reports `written` on every import",
+          "updatedAt": "2026-09-30T12:19:53Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "## What happens\n\nA `reload-config` that **fails** the batch naming/usage check (Phase 2a) reports the store as failed —\nand leaves the refused change committed anyway.\n\nReproduced 2026-09-24 on lane t1 (live TLV + media_m0 exports, `6087cac1`):\n\n1. Delete the two property lines `ArtMaxBytes: Int? …` / `ArtMaxEdge: Int? …` from `AudioSession` in\n   `data/frameworks/media/modules/media/air_zone_audio.sdl`, leaving `sync_session` still writing\n   `self.ArtMaxBytes` / `self.ArtMaxEdge`.\n2. `store-cli reload-config` →\n   ```\n   - `self.ArtMaxEdge` on `AudioSession` names no property `ArtMaxEdge` — … (the script would fail at\n     runtime with 'Property not found'). Fix the property name. [/Schema/Modules/Media/AirZoneAudio/AudioSession/_fn_sync_session]\n   Error: reload-config: 2 store(s) failed to reconcile: TLV, media_m0\n   ```\n3. In both stores, `/Schema/Modules/Media/AirZoneAudio/AudioSession` no longer has `ArtMaxBytes` or\n   `ArtMaxEdge` (checked with a `find_object` script before and after). The store is now in exactly the\n   state the check says it refuses: a live method writes properties that do not exist.\n\nRestoring the file and reconciling again puts them back (a real 25 s schema change, not a no-op).\n\n## Why\n\n`import/mod.rs` (`reconcile`, ~L2310): each module is executed and **committed** in its own transaction\nfirst; Phase 2a (`validate_naming_aggregate`, `validate_usage_aggregate`) then runs over \"the final\nstore\" under a read guard and only sets `reconcile_error`. Nothing rolls the committed module\ntransactions back. The comment calls a violation \"a HARD reconcile error\", but the only hard thing is\nthe reported status.\n\n## Why it matters\n\n- The operator sees \"failed to reconcile\" and reasonably concludes nothing changed.\n- The house runs the half-applied schema until someone fixes the SDL: every call reaching the refused\n  code throws at runtime — the failure the check exists to prevent.\n- `USAGE_CHECK_ENFORCE` is `true` (`usage_check.rs:24`), so every usage finding refuses this way, not\n  only naming violations. (The comment at the Phase 2a call site still says \"while\n  USAGE_CHECK_ENFORCE is false this only audits\" — stale.)\n\n## To decide\n\nWhere the check must run so a refusal refuses: before the module transactions commit (against the\noverlay, which is where Phase 2a's cost lands — see #340/#305), or with a rollback of what the pass\ncommitted. Found while reproducing #305; to be fixed right after it.\n",
+          "closedAt": "2026-09-25T19:39:46Z",
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-09-25T19:39:45Z"
+              }
+            ],
+            "totalCount": 1
+          },
+          "createdAt": "2026-09-24T06:54:57Z",
+          "id": "I_kwDONszNXs8AAAABS6oqvg",
+          "labels": {
+            "nodes": [
+              {
+                "name": "bug"
+              },
+              {
+                "name": "p1"
+              },
+              {
+                "name": "kernel"
+              },
+              {
+                "name": "sdl"
+              }
+            ],
+            "totalCount": 4
+          },
+          "milestone": null,
+          "number": 341,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "CLOSED",
+          "stateReason": "COMPLETED",
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABS6oqvs8AAAAHY43KaQ"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABS6oqvs8AAAAHY43L6g"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABS6oqvs8AAAAHY43Mcg"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABS6oqvs8AAAAHY43NQg"
+              }
+            ]
+          },
+          "title": "A reconcile refused by the naming/usage check (Phase 2a) leaves its schema change committed",
+          "updatedAt": "2026-09-25T19:39:46Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "## What happened (live, home, 2026-09-23 09:52:31 UTC)\n\nDuring the post-merge `store-cli sync` (its `reload-config` step), the house server logged:\n\n```\nERROR store_lock_wedge  site=command_write guard=write waited_secs=3 limit_secs=10\n      apply_in_flight=false store=media_m0 timer=Scheduler1384\n```\n\n`Scheduler1384` is `/Global/Scheduler` in `media_m0` — the house's real schedule poller (60 s,\n3 schedules). Not a test: `deployment=home`, and no DSL test references the lock-wait path.\n\n## Root cause — measured, not inferred\n\n`reconcile_steps` (manager.rs, \"Phase 2a\") takes the committed store's **read guard** and holds\nit across two whole-store walks, `validate_naming_aggregate` + `validate_usage_aggregate`, with\n**no `RaiseGuard` announcing the hold**. A writer that queues behind it reads *\"past the\npreset, nothing being applied\"* — §4.5 row 3 of the bounded-lock-waits spec, the deadlock\nsignature.\n\nProbe on lane t1 (temporary timing around every post-loop hold, `reload-config --force`, a\nwriter toggling a property every 200 ms):\n\n| store | Phase 2a hold | of which naming | Phase 2 read | terminal drain (write) | worst probe write |\n|---|---:|---:|---:|---:|---:|\n| TLV | **5,158 / 5,348 ms** | ~1.07 s | 119 / 147 ms | 2 ms | **5,026 ms** |\n| media_m0 | **3,593 / 3,635 ms** | 1.07 s | 74 / 76 ms | 1 ms | 2,927 ms |\n\nThe lane reproduced the home ERROR exactly: `store_lock_wedge`, TLV, `Scheduler1217`,\n`waited_secs=3`, `apply_in_flight=false`, inside the Phase 2a window.\n\n## Why it matters beyond the log line\n\n- **The same wait aborts the process at 10 s** (`lock_wait::escalate` → `std::process::abort`).\n  TLV's Phase 2a is 5.3 s in the debug build on an idle machine — a margin of **1.9×** between\n  a routine deploy and a self-inflicted house outage.\n- **The same walk runs in `import::reconcile_all`** (`import/mod.rs`, its own Phase 2a) — reached\n  by `save_store_as_template`, `rebake_template`, migrations, credential conversion, and\n  `store.reconcile_all()`. `reconcile_steps` itself also serves `create_store` and a new\n  store's first load.\n- **Why the gh #334 audit missed it:** `30d641be` enumerated holds by what they CALL (blocking\n  I/O, `block_in_place` bridges). This hold calls neither — it is a pure CPU walk under a tokio\n  guard, as long as the ones it found. The spec's §4.6 premise (\"non-apply critical sections are\n  sub-millisecond in the measured population\") is false for this site.\n- The ERROR fires at `preset / 3` whatever the verdict, so a waiter behind a legitimate,\n  *announced* long hold would still log ERROR — against the logging policy's \"any firing is a\n  bug\". (`docs/guides/logging-policy.md`'s row still says 60 s; it is 3.3 s since gh #334.)\n\n## Fix — not decided (needs the owner)\n\nShapes under consideration: announce the hold (`RaiseGuard::for_operation` + `arm()`, the\npattern `changes_distributor` and the re-persist path already use); stop holding the guard\nacross the walk; make the walk cheap; and separately, the warning level for a wait inside an\nannounced limit.\n\nPossibly related, **unverified**: #305 (GenerateScript times out during reload-config).\n",
+          "closedAt": "2026-09-23T13:15:48Z",
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-09-23T13:15:48Z"
+              }
+            ],
+            "totalCount": 1
+          },
+          "createdAt": "2026-09-23T10:15:32Z",
+          "id": "I_kwDONszNXs8AAAABSuu4OQ",
+          "labels": {
+            "nodes": [
+              {
+                "name": "bug"
+              },
+              {
+                "name": "p2"
+              },
+              {
+                "name": "kernel"
+              }
+            ],
+            "totalCount": 3
+          },
+          "milestone": null,
+          "number": 340,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "CLOSED",
+          "stateReason": "COMPLETED",
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABSuu4Oc8AAAAHX4Y-ZA"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABSuu4Oc8AAAAHX4Y-7A"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABSuu4Oc8AAAAHX4Y_gA"
+              }
+            ]
+          },
+          "title": "reload-config's Phase 2a holds the store read guard 3.6–5.3 s unannounced — a live store_lock_wedge, and 1.9× from an abort",
+          "updatedAt": "2026-09-23T13:15:48Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "## What\n\nEvery schema-changing reload runs #341's whole-store naming and usage verdict (`command/mod.rs`, `introduced_violations`). It computes the problems of the COMMITTED store and of the new overlay, and refuses only on problems the reload introduces.\n\nThe committed half is recomputed from scratch on every reload. It changes only when something commits, so it could be cached and reused.\n\n## Measured (lane t1, `f0ca00e4`, 2026-09-26, `sample` over S0 there and back)\n\n| Share of the reload job | S0 there | S0 back |\n|---|---|---|\n| the whole-store verdict | 46 % | 37 % |\n| — its committed half (what this issue caches) | ~15 % | ~14 % |\n| — its overlay half | ~30 % | ~23 % |\n\n~93 % of the verdict is `usage_problems_aggregate`.\n\n**Expected gain:** about 1.3–1.5 s off S0's 9.6 s reload, and about 0.8 s off its 5.2 s panel wait.\n\n## Why deferred\n\nThe owner's bar is that reloads are rare and a few seconds of panel stall is acceptable. Against that, ~1.4 s does not pay for a new cache that must be invalidated correctly on every commit, which is a new silent-wrong class.\n\nThe larger lever is the overlay half: scoping it to what the reload changed. That reverses a deliberate #341 decision to judge the whole store. If reload speed matters again, design both together; together they reach ~40 % of the job.\n\nCarried over from gh #305 (closed; parts 1 and 2 landed).\n",
+          "closedAt": null,
+          "comments": {
+            "nodes": [],
+            "totalCount": 0
+          },
+          "createdAt": "2026-09-26T19:05:58Z",
+          "id": "I_kwDONszNXs8AAAABTZRvjg",
+          "labels": {
+            "nodes": [
+              {
+                "name": "todo"
+              },
+              {
+                "name": "p3"
+              },
+              {
+                "name": "kernel"
+              }
+            ],
+            "totalCount": 3
+          },
+          "milestone": null,
+          "number": 351,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "OPEN",
+          "stateReason": null,
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABTZRvjs8AAAAHbY66eQ"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABTZRvjs8AAAAHbY66uQ"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABTZRvjs8AAAAHbY67Fw"
+              }
+            ]
+          },
+          "title": "Cache the committed half of the whole-store reload verdict (#305 D, deferred)",
+          "updatedAt": "2026-09-26T19:05:58Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "With `STORE_PRECOMMIT_AUDIT=strict` armed, one reload test goes 17 s -> 73 s. A `sample` profile of it\n(2026-09-27) put **79% of transaction time inside the oracle's reference lanes** (`with_delegation_suppressed`),\nnearly all of it the raw walk `get_class_inheritance_chain_uncached`; `audit_chain_memo` alone was **49%** —\nit re-walks the chain on every memo HIT, not only on a fill.\n\nSince chore/gate-speed the quick gate arms this oracle only for diffs touching the class-hierarchy cache surface,\nso the cost now lands on exactly the work that needs it (and on `--full`). Armed, the store_server suite is still\n~1127 s.\n\nShape to evaluate (needs a spec — it is an oracle, and its independence is the point): cache the REFERENCE\nanswer per (class, overlay write epoch), dropped on ANY overlay write. That invalidation is coarser than the memo's\nown rule, so it stays independent of the logic it audits, and it pays one walk per key per write instead of per read.\nEstimated suite 1350 -> ~500 s armed. Measure hits-per-write on a reconcile before designing.\n\nEvidence: `store_server/src/command/precommit_store.rs` (`audit_chain_memo` ~4188, the delegation audits ~1444/1529/1553).\n",
+          "closedAt": "2026-09-27T23:18:49Z",
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-09-27T21:37:13Z"
+              },
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-09-27T23:18:49Z"
+              }
+            ],
+            "totalCount": 2
+          },
+          "createdAt": "2026-09-27T19:34:13Z",
+          "id": "I_kwDONszNXs8AAAABTh8MXw",
+          "labels": {
+            "nodes": [
+              {
+                "name": "design-question"
+              },
+              {
+                "name": "p2"
+              },
+              {
+                "name": "kernel"
+              },
+              {
+                "name": "dev-loop"
+              }
+            ],
+            "totalCount": 4
+          },
+          "milestone": null,
+          "number": 356,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "CLOSED",
+          "stateReason": "NOT_PLANNED",
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABTh8MX88AAAAHcAiB2g"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABTh8MX88AAAAHcAiCNw"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABTh8MX88AAAAHcAiCpA"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABTh8MX88AAAAHcAiC_g"
+              }
+            ]
+          },
+          "title": "perf(gate): the precommit oracle re-walks the class chain on every memo hit",
+          "updatedAt": "2026-09-27T23:18:49Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "## Observed\n\nWhen a parent is deleted, its children are cascade-deleted in the order `delete_object_by_id` (`store_server/src/command/delete.rs`) walks `get_object_references(object_id, …)`, which is backed by a std `HashSet` (`store_layer/memory.rs`, `ObjectData::references`). So sibling `Deleted` / `DescendantDeleted` events arrive in a different order from run to run.\n\nFound while building SDL tree events (`feat/sdl-tree-events`): the phase-1 cascade test (T9) depended on that order and failed 2 of 3 runs; it was changed (`c2ce06fb`) to compare each child's entries as a unit. The nondeterminism itself is still in the code.\n\n## Why it matters\n\nHandler order is now a documented guarantee within one event (spec `docs/superpowers/specs/2026-09-28-sdl-tree-events-design.md` §2.7), but ACROSS the events of one cascade the order is whatever the hash seed says — a handler that accumulates into `event_state` or writes a log sees a different sequence each run, and a test that asserts on sibling order is flaky.\n\n## Expected\n\nA deterministic cascade order (e.g. sorted by name, matching `get_object_children`'s name-sorted order, or by id).\n\n## Not verified\n\nWhether any existing handler or test other than T9 depends on sibling delete order.",
+          "closedAt": "2026-09-29T16:52:17Z",
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-09-28T10:24:42Z"
+              },
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-09-29T16:52:16Z"
+              }
+            ],
+            "totalCount": 2
+          },
+          "createdAt": "2026-09-28T10:16:59Z",
+          "id": "I_kwDONszNXs8AAAABTo7kow",
+          "labels": {
+            "nodes": [
+              {
+                "name": "bug"
+              },
+              {
+                "name": "p3"
+              },
+              {
+                "name": "kernel"
+              }
+            ],
+            "totalCount": 3
+          },
+          "milestone": null,
+          "number": 362,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "CLOSED",
+          "stateReason": "COMPLETED",
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABTo7ko88AAAAHclCeQA"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABTo7ko88AAAAHclCe1Q"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABTo7ko88AAAAHclCfnA"
+              }
+            ]
+          },
+          "title": "Cascade delete visits a parent's children in HashSet order, so sibling delete events are nondeterministic",
+          "updatedAt": "2026-09-29T16:52:17Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "## Observed\n\n`shared/src/iterators.rs:166-198` — the `SubclassesIterator` special case for `Object` drops the second root class of an inheritance chain. Found while building usage-check rule 1e (descendant filters, SDL tree events / panels-follow-the-store, 2026-09-28), which works around it locally instead of relying on the iterator.\n\n## Expected\n\nEnumerating the subclasses of `Object` yields every class, including both roots of a multi-root chain.\n\n## Confirmed\n\nReported by the implementing agent from code reading and the rule 1e workaround; not yet pinned by a test.\n\n## To do\n\nA unit test on a multi-root chain, then the fix; remove rule 1e's workaround after.",
+          "closedAt": "2026-09-28T22:29:53Z",
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-09-28T22:29:53Z"
+              }
+            ],
+            "totalCount": 1
+          },
+          "createdAt": "2026-09-28T20:59:28Z",
+          "id": "I_kwDONszNXs8AAAABTwv_Vw",
+          "labels": {
+            "nodes": [
+              {
+                "name": "bug"
+              },
+              {
+                "name": "p3"
+              },
+              {
+                "name": "kernel"
+              }
+            ],
+            "totalCount": 3
+          },
+          "milestone": null,
+          "number": 367,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "CLOSED",
+          "stateReason": "COMPLETED",
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABTwv_V88AAAAHdQcgMg"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABTwv_V88AAAAHdQcg3w"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABTwv_V88AAAAHdQchrw"
+              }
+            ]
+          },
+          "title": "SubclassesIterator's Object special case drops the second root class of an inheritance chain",
+          "updatedAt": "2026-09-28T22:29:53Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "## Observed\n\n`next_numeric_suffix` in `store_server/src/command/validate.rs` (the `#` name placeholder) returns\n`Ok(max_numeric_suffix + 1)` on a `u32`. `get_numeric_suffix` parses a sibling's trailing digits as a\n`u32`, so a sibling named `Foo4294967295` yields `u32::MAX`, and any `X#` name written under the same\nparent computes `u32::MAX + 1`.\n\nFound by a code read during the deep gate of the `#?` placeholder (branch\n`feat/hash-question-placeholder`). Not reproduced.\n\n## Expected\n\nA `#` write beside such a sibling is refused with a reason (or the suffix is computed in a wider type),\nnever a panic and never a wrapped `X0`.\n\n## Confirmed\n\n- The workspace `Cargo.toml` sets no `overflow-checks`, so the dev profile has them ON and the release\n  profile has them OFF.\n- `validate.rs`: `fn get_numeric_suffix(s: &str) -> Option<u32>`, and `Ok(max_numeric_suffix + 1)` in\n  `next_numeric_suffix`.\n\n## Hypotheses — UNVERIFIED, do not trust\n\n- In a debug build the addition panics inside the command processor during `validate_name`. Whether\n  that takes down only the transaction or the processor task (the gh #319 shape, where a panic in name\n  validation left the store refusing every write until restart) has not been checked.\n- In a release build it wraps, so `Foo#` stores `Foo0`.\n\nFix sketch: `checked_add` and refuse with `InvalidName`, plus a test with a `…4294967295` sibling and its\nnegative control.\n",
+          "closedAt": null,
+          "comments": {
+            "nodes": [],
+            "totalCount": 0
+          },
+          "createdAt": "2026-10-13T10:19:40Z",
+          "id": "I_kwDONszNXs8AAAABW2kR4A",
+          "labels": {
+            "nodes": [
+              {
+                "name": "bug"
+              },
+              {
+                "name": "p2"
+              },
+              {
+                "name": "kernel"
+              },
+              {
+                "name": "self-contained"
+              }
+            ],
+            "totalCount": 4
+          },
+          "milestone": null,
+          "number": 377,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "OPEN",
+          "stateReason": null,
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABW2kR4M8AAAAHtkkaAg"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABW2kR4M8AAAAHtkkazg"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABW2kR4M8AAAAHtkkbkg"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABW2kR4M8AAAAHtkkcZA"
+              }
+            ]
+          },
+          "title": "The # name placeholder overflows u32 beside a sibling named ...4294967295",
+          "updatedAt": "2026-10-13T10:19:40Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "## Observed\n\nA type whose `Repr` is `String` and which declares `on ParseValue` has that hook run on the\n`Description` of every PROPERTY DEFINITION typed with it, during reconcile. Reproduced on a fresh\nstore with `store.reconcile_inline_sdl`:\n\n```sdl\nmerge \"/Schema/User\" {\n    type ProbeExpr(String) {\n        on ParseValue {\n            if value_string.contains(\"BOOM\") { throw \"ParseValue refused: \" + value_string }\n            value_string\n        }\n    }\n    class ProbeHolder is RootObject {\n        Value: /Schema/User/ProbeExpr? { description: \"the BOOM description on the definition\" }\n    }\n}\n```\n\nThe reconcile aborts:\n\n```text\nParsing value script error: \"Runtime error: ParseValue refused: the BOOM description on the\ndefinition\" when setting property \"Description\" of \"/Schema/User/ProbeHolder/Value\" class\n\"/Schema/User/ProbeExpr\"   (validate.rs:609)\n```\n\n`Std/types/json_value.sdl:8-14` records the same incident for `JsonValue` and removed its hook\nrather than keep it.\n\n## Expected\n\nA type's `ParseValue` converts VALUES of that type. A property definition's `Description` is a\nplain `String` of `Object`; its text is not a value of the type and must never reach the hook.\n\n## Confirmed\n\n- `store_server/src/command/validate.rs:158-190`: when the property's own type has no\n  `ParseValue`, a fallback looks at the OWNING object's class; if that class derives from\n  `CLASS_TYPE` and its `Repr` equals the property's `Repr`, the owning type's hook runs. The\n  comment's example (`Description:String` on `TimeSpan:Int` → no match) shows the heuristic was\n  written for Int-repr types; for a String-repr type every String property of the definition\n  matches, `Description` included.\n- A property definition object's class IS the type it is typed with, so every definition typed\n  with a String-repr type is \"owned\" by that type in the fallback's sense.\n- Workaround that works (probed 2026-10-13): the hook reads the `property` in its scope and\n  returns `value_string` unchanged unless `property.Class` is the type itself. The behaviors\n  `ValueExpression` type (topic 4) ships with that guard.\n\n## Hypotheses — UNVERIFIED\n\n- The fallback exists for a type's own constraint properties (`Default`, `Min`, `Max`) whose\n  declared type is a bare repr. If those were declared with the type itself (as `Temperature`\n  does with `prop Default: Temperature?`, `tests/seed/sdl-Types.tests:371`), the fallback could\n  be deleted, which is the clean fix. Not checked which types rely on it.\n",
+          "closedAt": null,
+          "comments": {
+            "nodes": [],
+            "totalCount": 0
+          },
+          "createdAt": "2026-10-13T20:45:01Z",
+          "id": "I_kwDONszNXs8AAAABW_CBQA",
+          "labels": {
+            "nodes": [
+              {
+                "name": "bug"
+              },
+              {
+                "name": "p2"
+              },
+              {
+                "name": "kernel"
+              }
+            ],
+            "totalCount": 3
+          },
+          "milestone": null,
+          "number": 380,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "OPEN",
+          "stateReason": null,
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABW_CBQM8AAAAHuSGWMg"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABW_CBQM8AAAAHuSGW-A"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABW_CBQM8AAAAHuSGX6Q"
+              }
+            ]
+          },
+          "title": "A String-repr type's ParseValue runs on its property definitions' Description during reconcile",
+          "updatedAt": "2026-10-13T20:45:01Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "## Observed\n\nRelation-change handling runs only for objects under `/Schema`: `set_property.rs:1279` (validation of a relation property write) and `delete.rs:275` (relation deletion) are gated on the object's location. A class object may live outside `/Schema` — `tests/schema/user_schema_mutability.tests:445` creates one as a control — and then adding, re-pointing or deleting an `is`/`extends`/`contains` relation on it queues none of the commit-boundary checks: containment recheck, cardinality, stranded-value cleanup, and (once it lands) the declared-children backfill.\n\n## Expected\n\nThe checks a relation change owes depend on WHAT the object is (a relation of a class), not WHERE the class sits. Either a class outside `/Schema` is refused outright, or relation handling keys on identity.\n\n## Confirmed\n\n- The two gates, at the lines above (read at `09b337967`).\n- Found by the Codex re-verification of the declared-children backfill spec (`docs/superpowers/specs/2026-10-17-declared-children-backfill-design.md`, §6 and §9b F5).\n\n## Hypotheses — UNVERIFIED\n\n- Classes are reconciled into `/Schema` and the schema write guard (gh #249) keeps scripts out of it, so the only route to a class outside `/Schema` may be a privileged or test path; if so, refusing a class object outside `/Schema` at the commit boundary is the cheaper fix than re-keying every handler.\n",
+          "closedAt": null,
+          "comments": {
+            "nodes": [],
+            "totalCount": 0
+          },
+          "createdAt": "2026-10-17T19:39:06Z",
+          "id": "I_kwDONszNXs8AAAABX86cBA",
+          "labels": {
+            "nodes": [
+              {
+                "name": "bug"
+              },
+              {
+                "name": "p3"
+              },
+              {
+                "name": "kernel"
+              }
+            ],
+            "totalCount": 3
+          },
+          "milestone": null,
+          "number": 394,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "OPEN",
+          "stateReason": null,
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABX86cBM8AAAAHzvvNig"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABX86cBM8AAAAHzvvN_w"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABX86cBM8AAAAHzvvOlQ"
+              }
+            ]
+          },
+          "title": "Relation-change checks run only for classes under /Schema; a class elsewhere skips containment, cardinality and value cleanup",
+          "updatedAt": "2026-10-17T19:39:06Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "## Observed\n\nA script cannot turn an object's `ID` back into an object: `store.object_from_id(obj.ID)` fails with\n`Function not found: object_from_id (…, u32)`. The general Rhai value conversion\n(`store_server/src/scripting/rhai/values.rs`, the `Repr::ObjectId` arm of `to_rhai_dynamic_with_source`)\nyields a `u32`, and `object_from_id` takes an `i64` (`scripting/rhai/store.rs`, `object_from_id`).\nRhai dispatch is type-exact, so the two do not meet.\n\n## Expected\n\nAn `ID` read in a script is an `i64`, the type every other id-taking binding accepts, so\n`object_from_id(obj.ID)` works.\n\n## Confirmed\n\n- Query result ROWS already carry `ID` as `i64` (query evaluator phase 3, spec\n  `docs/superpowers/specs/2026-10-13-query-evaluator-design.md` §7). This issue is the general arm, which\n  is wider than the query: every property read of an `ObjectId` value.\n- The lowercase getter `obj.id` (`scripting/rhai/object/read_functions_impl.rs:69`) ALREADY returns\n  `i64`, so `object_from_id(obj.id)` works today. Only the property spelling `obj.ID` is `u32`.\n- Census, `rg '\\.ID\\b' data/`: 17 sites. 16 are string interpolations (`m${self.ID}`,\n  `recent_${src.ID}`, …), which are type-neutral. ONE is a typed call:\n  `sys.publish_resolve(self.ID, gen, req)` at `data/frameworks/media/modules/media/air_zone_audio.sdl:426`.\n  Whether it still dispatches after the change depends on the Rust binding's parameter type, so that\n  binding must change in the same commit (or take `i64` already — check).\n\n## Hypotheses — UNVERIFIED\n\n- `tests/` may hold `.ID` comparisons against `u32`-typed values; not censused.\n\n## Decision\n\nChange the general `Repr::ObjectId` arm to `i64`, with `publish_resolve`'s parameter (and any other\n`u32`-taking binding the census turns up) moved in lockstep.\n",
+          "closedAt": null,
+          "comments": {
+            "nodes": [],
+            "totalCount": 0
+          },
+          "createdAt": "2026-10-13T22:28:34Z",
+          "id": "I_kwDONszNXs8AAAABXAOIMA",
+          "labels": {
+            "nodes": [
+              {
+                "name": "todo"
+              },
+              {
+                "name": "p2"
+              },
+              {
+                "name": "kernel"
+              }
+            ],
+            "totalCount": 3
+          },
+          "milestone": null,
+          "number": 381,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "OPEN",
+          "stateReason": null,
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABXAOIMM8AAAAHuYQ3pg"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABXAOIMM8AAAAHuYQ4Yw"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABXAOIMM8AAAAHuYQ5VA"
+              }
+            ]
+          },
+          "title": "Rhai: obj.ID reads as u32, so object_from_id(obj.ID) does not dispatch",
+          "updatedAt": "2026-10-13T22:28:34Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "**Observed.** The query evaluator has no `[Secret]` handling: `rg -i secret store_server/src/query/` finds nothing. A predicate on a secret property — `[*] { Password = 'hunter2' }` from `store.query` in any script, or from the gRPC `Query` — returns the objects whose secret equals the literal, so a caller who cannot read the value can still test it: a one-bit oracle per query, enough to recover a short credential by enumeration. The expressions facility refuses the same read outright (owner ruling 2026-10-14, \"an expression never reads a secret, no opt-in\"; `secret_value` in `store_server/src/expr/`), and `h.splice` refuses a secret only when given a class (`store_server/src/expr/rhai.rs:478`).\n\n**Expected.** A query never evaluates a `[Secret]` property: a predicate or projection naming one is refused at compile (strict and lenient alike, since the hole is the comparison, not the fault reporting), with a message naming the property — the query-side counterpart of the expressions ruling. Which arm (compile refusal vs. the property reading as absent) is the decision to make; refusal is the one that cannot be mistaken for \"no match\".\n\n**Confirmed.** Found during the behaviors engine design's self-review (spec `docs/superpowers/specs/2026-10-14-behaviors-core-design.md` §5.2, §16 R9, commit 755c3d6fc): the engine compiles a `Compare` node to a query fragment, so a `Compare` on a secret property would be exactly this oracle. The engine refuses the shape it can see (`Check` rule C19 and a fault at evaluation), which covers behaviors only; the general path stays open for every other query caller.\n\n**Hypotheses / where to look.** `store_server/src/query/` — the compile step that resolves a property name to a `PropertyId` is where the `[Secret]` stamp (bit 4 of the value flags; `shared/src/value_authority.rs`) can be consulted on the class property; the gRPC `Query` and `store.query` share the compiler, so one refusal covers both. Tests: `store_server/src/query/tests.rs` (a secret property in a predicate and in a projection, strict and lenient; a non-secret sibling still works), plus one `.tests` row through the gRPC origin.\n",
+          "closedAt": "2026-10-15T07:09:03Z",
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-10-15T07:08:59Z"
+              }
+            ],
+            "totalCount": 1
+          },
+          "createdAt": "2026-10-14T20:28:07Z",
+          "id": "I_kwDONszNXs8AAAABXP4kPA",
+          "labels": {
+            "nodes": [
+              {
+                "name": "kernel"
+              }
+            ],
+            "totalCount": 1
+          },
+          "milestone": null,
+          "number": 383,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "CLOSED",
+          "stateReason": "NOT_PLANNED",
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABXP4kPM8AAAAHvtEqpQ"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABXP4kPM8AAAAHvtEr4w"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABXP4kPM8AAAAHvtEtCA"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABXP4kPM8AAAAHvtEuEQ"
+              },
+              {
+                "id": "UNLE_lADONszNXs8AAAABXP4kPM8AAAAHwT3o-Q"
+              },
+              {
+                "id": "UNLE_lADONszNXs8AAAABXP4kPM8AAAAHwT3pHg"
+              },
+              {
+                "id": "UNLE_lADONszNXs8AAAABXP4kPM8AAAAHwT3pSA"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABXP4kPM8AAAAHwT3pxg"
+              }
+            ]
+          },
+          "title": "The query evaluator reads [Secret] values: a predicate on a secret property is a one-bit oracle",
+          "updatedAt": "2026-10-15T07:09:03Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "**Observed.** The kernel orders an object's children by full name, lexically (`store_server/src/store_layer/iterators.rs:60-62`; the Rhai `children` list and the query language's `[]` follow it). The Admin UI hides `_N_` prefixes (`shared::api::strip_sort_prefix`) and presents them as order, and a reader assumes numeric order. The two agree for one to nine items and diverge from ten on: `_10_X` sorts before `_2_Y` for the kernel, so anything that says \"run in the order listed\" over a `_N_`-prefixed list (regions' entries, workflow groups and steps, the scheduler's items) runs `_10_` second once there are ten or more. DMX already enforces numeric prefixes server-side (`data/frameworks/ha/modules/dmx.sdl:614-620`), which is the tell that someone hit it.\n\n**Where it was noticed.** The behaviors Admin UI design (topic 8, `docs/superpowers/specs/2026-10-16-behaviors-admin-ui-design.md` §23) — behaviors avoid it by naming ordered children with five zero-padded digits spaced by 1000 (`_01000_`, `_02000_`), maintained by the client, which keeps lexical and numeric order identical up to 99,999. That closes it for behaviors only.\n\n**Expected.** One of: (a) every `[#AdminUi, Ordered]` container uses the same fixed-width scheme, the client migrating existing `_N_` names on first touch (regions, workflows, scheduler); (b) the kernel sorts a leading `_<digits>_` prefix numerically (a change to `iterators.rs`, the query's `[]` and SDL export/reconcile agreeing, so it is a T2 with a differential test over the three readers); (c) a reconcile-time lint refusing a `_N_` list past nine items unless zero-padded. (a) is the cheapest and matches what behaviors do; (b) is the one that makes the hazard impossible to reintroduce.\n\n**Not blocking anything today**: no shipped list is known to exceed nine items. Filed from the behaviors whole-picture session on the topic 8 report.",
+          "closedAt": "2026-10-17T03:58:58Z",
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-10-16T19:54:16Z"
+              },
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-10-17T03:58:56Z"
+              }
+            ],
+            "totalCount": 2
+          },
+          "createdAt": "2026-10-15T22:48:17Z",
+          "id": "I_kwDONszNXs8AAAABXi9UBA",
+          "labels": {
+            "nodes": [
+              {
+                "name": "bug"
+              },
+              {
+                "name": "kernel"
+              },
+              {
+                "name": "admin-ui"
+              }
+            ],
+            "totalCount": 3
+          },
+          "milestone": null,
+          "number": 385,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "CLOSED",
+          "stateReason": "COMPLETED",
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABXi9UBM8AAAAHxg45eg"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABXi9UBM8AAAAHxg46Wg"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABXi9UBM8AAAAHxg47MA"
+              },
+              {
+                "id": "UNLE_lADONszNXs8AAAABXi9UBM8AAAAHy3mnhw"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABXi9UBM8AAAAHy3mnyg"
+              }
+            ]
+          },
+          "title": "Kernel orders children lexically while the Admin UI sorts _N_ prefixes numerically: beyond nine items _10_ runs before _2_",
+          "updatedAt": "2026-10-17T03:58:58Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "## Observed\n\nA `RunScript` from `store-cli script --store TLV --eval …` on home (t0, main at 9bd5919c2, store_server pid 86122) took the WHOLE server down: every store, every panel. The script:\n\n```rhai\nstore.with_command_budget(2000000, || {\n  let big = []; let stack = [store.find_object(\"/\")]; let n = 0; let max = 0;\n  while stack.len() > 0 {\n    let o = stack.pop(); let c = o.children; n += 1;\n    if c.len() > max { max = c.len(); }\n    if c.len() >= 60 { big.push(o.path + \" = \" + c.len().to_string()); }\n    for ch in c { stack.push(ch); }\n  }\n  #{ objects: n, max_children: max, nodes_with_60_or_more: big }\n})\n```\n\nThe client saw `transport error: stream closed because of a broken pipe`; the next call got `Connection refused`. The launcher log (the dev-server's stderr) carries three panics on one tokio worker, then the abort:\n\n```\nthread 'tokio-rt-worker' (10763321) panicked at …/rhai-1.25.1/src/types/dynamic.rs:345:77:\ncalled `Option::unwrap()` on a `None` value\nthread 'tokio-rt-worker' (10763321) panicked at …/rhai-1.25.1/src/func/call.rs:107:9:\nArgBackup::restore_first_arg has not been called prior to existing this scope\nthread 'tokio-rt-worker' (10763321) panicked at …/library/core/src/panicking.rs:233:5:\npanic in a destructor during cleanup\nthread caused non-unwinding panic. aborting.\nsh: line 1: 86122 Abort trap: 6           cargo run --bin store_server\n[Finished running. Exit status: 134]\n```\n\nmacOS crash report `~/Library/Logs/DiagnosticReports/store_server-2026-10-16-100730.ips`: `EXC_CRASH (SIGABRT)`, faulting thread `tokio-rt-worker`, frames `panic_in_cleanup` ← `rhai::func::call::Engine::exec_native_fn_call` ← `make_method_call` ← `eval_dot_index_chain` ← … ← `StoreServerService::run_script_body`. ht_server then logged `Store-Server stream error, reconnecting` and six failed reconnects until a manual `store-cli restart`.\n\n## Expected\n\nNo script, however written, may take the server down (owner rule 2026-09-30: no scenario, however rare, may hang — or kill — the system). A script fault is a script error returned to the caller; the process and every other store stay up.\n\n## Confirmed\n\n- `store.with_command_budget` is bound with `store: Shared<RhaiStore>` as its first parameter and runs the closure with `operation.call_within_context(&ctx, (store.clone(),))` — `store_server/src/scripting/rhai/store.rs:1901-1915`. `with_extended_budget` has the same shape at `:1882`. Two more bindings call back into script from a native call: `multilang.rs:390` and `filter_returns.rs:195`.\n- rhai 1.25.1 with the `sync` feature (`store_server/Cargo.toml:68`), so a closure-captured variable is a `Shared` `Arc<RwLock<Dynamic>>`.\n- `dynamic.rs:345` is `Union::Shared(ref cell, ..) => (*crate::func::locked_read(cell).unwrap()).type_id()` — a `try_read` that fails is unwrapped rather than returned as rhai's `ErrorDataRace`.\n- `func/call.rs:100-110` is `impl Drop for ArgBackup` with `assert!(self.orig_mut.is_none(), …)` — a panic in a destructor, which during an unwind is `panic_in_cleanup` → abort, so no `catch_unwind` on our side can contain it (the only one is around the whole runtime, `store_server/src/main.rs:566`).\n- Every engine use of the binding spells the closure `|s| …` and uses `s` inside (`data/globals/schemas/Std/behaviors/{fence.sdl:437,462,670, engine.sdl:1543,2184}`, `data/frameworks/hometouch/modules/ui_builder/base/extensions.sdl:196`), and the guide's example does too (`rhai-api.md`). The crashing script wrote `|| …` and used the captured `store`.\n\n## Hypotheses — UNVERIFIED, do not trust\n\n- Mechanism: the method-call syntax `store.with_command_budget(…)` takes the shared `store` cell as the call's `this` under a WRITE lock for the whole native call; the closure then evaluates the captured `store` (the same cell) for `store.find_object(...)`, whose `type_id()` needs a read lock on it → `None` → the unwrap panic; the unwind then trips `ArgBackup`'s assert → abort. The `|s|` form avoids it because `s` is a fresh value, not the locked cell. Not yet reproduced in a lane; reproduce there (never at home) and minimise — `store.with_command_budget(10, || store.find_object(\"/\"))` is the predicted one-liner.\n- Fix directions, to be probed: (1) push `store` (and the other scope singletons) as rhai CONSTANTS if a constant is captured by value rather than shared — then `||` closures never hold the cell; (2) in the four call-back bindings, release the receiver before invoking the closure (take the receiver by value / register as a function, not a method) so no lock is held across the callback; (3) upstream: rhai's `Dynamic::type_id` should return `ErrorDataRace` instead of unwrapping, and `ArgBackup::drop` should not assert while unwinding — file with rhai, but do not wait for it. Whatever lands, a `.tests` row drives the `||` form through `RunScript` and asserts the server answers an error and keeps serving.\n- The script console in the Admin UI and any `exposed fn` are the same `RunScript`/eval path, so any configurator can trip this with one line.\n",
+          "closedAt": "2026-10-16T15:57:15Z",
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-10-16T07:35:08Z"
+              },
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-10-16T07:36:27Z"
+              },
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-10-16T08:06:03Z"
+              },
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-10-16T15:57:14Z"
+              },
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-10-16T17:51:30Z"
+              }
+            ],
+            "totalCount": 5
+          },
+          "createdAt": "2026-10-16T07:12:56Z",
+          "id": "I_kwDONszNXs8AAAABXnlj2A",
+          "labels": {
+            "nodes": [
+              {
+                "name": "bug"
+              },
+              {
+                "name": "p1"
+              },
+              {
+                "name": "kernel"
+              },
+              {
+                "name": "self-contained"
+              }
+            ],
+            "totalCount": 4
+          },
+          "milestone": null,
+          "number": 387,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "CLOSED",
+          "stateReason": "COMPLETED",
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABXnlj2M8AAAAHyA6-ng"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABXnlj2M8AAAAHyA6_wQ"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABXnlj2M8AAAAHyA7AmQ"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABXnlj2M8AAAAHyA7BqQ"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABXnlj2M8AAAAHyCWxCA"
+              },
+              {
+                "id": "UNLE_lADONszNXs8AAAABXnlj2M8AAAAHynGisQ"
+              }
+            ]
+          },
+          "title": "A script closure that re-enters `store` inside `store.with_command_budget(n, || …)` aborts the whole server",
+          "updatedAt": "2026-10-16T17:51:30Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "## Observed\n\n`store_server/src/command/processor.rs` wraps three `execute` call sites in `contain_transaction_panic` (lines 3298, 3669 and 4025 at `3631b3359`; the function is at :1756). The only panic-boundary source scan in the tree is `every_production_eval_site_is_contained` (`store_server/src/scripting/rhai/caller_frame.rs:455`), which counts `contain_script_panic` / `with_frame` at EVAL sites. A fourth `execute` call added to the processor loop without the wrapper fails no test.\n\n## Expected\n\ngh #387's own lesson, written into the Store ways-of-working skill on 2026-10-16: a protection over N sites is one named function plus a source-scanning test that counts its call sites against the sites that need it, so an added site fails a test instead of reopening the hole. The eval sites have that scan; the execute sites do not.\n\n## Confirmed\n\n- Three call sites: `rg -c \"contain_transaction_panic\\(\" store_server/src/command/processor.rs` prints 3 (the definition line reads `contain_transaction_panic<T>(`).\n- The eval scan exists and does not reach them: `caller_frame.rs:455`.\n\n## Proposed\n\nA test beside `every_production_eval_site_is_contained` that scans `processor.rs` for every `execute(` the processor's job loop awaits and asserts each sits inside a `contain_transaction_panic(` — or a restructure that makes the wrapper the only way the loop can call `execute`. Found by the deep-gate reader of the 2026-10-16 process-retro landing (its F7); the skill text now names the eval scan correctly and points here for the execute sites.\n",
+          "closedAt": null,
+          "comments": {
+            "nodes": [],
+            "totalCount": 0
+          },
+          "createdAt": "2026-10-17T00:03:13Z",
+          "id": "I_kwDONszNXs8AAAABXz6K5w",
+          "labels": {
+            "nodes": [
+              {
+                "name": "todo"
+              },
+              {
+                "name": "p3"
+              },
+              {
+                "name": "kernel"
+              },
+              {
+                "name": "self-contained"
+              }
+            ],
+            "totalCount": 4
+          },
+          "milestone": null,
+          "number": 392,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "OPEN",
+          "stateReason": null,
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABXz6K588AAAAHzFVXYA"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABXz6K588AAAAHzFVYBg"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABXz6K588AAAAHzFVYoQ"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABXz6K588AAAAHzFVZHA"
+              }
+            ]
+          },
+          "title": "processor: no source scan counts the contain_transaction_panic execute sites",
+          "updatedAt": "2026-10-17T00:03:13Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "Follow-ups to the declared-child rename `[Singleton=\"New\", Was=\"Old\"]` (dd3261158, `store_server/src/command/create.rs` backfill + `precommit_store.rs::rename_attempted`), found in its pre-merge reviews and deliberately left. Moved here from #396, whose subject has changed. None is a regression.\n\n- `PrecommitStore::rename_attempted` checks only that the attempted child still exists, not that it is still under the parent and of the declared class. A same-transaction companion that moves or casts it suppresses the create, and the bound refuses with a cardinality message. Cheap tightening: add the parent and `is_of_type_id(child, child_class)` checks, as `child_satisfies_want` does.\n- The WARN `a declared child was not renamed` reads wrong when a companion re-renamed the child after the rename landed; consider \"is not under its declared name\". The comment above the report block in `command/mod.rs` says \"after every step that can still fail\" — true inside `execute_body` only.\n- Two `contains` clauses on one class naming the same `Was` are not refused at codegen.\n- A `Was` written in display spelling (`\"Old Name\"` for a stored `Old_Name`) matches nothing silently; a runtime hint naming the normalized spelling would help.\n- The create-time drain ignores `Was` (a NEW parent created with an `Old` child in its layout).\n- A bundle exported before a rename carries the old child name and is refused on import (two children against `Max=1`), with or without `Was`. Hand recovery: rename the path segments in the bundle.\n",
+          "closedAt": null,
+          "comments": {
+            "nodes": [],
+            "totalCount": 0
+          },
+          "createdAt": "2026-10-19T03:09:34Z",
+          "id": "I_kwDONszNXs8AAAABYK-0uw",
+          "labels": {
+            "nodes": [
+              {
+                "name": "todo"
+              },
+              {
+                "name": "p3"
+              },
+              {
+                "name": "kernel"
+              }
+            ],
+            "totalCount": 3
+          },
+          "milestone": null,
+          "number": 400,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "OPEN",
+          "stateReason": null,
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABYK-0u88AAAAH6pJmRQ"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABYK-0u88AAAAH6pJmeg"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABYK-0u88AAAAH6pJmtQ"
+              }
+            ]
+          },
+          "title": "Declared-child rename (Was) follow-ups",
+          "updatedAt": "2026-10-22T22:39:58Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "## Symptom\n\n`tests/uibuilder/pending_changes.tests:813` (\"pending.b4c.automatic_restarts_are_staggered\") failed once in a full 20-way pre-merge run (HEAD d1eb415, lane t3, trace `24b578b96e0b429780dc41c0e130baba`). It passes alone. The restart timestamps were `[1792378431177, 1792378433732, 1792378434895, 1792378436094, 1792378437208]`, so the gaps were **2555, 1163, 1199, 1114 ms**. The assertion requires each gap to be at least `1500 * 3/4 = 1125` (`:843`).\n\n## Mechanism (a product bug: a timer's `after N` is measured from when the timer manager applies the create, not from the `timer` statement)\n\n1. A room rename marks every panel. Their `ui-rebuild-@` timers (`data/frameworks/hometouch/modules/ui_builder/base/extensions.sdl:307`) come due together. The timer manager fires due timers **one at a time, synchronously, inside its `sleep_until` select arm** (`store_server/src/timer.rs:828-866`, \"timers run one at a time\"). The five auto-rebuilds therefore run back to back. The log shows `kind=ui_auto_rebuild` at +11.157, +11.529, +11.868, +12.177, +12.576 s (≈340 ms each under load).\n2. Each rebuild calls `schedule_restart` (`extensions.sdl:366-387`). It takes `now = real_now_millis()` and claims the slot `max(now, NextRestartAt)`, so the slots are absolute: `t0, t0+1500, t0+3000, ...`. It then arms `timer \"ui-restart-@\" after (slot - now)`.\n3. The `timer` statement only queues a `PendingOp::Create` with the delay and no timestamp (`timer.rs:127-135`, `:292-295`). The deadline is computed in `apply_pending` as `next_fire: Instant::now() + delay` (`timer.rs:708`). `apply_pending` cannot run until the manager loop gets back to its `select!`, which is **after the whole batch of rebuild bodies finishes**. All four restart timers therefore start counting at the same moment `T_arm` (≈ when the last rebuild ends), instead of at their own `now`.\n4. So `fire_k = T_arm + slot_k - now_k`, and the gap between restarts k-1 and k is `1500 - (now_k - now_{k-1})`, i.e. PanelRestartDelay minus one rebuild body's duration. Predicted from the log's rebuild spacing (339, 309, 399 ms): 1161, 1191, 1101 ms. Observed: 1163, 1199, 1114 ms. The first gap is long (2555 ms) because restart 2 also waits for `T_arm`. Alone, the bodies are fast and the gaps stay near 1500. Once a body takes more than ~375 ms the assertion fails.\n\n`LastRestartAt` is stamped at the actual fire (`extensions.sdl:479`), so the test is measuring the real spacing. Panels really are restarted closer together than PanelRestartDelay. The same skew hits every timer that is armed from inside a timer body, or while the manager is busy firing one, with an `after N` computed from a clock read: its deadline slides late by however long the manager was busy.\n\n## Proposed fix\n\nIn the kernel, capture `Instant::now()` when the `timer` statement registers (the `TimerRegistry` create/update paths, `timer.rs:~280` / `~300`), carry it in `PendingOp::Create` / `Update`, and set `next_fire = requested_at + delay` in `apply_pending` (`:708`, `:719`). `after N` then means N from the statement, whatever the manager was doing. Add a Rust test in `timer.rs`: arm a timer from inside a firing body that runs for D ms, and assert it fires at statement + N, not at statement + D + N. The test's `3/4` tolerance can stay. Once the kernel is fixed, the remaining lateness is only one body's run time after each slot.\n",
+          "closedAt": null,
+          "comments": {
+            "nodes": [],
+            "totalCount": 0
+          },
+          "createdAt": "2026-10-19T03:05:16Z",
+          "id": "I_kwDONszNXs8AAAABYK8iZw",
+          "labels": {
+            "nodes": [
+              {
+                "name": "bug"
+              },
+              {
+                "name": "p2"
+              },
+              {
+                "name": "kernel"
+              }
+            ],
+            "totalCount": 3
+          },
+          "milestone": null,
+          "number": 399,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "OPEN",
+          "stateReason": null,
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABYK8iZ88AAAAH0x1R3Q"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABYK8iZ88AAAAH0x1STQ"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABYK8iZ88AAAAH0x1Syg"
+              }
+            ]
+          },
+          "title": "Flaky: automatic panel restarts land closer than PanelRestartDelay — a timer's delay counts from apply_pending, not from the timer statement",
+          "updatedAt": "2026-10-19T03:05:16Z"
+        }
+      ]
+    }
+  },
+  "variables": {
+    "ids": [
+      "I_kwDONszNXs8AAAABLDUbJg",
+      "I_kwDONszNXs8AAAABLJJbUA",
+      "I_kwDONszNXs8AAAABMPKhJg",
+      "I_kwDONszNXs8AAAABNBGbrA",
+      "I_kwDONszNXs8AAAABNTHXmA",
+      "I_kwDONszNXs8AAAABNXY84A",
+      "I_kwDONszNXs8AAAABQI5aAA",
+      "I_kwDONszNXs8AAAABRJqy2A",
+      "I_kwDONszNXs8AAAABReyYlQ",
+      "I_kwDONszNXs8AAAABS6oqvg",
+      "I_kwDONszNXs8AAAABSuu4OQ",
+      "I_kwDONszNXs8AAAABTZRvjg",
+      "I_kwDONszNXs8AAAABTh8MXw",
+      "I_kwDONszNXs8AAAABTo7kow",
+      "I_kwDONszNXs8AAAABTwv_Vw",
+      "I_kwDONszNXs8AAAABW2kR4A",
+      "I_kwDONszNXs8AAAABW_CBQA",
+      "I_kwDONszNXs8AAAABX86cBA",
+      "I_kwDONszNXs8AAAABXAOIMA",
+      "I_kwDONszNXs8AAAABXP4kPA",
+      "I_kwDONszNXs8AAAABXi9UBA",
+      "I_kwDONszNXs8AAAABXnlj2A",
+      "I_kwDONszNXs8AAAABXz6K5w",
+      "I_kwDONszNXs8AAAABYK-0uw",
+      "I_kwDONszNXs8AAAABYK8iZw"
+    ]
+  }
+}

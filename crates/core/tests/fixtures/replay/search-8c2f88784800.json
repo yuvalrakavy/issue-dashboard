@@ -1,0 +1,156 @@
+{
+  "name": "search",
+  "response": {
+    "data": {
+      "search": {
+        "issueCount": 15,
+        "nodes": [
+          {
+            "__typename": "Issue",
+            "closedAt": "2026-10-16T15:57:15Z",
+            "id": "I_kwDONszNXs8AAAABXnlj2A",
+            "number": 387,
+            "repository": {
+              "nameWithOwner": "yuvalrakavy/Store"
+            }
+          },
+          {
+            "__typename": "Issue",
+            "closedAt": "2026-10-17T03:58:58Z",
+            "id": "I_kwDONszNXs8AAAABXi9UBA",
+            "number": 385,
+            "repository": {
+              "nameWithOwner": "yuvalrakavy/Store"
+            }
+          },
+          {
+            "__typename": "Issue",
+            "closedAt": "2026-10-15T07:09:03Z",
+            "id": "I_kwDONszNXs8AAAABXP4kPA",
+            "number": 383,
+            "repository": {
+              "nameWithOwner": "yuvalrakavy/Store"
+            }
+          },
+          {
+            "__typename": "Issue",
+            "closedAt": "2026-09-28T22:29:53Z",
+            "id": "I_kwDONszNXs8AAAABTwv_Vw",
+            "number": 367,
+            "repository": {
+              "nameWithOwner": "yuvalrakavy/Store"
+            }
+          },
+          {
+            "__typename": "Issue",
+            "closedAt": "2026-09-29T16:52:17Z",
+            "id": "I_kwDONszNXs8AAAABTo7kow",
+            "number": 362,
+            "repository": {
+              "nameWithOwner": "yuvalrakavy/Store"
+            }
+          },
+          {
+            "__typename": "Issue",
+            "closedAt": "2026-09-27T23:18:49Z",
+            "id": "I_kwDONszNXs8AAAABTh8MXw",
+            "number": 356,
+            "repository": {
+              "nameWithOwner": "yuvalrakavy/Store"
+            }
+          },
+          {
+            "__typename": "Issue",
+            "closedAt": "2026-09-25T19:39:46Z",
+            "id": "I_kwDONszNXs8AAAABS6oqvg",
+            "number": 341,
+            "repository": {
+              "nameWithOwner": "yuvalrakavy/Store"
+            }
+          },
+          {
+            "__typename": "Issue",
+            "closedAt": "2026-09-23T13:15:48Z",
+            "id": "I_kwDONszNXs8AAAABSuu4OQ",
+            "number": 340,
+            "repository": {
+              "nameWithOwner": "yuvalrakavy/Store"
+            }
+          },
+          {
+            "__typename": "Issue",
+            "closedAt": "2026-09-23T03:21:30Z",
+            "id": "I_kwDONszNXs8AAAABRlebbA",
+            "number": 317,
+            "repository": {
+              "nameWithOwner": "yuvalrakavy/Store"
+            }
+          },
+          {
+            "__typename": "Issue",
+            "closedAt": "2026-09-30T12:19:53Z",
+            "id": "I_kwDONszNXs8AAAABReyYlQ",
+            "number": 312,
+            "repository": {
+              "nameWithOwner": "yuvalrakavy/Store"
+            }
+          },
+          {
+            "__typename": "Issue",
+            "closedAt": "2026-09-26T19:06:00Z",
+            "id": "I_kwDONszNXs8AAAABRJqy2A",
+            "number": 305,
+            "repository": {
+              "nameWithOwner": "yuvalrakavy/Store"
+            }
+          },
+          {
+            "__typename": "Issue",
+            "closedAt": "2026-09-23T01:16:17Z",
+            "id": "I_kwDONszNXs8AAAABREj7GQ",
+            "number": 302,
+            "repository": {
+              "nameWithOwner": "yuvalrakavy/Store"
+            }
+          },
+          {
+            "__typename": "Issue",
+            "closedAt": "2026-09-23T04:49:41Z",
+            "id": "I_kwDONszNXs8AAAABOdmnzg",
+            "number": 238,
+            "repository": {
+              "nameWithOwner": "yuvalrakavy/Store"
+            }
+          },
+          {
+            "__typename": "Issue",
+            "closedAt": "2026-09-30T16:26:36Z",
+            "id": "I_kwDONszNXs8AAAABLJJbUA",
+            "number": 56,
+            "repository": {
+              "nameWithOwner": "yuvalrakavy/Store"
+            }
+          },
+          {
+            "__typename": "Issue",
+            "closedAt": "2026-09-30T16:26:33Z",
+            "id": "I_kwDONszNXs8AAAABLDUbJg",
+            "number": 34,
+            "repository": {
+              "nameWithOwner": "yuvalrakavy/Store"
+            }
+          }
+        ],
+        "pageInfo": {
+          "endCursor": "Y3Vyc29yOjE1",
+          "hasNextPage": false
+        }
+      }
+    }
+  },
+  "variables": {
+    "after": null,
+    "first": 25,
+    "q": "repo:yuvalrakavy/Store is:issue is:closed closed:>=2026-09-23 label:kernel"
+  }
+}

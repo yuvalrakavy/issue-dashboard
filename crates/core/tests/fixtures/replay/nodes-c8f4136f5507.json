@@ -1,0 +1,787 @@
+{
+  "name": "nodes",
+  "response": {
+    "data": {
+      "nodes": [
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "CONTRIBUTOR",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "**Version:** rhai 1.25.1, features `sync`, `internals`, `metadata`; Rust stable, macOS (aarch64).\n\n**What happens.** When a native function is not registered as a method but its first argument is a\nvariable, `exec_native_fn_call` swaps a copy into `args[0]` through `ArgBackup::change_first_arg_to_copy`\n(`src/func/call.rs:380-385`), and restores it only on the normal-return path (`:415-417`). If the native\nfunction panics, the unwind drops the `ArgBackup` unrestored. `Drop for ArgBackup` asserts\n`orig_mut.is_none()` (`:103-110`), and a panic inside a destructor during an unwind aborts the\nprocess (`panic_in_cleanup`). The host cannot contain it with `catch_unwind`, so one buggy native\nfunction — or one script that provokes a panic inside rhai — takes down the whole embedding process.\n\n**A script that triggers it with no host bug.** A closure that captures its receiver turns the receiver\ninto a shared cell, and method-call syntax write-locks that cell for the duration of the call\n(`src/eval/target.rs:405-427`). If the native function then calls the closure with the wrong number of\narguments, building the \"Function not found\" message calls `Dynamic::type_id` on the captured,\nwrite-locked cell, which does `locked_read(cell).unwrap()` (`src/types/dynamic.rs:345`). The `unwrap`\npanics, and the `ArgBackup` assertion turns that panic into an abort. (With a closure of the right\narity the same capture reports a clean `ErrorDataRace`.)\n\n**Minimal reproduction** (exits with 134 on 1.25.1):\n\n```rust\nuse rhai::{Dynamic, Engine, EvalAltResult, FnPtr, NativeCallContext, Scope};\n\n#[derive(Clone)]\nstruct Thing(i64);\n\nfn with_arg(ctx: NativeCallContext, t: Thing, f: FnPtr) -> Result<Dynamic, Box<EvalAltResult>> {\n    f.call_within_context(&ctx, (t,))\n}\n\nfn main() {\n    let mut e = Engine::new();\n    e.register_type_with_name::<Thing>(\"Thing\");\n    e.register_fn(\"with_arg\", with_arg);\n    e.register_fn(\"get\", |t: &mut Thing| t.0);\n    let mut scope = Scope::new();\n    scope.push(\"t\", Thing(7));\n    // `||` takes no argument but `with_arg` passes one; `t` is captured and write-locked.\n    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {\n        e.eval_with_scope::<Dynamic>(&mut scope, \"t.with_arg(|| t.get())\")\n    }));\n    println!(\"not reached: the process aborts with exit 134\");\n}\n```\n\nA native function that simply panics shows the same thing: `fn buggy(_t: Thing) -> i64 { panic!() }`,\ncalled as `t.buggy()` or `buggy(t)`, aborts the process even inside `catch_unwind`.\n\n**Suggested fixes:**\n\n1. In `exec_native_fn_call`, restore the swapped first argument through the same `defer!` guard the\n   script-function path already uses (`src/func/call.rs` around `:658-668`), instead of restoring only on\n   the normal-return path. The guard runs on unwind too, so the assertion in `Drop for ArgBackup` can stay.\n   A three-line patch against 1.25.1, which we carry, is\n   https://github.com/yuvalrakavy/rhai/commit/438b8554af7bdeed0df197b8e40dc1d601d1de54 — with it every case\n   above becomes an ordinary panic that `catch_unwind` contains, and the test suite passes\n   (`cargo test --features sync,internals,metadata`).\n2. `Dynamic::type_id` (and the type-name path used when building error messages): do not `unwrap` a\n   failed `locked_read`, so a data race reports `ErrorDataRace` (as `Target::try_from` already does)\n   instead of panicking.\n",
+          "closedAt": "2026-10-17T23:44:51Z",
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "CONTRIBUTOR",
+                "createdAt": "2026-10-16T17:51:28Z"
+              }
+            ],
+            "totalCount": 1
+          },
+          "createdAt": "2026-10-16T12:38:43Z",
+          "id": "I_kwDOAyYOjc8AAAABXrsslw",
+          "labels": {
+            "nodes": [
+              {
+                "name": "bug"
+              }
+            ],
+            "totalCount": 1
+          },
+          "milestone": null,
+          "number": 1188,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "rhaiscript/rhai"
+          },
+          "state": "CLOSED",
+          "stateReason": "COMPLETED",
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADOAyYOjc8AAAABXrssl88AAAAHzF1Tqg"
+              }
+            ]
+          },
+          "title": "A panic inside a native function called with a variable first argument aborts the process (ArgBackup::drop asserts during unwinding)",
+          "updatedAt": "2026-10-17T23:44:51Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "luispedro"
+          },
+          "authorAssociation": "CONTRIBUTOR",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "First of all, thanks for _Rhai_, it's a really great fit for [luish](https://luish-shell.xyz/), but when I tried upgrading to 1.27.0, our test suite failed. I got `claude` to narrow it down to a change in 648c684861 and create a minimal test:\n\nSince 1.27.0, a closure that uses a module imported at the top level of a script fails with `ErrorModuleNotFound` when the host calls it with `FnPtr::call` after the script has finished. Before 1.27.0 the closure kept the imports in scope where it was created, and the same code works on 1.26.1.\n\nThis is how a host keeps callbacks that a script registers (event handlers, completers and so on), so any such callback that calls into an imported module breaks.\n\n## Reproduction\n\n`Cargo.toml`:\n\n```toml\n[package]\nname = \"repro\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\nrhai = \"=1.27.0\"\n```\n\n`src/main.rs`:\n\n```rust\nuse rhai::module_resolvers::StaticModuleResolver;\nuse rhai::{Engine, FnPtr, Module, Scope};\nuse std::cell::RefCell;\nuse std::rc::Rc;\n\nfn main() {\n    let mut engine = Engine::new();\n\n    let m = engine.compile(r#\"fn who() { \"from m\" }\"#).unwrap();\n    let m = Module::eval_ast_as_new(Scope::new(), &m, &engine).unwrap();\n    let mut resolver = StaticModuleResolver::new();\n    resolver.insert(\"m\", m);\n    engine.set_module_resolver(resolver);\n\n    // The host keeps a closure that the script registers, to call it later.\n    let saved = Rc::new(RefCell::new(None::<FnPtr>));\n    let s = saved.clone();\n    engine.register_fn(\"keep\", move |f: FnPtr| *s.borrow_mut() = Some(f));\n\n    let ast = engine.compile(r#\"import \"m\" as m; keep(|| m::who());\"#).unwrap();\n    engine.run_ast(&ast).unwrap();\n\n    let f = saved.borrow().clone().unwrap();\n    println!(\"{:?}\", f.call::<String>(&engine, &ast, ()));\n}\n```\n\nWith `rhai = \"=1.26.1\"`:\n\n```\nOk(\"from m\")\n```\n\nWith `rhai = \"=1.27.0\"`, and with `main` as of aaf90906 (2026-10-18):\n\n```\nErr(ErrorInFunctionCall(\"anon$08167d1babb864f0\", \"\", ErrorModuleNotFound(\"m\", 1:26), none))\n```\n\nIt behaves the same with the default features and with `default-features = false, features = [\"std\", \"only_i64\"]`.\n\n## Cause\n\nBisected to 648c684861 (\"Remove unnecessary embedded environment from FnPtr\", 2026-08-26): the repro prints `Ok(\"from m\")` at `648c684861~1` and fails at `648c684861`.\n\nThat commit removed `FnPtr::env` (`Option<Shared<EncapsulatedEnviron>>`), which held the imports in scope where the closure was created. From reading the code (not verified further), the environment now comes only from `RhaiFunc::Script { env, .. }` in `global.lib`, which seems to be set only for functions compiled inside a module. A closure from the main script would then resolve `m::` against the imports of the calling `GlobalRuntimeState`, and those no longer include the script's imports once it has finished.\n\n## Expected\n\nAs in 1.26.1: a closure keeps the imports that were in scope when it was created, wherever and whenever it is called. That is also how closures behave inside the script itself.\n",
+          "closedAt": "2026-10-23T06:41:30Z",
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "luispedro"
+                },
+                "authorAssociation": "CONTRIBUTOR",
+                "createdAt": "2026-10-22T23:45:12Z"
+              },
+              {
+                "author": {
+                  "login": "schungx"
+                },
+                "authorAssociation": "COLLABORATOR",
+                "createdAt": "2026-10-23T01:49:58Z"
+              },
+              {
+                "author": {
+                  "login": "luispedro"
+                },
+                "authorAssociation": "CONTRIBUTOR",
+                "createdAt": "2026-10-23T02:18:41Z"
+              },
+              {
+                "author": {
+                  "login": "schungx"
+                },
+                "authorAssociation": "COLLABORATOR",
+                "createdAt": "2026-10-23T02:41:47Z"
+              },
+              {
+                "author": {
+                  "login": "schungx"
+                },
+                "authorAssociation": "COLLABORATOR",
+                "createdAt": "2026-10-23T02:51:23Z"
+              },
+              {
+                "author": {
+                  "login": "luispedro"
+                },
+                "authorAssociation": "CONTRIBUTOR",
+                "createdAt": "2026-10-23T03:09:22Z"
+              },
+              {
+                "author": {
+                  "login": "schungx"
+                },
+                "authorAssociation": "COLLABORATOR",
+                "createdAt": "2026-10-23T04:21:36Z"
+              }
+            ],
+            "totalCount": 7
+          },
+          "createdAt": "2026-10-22T23:24:34Z",
+          "id": "I_kwDOAyYOjc8AAAABZPn5tQ",
+          "labels": {
+            "nodes": [
+              {
+                "name": "bug"
+              }
+            ],
+            "totalCount": 1
+          },
+          "milestone": null,
+          "number": 1193,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "rhaiscript/rhai"
+          },
+          "state": "CLOSED",
+          "stateReason": "COMPLETED",
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADOAyYOjc8AAAABZPn5tc8AAAAH6y5ddA"
+              }
+            ]
+          },
+          "title": "1.27.0: a closure loses the script's `import`s when called after the script has run",
+          "updatedAt": "2026-10-23T06:41:30Z"
+        },
+        {
+          "__typename": "PullRequest",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "CONTRIBUTOR",
+          "body": "Fixes the abort reported in #1188. The `sync` panic behind it is split out into #1190, as requested.\n\n`exec_native_fn_call` swaps a copy of the first argument in through `ArgBackup` when a non-method native function is called with a variable first argument, and restored it only on the normal-return path. If the native function panics, the unwind drops the `ArgBackup` unrestored, its `Drop` assertion panics during the unwind, and the process aborts, so a host's `catch_unwind` cannot contain it.\n\n```rust\nlet mut engine = Engine::new();\nengine.register_fn(\"buggy\", |_x: INT| -> INT { panic!(\"buggy native function\") });\n// Aborts the process today:\nlet _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| engine.eval::<INT>(\"let t = 1; buggy(t)\")));\n```\n\nThe fix restores through the same `defer!` guard the script-function path in `func_call.rs` already uses, which also runs on unwind. The assertion is kept.\n\nTest: `test_native_panic_with_variable_first_argument_unwinds` in `tests/native.rs`. `buggy(t)` is the aborting case and runs under every feature combination; the method-call spelling `t.buggy()` is a control and is gated on `no_object`, which disables the dot syntax (that was the CI failure on the `no_object` rows). Without the fix the test aborts with SIGABRT; with it the panic is caught and the engine is usable afterwards.\n\nChecks: `cargo test` with default features, `cargo test --test native` under the three `no_object` rows of the CI matrix, `cargo +nightly fmt --check`. CHANGELOG line under 1.27.0's bug fixes, linking this PR.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n",
+          "closedAt": "2026-10-17T23:44:49Z",
+          "closingIssuesReferences": {
+            "nodes": [
+              {
+                "id": "I_kwDOAyYOjc8AAAABXrsslw",
+                "number": 1188,
+                "repository": {
+                  "nameWithOwner": "rhaiscript/rhai"
+                },
+                "state": "CLOSED"
+              }
+            ]
+          },
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "schungx"
+                },
+                "authorAssociation": "COLLABORATOR",
+                "createdAt": "2026-10-17T00:13:43Z"
+              },
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "CONTRIBUTOR",
+                "createdAt": "2026-10-17T12:14:51Z"
+              },
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "CONTRIBUTOR",
+                "createdAt": "2026-10-17T14:26:37Z"
+              },
+              {
+                "author": {
+                  "login": "schungx"
+                },
+                "authorAssociation": "COLLABORATOR",
+                "createdAt": "2026-10-17T14:33:07Z"
+              },
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "CONTRIBUTOR",
+                "createdAt": "2026-10-17T22:46:12Z"
+              }
+            ],
+            "totalCount": 5
+          },
+          "commits": {
+            "nodes": [
+              {
+                "commit": {
+                  "oid": "5c8a4055f722c6ab83218f8dc4ded6db2f18acec",
+                  "statusCheckRollup": {
+                    "state": "SUCCESS"
+                  }
+                }
+              }
+            ]
+          },
+          "createdAt": "2026-10-16T17:51:20Z",
+          "id": "PR_kwDOAyYOjc8AAAABI5kd-A",
+          "isDraft": false,
+          "labels": {
+            "nodes": [
+              {
+                "name": "bug"
+              }
+            ],
+            "totalCount": 1
+          },
+          "mergeable": "UNKNOWN",
+          "milestone": null,
+          "number": 1189,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 1
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "rhaiscript/rhai"
+          },
+          "reviewDecision": null,
+          "state": "MERGED",
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADOAyYOjc8AAAABXv7hM88AAAAHzF2Kow"
+              }
+            ]
+          },
+          "title": "Restore a native call's copied first argument on unwind",
+          "updatedAt": "2026-10-17T23:44:50Z"
+        },
+        {
+          "__typename": "PullRequest",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "CONTRIBUTOR",
+          "body": "Split out of #1189 at the maintainer's request. Refs #1188 (the panic half); the abort half is #1189.\n\nUnder `sync`, `Dynamic::is_locked` returns `false` for every shared value, on the reasoning that access waits for the `RwLock`. Under `not(unchecked)` it does not wait indefinitely: `locked_read` tries a few times and gives up, and `type_id()` / `type_name()` then unwrap the `None` and panic. That always happens when the current thread itself holds the value locked for write:\n\n```rust\n#[derive(Clone)]\nstruct Thing(i64);\n\nfn with_arg(ctx: NativeCallContext, t: Thing, f: FnPtr) -> Result<Dynamic, Box<EvalAltResult>> {\n    f.call_within_context(&ctx, (t,))\n}\n\nlet mut e = Engine::new();\ne.register_type_with_name::<Thing>(\"Thing\");\ne.register_fn(\"with_arg\", with_arg);\ne.register_fn(\"get\", |t: &mut Thing| t.0);\nlet mut scope = Scope::new();\nscope.push(\"t\", Thing(7));\n// `||` takes no argument but `with_arg` passes one; `t` is captured, so the method call holds it locked.\ne.eval_with_scope::<Dynamic>(&mut scope, \"t.with_arg(|| t.get())\");\n```\n\nWithout `sync`, #1161's `ensure_no_data_race` turns this into `ErrorDataRace`. Under `sync` it does not, because `is_locked` says the value is free; the call goes on to `resolve_fn`, which hashes each argument's `type_id()`, and that read gives up and panics.\n\nThe change makes `is_locked` under `sync` (and not `unchecked`) return `true` exactly when `locked_read` would give up, so the existing data-race check covers `sync` as well. Under `sync` + `unchecked` access blocks rather than gives up, so `is_locked` stays `false`.\n\n**This changes the documented meaning of a public method under `sync`** (the doc said shared values \"are never locked\" there), which is why it is its own PR for you to shape. Another option is to keep `is_locked` as it is and make `ensure_no_data_race` probe `locked_read` itself.\n\nTest: `test_closures_capturing_locked_method_receiver` in `tests/closures.rs`, gated on `no_closure` (the closure must capture the variable to share it; that was the CI failure on the `no_closure` row), `no_object` (the method-call syntax) and `unchecked`. Under `sync` without this change it panics in `type_id`; with it, `ErrorDataRace` under both feature sets.\n\nChecks: `cargo test --features sync`, `cargo test --test closures` with default features and under the `no_closure` CI row, `cargo +nightly fmt --check`. CHANGELOG line under 1.27.0's bug fixes, linking this PR.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n",
+          "closedAt": "2026-10-17T14:30:20Z",
+          "closingIssuesReferences": {
+            "nodes": []
+          },
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "CONTRIBUTOR",
+                "createdAt": "2026-10-17T14:26:38Z"
+              }
+            ],
+            "totalCount": 1
+          },
+          "commits": {
+            "nodes": [
+              {
+                "commit": {
+                  "oid": "26a13a5c190aeaef84dc40f0509613726a12530e",
+                  "statusCheckRollup": {
+                    "state": "FAILURE"
+                  }
+                }
+              }
+            ]
+          },
+          "createdAt": "2026-10-17T12:14:06Z",
+          "id": "PR_kwDOAyYOjc8AAAABJA9rDw",
+          "isDraft": false,
+          "labels": {
+            "nodes": [
+              {
+                "name": "bug"
+              }
+            ],
+            "totalCount": 1
+          },
+          "mergeable": "UNKNOWN",
+          "milestone": null,
+          "number": 1190,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "rhaiscript/rhai"
+          },
+          "reviewDecision": null,
+          "state": "MERGED",
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADOAyYOjc8AAAABX4-Ts88AAAAHziykVA"
+              }
+            ]
+          },
+          "title": "Report a shared value locked by its own thread as locked under sync",
+          "updatedAt": "2026-10-17T14:30:20Z"
+        },
+        {
+          "__typename": "PullRequest",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "CONTRIBUTOR",
+          "body": "Fixes the `NoStdBuild` jobs, which have been red on every branch since the nightly of 2026-10-16 (seen on #1189 and #1190, which touch nothing `no_std`-specific; `main`'s run of 2026-10-13 was still green).\n\nrust-lang/rust#148413 (merged 2026-10-15) mangles the personality symbol like the other std-internal symbols, so the pre-built `core`/`alloc` now reference `__rustc::rust_eh_personality`, and the `#[no_mangle] extern \"C\" fn rust_eh_personality()` in `no_std/no_std_test/src/main.rs` no longer satisfies the linker:\n\n```\nerror: linking with `cc` failed: exit status: 1\n  = note: Undefined symbols for architecture arm64:\n            \"__RNvCs6EUDi8WbMwz_7___rustc19rust_eh_personality\", referenced from: ...\n```\n\nThe change declares the function as `#[lang = \"eh_personality\"]` (with `#![feature(lang_items)]`), which is what rust-lang/rust's own `no_std` binary fixture (`tests/run-make/no-alloc-shim/foo.rs`) moved to in that PR. The compiler then emits the symbol under whatever name it expects, so the harness builds on nightlies before and after the change. The routine is still never called, since every profile sets `panic = \"abort\"`; the other shims are untouched.\n\nVerified locally on aarch64-apple-darwin: with `nightly-2026-10-16` the harness fails to link without this change and builds with it, for `--profile unix` and `--profile macos`; with `nightly-2026-10-09` it builds either way.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n",
+          "closedAt": "2026-10-17T14:34:25Z",
+          "closingIssuesReferences": {
+            "nodes": []
+          },
+          "comments": {
+            "nodes": [],
+            "totalCount": 0
+          },
+          "commits": {
+            "nodes": [
+              {
+                "commit": {
+                  "oid": "73f47eacf3d2786e563ec76883b9ec51e9fbf6ef",
+                  "statusCheckRollup": {
+                    "state": "SUCCESS"
+                  }
+                }
+              }
+            ]
+          },
+          "createdAt": "2026-10-17T14:26:35Z",
+          "id": "PR_kwDOAyYOjc8AAAABJB1z8Q",
+          "isDraft": false,
+          "labels": {
+            "nodes": [
+              {
+                "name": "bug"
+              }
+            ],
+            "totalCount": 1
+          },
+          "mergeable": "UNKNOWN",
+          "milestone": null,
+          "number": 1191,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "rhaiscript/rhai"
+          },
+          "reviewDecision": null,
+          "state": "MERGED",
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADOAyYOjc8AAAABX6Df288AAAAHzi86CQ"
+              }
+            ]
+          },
+          "title": "no_std_test: declare the personality routine as the lang item (fixes NoStdBuild on current nightly)",
+          "updatedAt": "2026-10-17T14:34:25Z"
+        },
+        {
+          "__typename": "PullRequest",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "luispedro"
+          },
+          "authorAssociation": "CONTRIBUTOR",
+          "body": "Fixes #1193.\n\n## Problem\n\nSince 648c6848 (\"Remove unnecessary embedded environment from FnPtr\"), a closure gets its environment only from its function's entry in the lib, which closures of the main script don't have. A closure kept by the host and called after the script has finished, with `FnPtr::call`, no longer finds the script's `import`s:\n\n```rust\nimport \"m\" as m; keep(|| m::who());\n```\n\nfails with `ErrorModuleNotFound(\"m\")` when the kept closure is called. It worked in 1.26.1. The bisect and the repro are in the issue.\n\n## Changes\n\n**Commit 1: AST walker.** Put back `FnPtr::env`, set when a closure literal is evaluated (as before 648c6848), and prefer it to the lib's environment when calling. The bare function name as a variable (6f4ed21f) keeps `env: None`, so the fix for a module's closure seeing the caller's functions stays. `FnPtr` is 48 bytes again. Test: `test_module_closure_keeps_imports`.\n\n**Commit 2: Grain.** The first commit left Grain unchanged, and it hit the same error: the compiler pools closure literals as constants and the VM pushed them with `env: None`.\n\n- The VM now gives a loaded `FnPtr` constant an environment built from its global state, as `get_literal_value` does for the walker. It checks only when the program uses function pointers (`Caps::FN_PTR`), so other programs pay one flag test per constant load.\n- `constant_caps` refuses a `FnPtr` that already has an environment, so such a constant is not pooled. The compiler leaves it to the walker instead of writing an artifact that loses the environment and fails the same way when read back. (As suggested in the issue discussion.) I could not get an `env: Some` constant into an AST through the public API, since the optimizer rebuilds scope-constant closures as `Fn(\"anon$…\")` calls, so this guard is defensive.\n- Tests: a Grain version of the repro (`a_kept_closure_keeps_the_imports_of_its_script`) and a unit test for `constant_caps`.\n\n## Design note\n\nI did not fragment every closure literal into a residual so that the walker sets the environment. That would stop `a.map(|x| ..)` and similar from lowering, and the Grain `AGENTS.md` says to prefer instructions over fragments. Setting the environment in the VM needs no new opcode and no wire-format change.\n\n## Testing\n\n`cargo test --tests` passes with the default features, `internals,grain`, `bin-features,grain,internals`, and `internals,grain` combined with each of `no_closure`, `no_function`, `no_module` and `no_object,no_index`. The library builds without warnings under several `no_*` combinations.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n",
+          "closedAt": "2026-10-23T06:41:29Z",
+          "closingIssuesReferences": {
+            "nodes": [
+              {
+                "id": "I_kwDOAyYOjc8AAAABZPn5tQ",
+                "number": 1193,
+                "repository": {
+                  "nameWithOwner": "rhaiscript/rhai"
+                },
+                "state": "CLOSED"
+              }
+            ]
+          },
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "schungx"
+                },
+                "authorAssociation": "COLLABORATOR",
+                "createdAt": "2026-10-23T02:48:09Z"
+              }
+            ],
+            "totalCount": 1
+          },
+          "commits": {
+            "nodes": [
+              {
+                "commit": {
+                  "oid": "781293420b6d69c40663e5114b71f0719a3cccf3",
+                  "statusCheckRollup": {
+                    "state": "SUCCESS"
+                  }
+                }
+              }
+            ]
+          },
+          "createdAt": "2026-10-23T02:16:19Z",
+          "id": "PR_kwDOAyYOjc8AAAABKKQvDw",
+          "isDraft": false,
+          "labels": {
+            "nodes": [
+              {
+                "name": "bug"
+              }
+            ],
+            "totalCount": 1
+          },
+          "mergeable": "UNKNOWN",
+          "milestone": null,
+          "number": 1194,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 1
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "rhaiscript/rhai"
+          },
+          "reviewDecision": null,
+          "state": "MERGED",
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADOAyYOjc8AAAABZRKRSc8AAAAH61bI9A"
+              }
+            ]
+          },
+          "title": "Closures keep the imports of the script that made them (fixes #1193)",
+          "updatedAt": "2026-10-23T06:41:29Z"
+        }
+      ]
+    }
+  },
+  "variables": {
+    "ids": [
+      "I_kwDOAyYOjc8AAAABXrsslw",
+      "I_kwDOAyYOjc8AAAABZPn5tQ",
+      "PR_kwDOAyYOjc8AAAABI5kd-A",
+      "PR_kwDOAyYOjc8AAAABJA9rDw",
+      "PR_kwDOAyYOjc8AAAABJB1z8Q",
+      "PR_kwDOAyYOjc8AAAABKKQvDw"
+    ]
+  }
+}

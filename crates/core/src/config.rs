@@ -375,6 +375,87 @@ impl ConfigSet {
     }
 }
 
+/// One repo as a project sees it (1.4), once groups, exclusions and own entries are resolved.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct View {
+    pub repo: String,
+    pub filter: Option<String>,
+    pub also: Vec<u64>,
+    pub read_only: bool,
+}
+
+impl View {
+    fn of(repo: &str, m: &Member) -> View {
+        let mut also = m.also.clone().unwrap_or_default();
+        also.sort_unstable();
+        also.dedup();
+        View {
+            repo: repo.to_string(),
+            filter: m.filter.clone().filter(|f| !f.trim().is_empty()),
+            also,
+            read_only: m.read_only.unwrap_or(false),
+        }
+    }
+}
+
+impl ConfigSet {
+    /// The project named by its config file stem.
+    pub fn project(&self, name: &str) -> Result<&Project> {
+        self.projects
+            .get(name)
+            .ok_or_else(|| Error::refused(format!("no project {name} (projects/{name}.toml)")))
+    }
+
+    /// Every repo `project` tracks, with its view (1.4): a repo's own entry wins over a group;
+    /// a repo two groups add with different settings, two `repo =` entries for one repo, an
+    /// unknown group and a repo without a registry entry are refused, naming the file.
+    pub fn views(&self, project: &str) -> Result<BTreeMap<String, View>> {
+        let p = self.project(project)?;
+        let file = PathBuf::from(format!("projects/{project}.toml"));
+        let refuse = |reason: String| Error::Config {
+            file: file.clone(),
+            reason,
+        };
+        let mut out: BTreeMap<String, View> = BTreeMap::new();
+        for m in p.member.iter().filter(|m| m.repo.is_some()) {
+            let repo = m.repo.as_deref().expect("filtered");
+            if out.insert(repo.to_string(), View::of(repo, m)).is_some() {
+                return Err(refuse(format!("two members name {repo}")));
+            }
+        }
+        let own: Vec<String> = out.keys().cloned().collect();
+        let mut from_group: BTreeMap<String, (String, View)> = BTreeMap::new();
+        for m in p.member.iter().filter(|m| m.group.is_some()) {
+            let group = m.group.as_deref().expect("filtered");
+            let repos = p
+                .groups
+                .get(group)
+                .or_else(|| self.registry.groups.get(group))
+                .ok_or_else(|| refuse(format!("member group {group} is not defined")))?;
+            let exclude = m.exclude.clone().unwrap_or_default();
+            for repo in repos.iter().filter(|r| !exclude.contains(r) && !own.contains(r)) {
+                let view = View::of(repo, m);
+                match from_group.get(repo) {
+                    Some((other, v)) if v != &view => {
+                        return Err(refuse(format!(
+                            "{repo} arrives through groups {other} and {group} with different settings"
+                        )));
+                    }
+                    Some(_) => {}
+                    None => {
+                        from_group.insert(repo.clone(), (group.to_string(), view));
+                    }
+                }
+            }
+        }
+        out.extend(from_group.into_iter().map(|(r, (_, v))| (r, v)));
+        if let Some(repo) = out.keys().find(|r| !self.registry.repo.contains_key(*r)) {
+            return Err(refuse(format!("member {repo} has no entry in repos.toml")));
+        }
+        Ok(out)
+    }
+}
+
 /// Expands a leading `~/` to the home directory.
 pub fn expand_home(path: &str) -> PathBuf {
     match (path.strip_prefix("~/"), std::env::var_os("HOME")) {

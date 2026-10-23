@@ -33,6 +33,12 @@
     },
     {
       "$ref": "event-exported.schema.json"
+    },
+    {
+      "$ref": "event-membership.schema.json"
+    },
+    {
+      "$ref": "event-outbox.schema.json"
     }
   ]
 }

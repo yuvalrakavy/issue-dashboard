@@ -1,0 +1,22 @@
+{
+  "name": "prs_since",
+  "response": {
+    "data": {
+      "repository": {
+        "pullRequests": {
+          "nodes": [],
+          "pageInfo": {
+            "endCursor": null,
+            "hasNextPage": false
+          }
+        }
+      }
+    }
+  },
+  "variables": {
+    "after": null,
+    "first": 25,
+    "name": "airzoned",
+    "owner": "yuvalrakavy"
+  }
+}

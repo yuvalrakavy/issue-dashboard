@@ -1,0 +1,3306 @@
+{
+  "name": "nodes",
+  "response": {
+    "data": {
+      "nodes": [
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "> **2026-09-17: the design is settled, and \"Today both clients show frame 1\" below is wrong for the panel**, which cannot decode GIF/WebP at all. See [the comment of that date](https://github.com/yuvalrakavy/Store/issues/166#issuecomment-5705781017).\n\n**Deferred, low priority — filed so the analysis is not re-derived.** User-ruled 2026-08-16: animation is worth having on the **touch panel**, and explicitly *not* in the Web UI.\n\nThe ingest side is already done and is what keeps this buildable: an animated GIF/WebP is **passed through unresampled** with `animated: true` on the descriptor (spec `docs/superpowers/specs/2026-08-16-image-support-design.md` §4.1, \"the animated-input arm\"). Flattening at ingest would have destroyed every frame but one, permanently and store-wide, and this issue would then be unbuildable without re-ingesting from sources that no longer exist.\n\nToday both clients show frame 1.\n\n## What it would take, and why it is not just \"decode the frames\"\n\nWe ship our **own** RFB server (`hometouch_renderer/src/rfb.rs`) using **Hextile** encoding — not Tight or ZRLE.\n\n### Bandwidth is acceptable for a bounded region — and is NOT the binding constraint\n\nArithmetic, not measurement. A 200×200 tile at 32bpp is 160 KB raw per frame. Hextile does well on flat, limited-palette content (a solid tile collapses to a byte plus a colour): call it 5–15×, so ~10–30 KB/frame, ~100–300 KB/s at 10 fps ≈ **1–2 Mbit/s**. Comfortable on LAN, fine on WiFi, still fine at a few panels.\n\nFull-screen is a different answer — ~2.4 MB raw per frame, and Hextile degrades toward raw on photographic content, so tens of Mbit/s per panel. **Not acceptable.** So: bounded region only, never full-screen.\n\n### The three constraints that actually decide it\n\n1. **It inverts the renderer's steady-state invariant.** `compute_recv_wait` (`hometouch_renderer/src/render_thread.rs:5293`) parks the render thread for **60 s** when nothing is pending. Animation replaces that with ~20 wakes/second, forever, per panel — CPU and (on a tablet) battery burned continuously whether or not anything is happening. The repo's resource-hygiene rule is that a long-lived context's footprint is a function of *state, not uptime*; this makes the *work rate* a function of uptime. A faster network does not help.\n2. **RFB is client-pull, so the pacing is not ours.** The panel sends `FramebufferUpdateRequest` and we answer; we cannot push frames faster than it asks, and an embedded client under load does not ask evenly. Playback would be as smooth as the client's request loop happens to be — and **a stuttering animation looks worse than a still**. This is the risk that the feature costs all three of the above and still does not deliver what was wanted.\n3. **Hextile is weakest exactly where the use case lives.** Flat animation compresses well; *photographic* animation — animated album art, the actual want — is where Hextile approaches raw. The good case and the wanted case are not the same case.\n\n### A trap to record now\n\nAnimation must be driven by the **real** clock, not the timer domain. `timer_now()` is virtual: it is frozen for `_harness_*` stores (#65) and jumped by `AdvanceClock`. Animation is **functional sequencing**, not an inactivity budget, so it belongs on the same side of that split as the workflow engine's named timers — otherwise it stops dead under test and jumps under a clock advance.\n\n## If it is picked up\n\n- Bounded region only, with an explicit frame budget and a hard rate cap.\n- **Measure against the real panel client** rather than assuming: instrument bytes-on-the-wire and the client's request cadence. The numbers above are arithmetic and should not be quoted as measurements.\n- Decide what happens with N panels showing the same animation — the decode is per-renderer today, and `ht_server` spawns a renderer per panel.\n\n",
+          "closedAt": null,
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-09-16T23:04:13Z"
+              }
+            ],
+            "totalCount": 1
+          },
+          "createdAt": "2026-08-16T18:33:11Z",
+          "id": "I_kwDONszNXs8AAAABM-dq7A",
+          "labels": {
+            "nodes": [
+              {
+                "name": "todo"
+              },
+              {
+                "name": "p3"
+              },
+              {
+                "name": "renderer"
+              }
+            ],
+            "totalCount": 3
+          },
+          "milestone": null,
+          "number": 166,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "OPEN",
+          "stateReason": null,
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABM-dq7M8AAAAG4BY4ZQ"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABM-dq7M8AAAAG4BY4uQ"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABM-dq7M8AAAAG4BY48A"
+              }
+            ]
+          },
+          "title": "Animated GIF/WebP playback on the touch panel (deferred, low priority)",
+          "updatedAt": "2026-09-16T23:04:14Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "Found by a pre-merge gate on `feat/spotify-source`, as the generalisation of a defect that had\njust reached the merge gate.\n\n## The bug class\n\nAn in-transaction hook — `Filter*`, `GetDefaults`, `ValidateValue`, `ParseValue` — runs\nsynchronously under the processor's COMMITTED store guard, so it reads the committed view. During\nthe reconcile that first creates a class, that class's own `fn`s are not committed yet. So a hook\nbody calling `self.some_fn()` raises `Function not found` and the write is rejected. A shared\n`rhai` module fails the same way (`Module not found`) — the constraint is about store-defined code\nin general, not about classes.\n\n**The failure mode is the worst available shape: it works on every WARM store and fails only on a\nCOLD one.** So a full test suite is green, an adversarial review of the feature is green, and it\nsurfaces at a template rebake or a fresh deployment — which is where it did surface, on the last\nstep before `main` (fixed in `68ccd7f4`).\n\n## Why it needs a check rather than a rule\n\nNothing in the SDL surface warns you, and the natural way to write a guard — helpers as class\n`fn`s, called from the handler — is exactly the broken shape. It reads as obviously correct.\n\nA sweep of `data/` today finds two remaining store-defined calls inside in-transaction hook bodies:\n\n- `data/frameworks/ha/modules/workflows.sdl:590` — `self.workflow()`\n- `data/frameworks/ha_drivers/modules/ynca.sdl:258` — `self.config_topic()`\n\nBoth are in `on FilterDelete`, which cannot fire during the reconcile that creates the class, so\nneither is live today. That is luck, not design, and it is exactly the sort of latent instance that\nbecomes real the moment someone adds a `FilterSet` beside it.\n\n## The mechanism already exists\n\nThe reconcile **schema-checked-usage pass** (`store_server/src/command/usage_check.rs`) already\nwalks every compiled Rhai body with the schema as a type oracle, and rule 3 already resolves\n`self.` calls. Flagging a store-defined call inside an in-transaction hook body is the same walk\nwith a different predicate, and it would catch this at RECONCILE — where the author is standing —\nrather than at a merge gate weeks later.\n\nCare needed on the boundary: `on FilterDelete` is provably safe (the class exists by then), so a\nblanket refusal would reject working code. The precise rule is about hooks reachable during the\nreconcile that CREATES the class, which is where the design thinking belongs.\n\nConsistent with the pass's stated design law of positive-resolution-only: hard-error only the\nprovable, and this one is provable from the body plus the hook kind.\n",
+          "closedAt": null,
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-08-27T11:46:41Z"
+              }
+            ],
+            "totalCount": 1
+          },
+          "createdAt": "2026-08-15T17:39:41Z",
+          "id": "I_kwDONszNXs8AAAABM5fM9g",
+          "labels": {
+            "nodes": [
+              {
+                "name": "todo"
+              },
+              {
+                "name": "p3"
+              },
+              {
+                "name": "sdl"
+              }
+            ],
+            "totalCount": 3
+          },
+          "milestone": null,
+          "number": 155,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "OPEN",
+          "stateReason": null,
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABM5fM9s8AAAAHCT2sig"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABM5fM9s8AAAAHCT2soQ"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABM5fM9s8AAAAHCT2ssQ"
+              }
+            ]
+          },
+          "title": "usage-check: flag store-defined calls inside in-transaction hook bodies (they cannot resolve on a cold reconcile)",
+          "updatedAt": "2026-08-29T20:27:45Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "## Observed\n\n`tests/media/publish.tests · media.publish: desired publish (read back off broker), observed ingest, command + clear` fails intermittently under load with `the member-state payload was ingested at all` (poll gave up: `Services/MediaSys/S1/Status.NowArtist` stayed empty, wanted `PruneMarker`).\n\nTwo dated sightings, different trees:\n- 2026-08-08 at HOME (t0), main `85d45c8`, targeted invocation `store-test tests/media/publish.tests` — failure artifact `20260808T211903Z-0000077606.json`.\n- 2026-08-09 on lane t1, `chore/settle-delay-sweep` (`9295b651`), full-corpus pre-merge run — artifact `20260809T125740Z-0000069617.json`, trace `9f002c156860492fb7415d1012ee802d`.\n\nBoth carry the same preamble in captured output: `Mdns: intent sync deferred for /Services/MdnsFabric/Raop — MQTT client ... is not connected` — the store's broker connection establishes late under load, and the observed-state round-trip then never lands within the poll budget.\n\n## Hypotheses — UNVERIFIED, do not trust\n\n- If the test's member-state publish is NON-retained and races the store's `{Root}/State/#` subscription becoming active, a lost message is permanent and the poll can only time out — that would be a test-shape bug (publish-before-subscribed), fixable by publishing retained or by gating on subscription readiness.\n- Alternatively the inbound dispatch is failing silently on this path (see #127 for the ERROR-flavored sibling during store init).\n\nThe logmon trace had mostly rolled off by diagnosis time (10k-record buffer under 16-way load) — the same observability gap noted in #127.",
+          "closedAt": null,
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-08-10T01:00:13Z"
+              },
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-08-10T01:56:35Z"
+              }
+            ],
+            "totalCount": 2
+          },
+          "createdAt": "2026-08-09T12:59:32Z",
+          "id": "I_kwDONszNXs8AAAABMCRDhw",
+          "labels": {
+            "nodes": [
+              {
+                "name": "bug"
+              },
+              {
+                "name": "p3"
+              },
+              {
+                "name": "drivers"
+              }
+            ],
+            "totalCount": 3
+          },
+          "milestone": null,
+          "number": 129,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "OPEN",
+          "stateReason": null,
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABMCRDh88AAAAGy2-t5Q"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABMCRDh88AAAAGy2-uFg"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABMCRDh88AAAAHCT3KqA"
+              }
+            ]
+          },
+          "title": "media.publish live-broker ingest flakes under load — member-state poll gives up, client connects late",
+          "updatedAt": "2026-08-29T20:28:09Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "Split out of #133 while designing the in-session source crossfade. Asked for directly by the user, 2026-08-10, when choosing what should happen if a selected source never produces audio:\n\n> \"Old program, then audio prompt (based on the language of the house default language) saying that there is a problem\"\n\nThe first half of that answer ships with #133: the old program keeps playing, the failure is published as a `StatusReason`, and the switch is retried with backoff. What is missing is the part the listener can actually hear without walking to a panel.\n\n## Why it is its own issue\n\nNothing downstream of \"we know the switch failed\" exists yet:\n\n- **No audio-prompt or TTS path in the daemon.** `rg -ni \"prompt|announce|tts|speak\" src/` in `airzoned` returns only `Speaker`-as-loudspeaker matches. There is no notion of playing a short program that is not the room's source.\n- **No prompt assets.** Nothing recorded, nothing generated, no convention for where they would live or how they would be addressed on the wire.\n- **No wiring from language to audio.** The language concept itself DOES exist and is a real source of truth — `HomeTouch.DefaultLanguage` (`String? { default: \"English\" }`, `data/frameworks/hometouch/schemas/Hometouch/service.sdl:13`), with English/Hebrew throughout the `DisplayName` component, and a per-panel `Language` setting overriding it. But it has never had to reach the audio system, which is a different framework and a different process.\n\nSo this is a data + asset + plumbing feature, not a branch in the crossfade.\n\n## What #133 leaves ready for it\n\nThe mechanism is already the right shape. `SwitchableSource` blends one program into another inside a live session with no teardown, and the switch is initiated from `Player::reconcile` with a length taken from the doc. A spoken prompt is then:\n\n> switch to a short bounded source (the prompt), then switch back\n\nwhich is the machinery #133 builds, aimed at a different URI. In particular the prompt does not need its own mixer, its own envelope, or any RTSP work — the three things that would have made it expensive.\n\nThe failure point to hang it on is named in the #133 spec (§6.6, §Q4b): the composite's ready-timeout, where the incoming is abandoned and `ready_timeouts` is raised for the worker to read.\n\n## Open questions for whoever takes it\n\n1. **Where do the prompt assets come from** — pre-recorded files per language checked into the deployment, or generated once by TTS at build/provision time? Recorded is simpler and higher quality for a handful of strings; TTS scales if the set grows.\n2. **Which language wins** — the house default, or the language of the panel that made the selection? The per-panel `Language` setting exists, and the selection has a panel behind it, so panel-then-house is available and is probably what a bilingual household expects.\n3. **What is the prompt set?** At minimum \"the source you selected is not available\". Worth deciding whether it names the source, which multiplies the asset count unless the name is composed.\n4. **Does the prompt duck the old program or replace it?** Replace-and-return is the simpler composition with the crossfade; ducking needs a real sidechain that does not exist.\n5. **Which other failures deserve a prompt?** The dead-source case is the one that prompted this, but a speaker that never renders (the wedge) is arguably more confusing to a resident, since the room simply stays silent.\n\n## Scope note\n\nDeliberately NOT gating #133 on this. The crossfade is a strict improvement on its own, and its failure behaviour (keep playing, publish, retry) is honest without the prompt — the prompt makes it audible rather than making it correct.\n\n---\n\n<!-- media-port-dag:relationships -->\n### Position in the media-port DAG\n\n**Depends on** — must land first\n- #84 — **MP-103** · ✔ done\n\n**Blocks** — waiting on this\n- _nothing_\n\n<sub>Generated from [`docs/media-port-dag.md`](https://github.com/yuvalrakavy/Store/blob/main/docs/media-port-dag.md) — the DAG is the source of truth; edit it there and re-run <code>scripts/dag-sync-issues.py</code>. Edges point from dependency to dependent.</sub>\n<!-- /media-port-dag:relationships -->\n",
+          "closedAt": null,
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-08-10T09:15:45Z"
+              }
+            ],
+            "totalCount": 1
+          },
+          "createdAt": "2026-08-10T09:02:21Z",
+          "id": "I_kwDONszNXs8AAAABMHxFpA",
+          "labels": {
+            "nodes": [
+              {
+                "name": "todo"
+              },
+              {
+                "name": "p3"
+              },
+              {
+                "name": "drivers"
+              },
+              {
+                "name": "media-port"
+              }
+            ],
+            "totalCount": 4
+          },
+          "milestone": null,
+          "number": 137,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "OPEN",
+          "stateReason": null,
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABMHxFpM8AAAAG5JV_Fw"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABMHxFpM8AAAAG5JV_RQ"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABMHxFpM8AAAAG5JV_YA"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABMHxFpM8AAAAH6pITSg"
+              }
+            ]
+          },
+          "title": "Spoken failure prompt: tell the room, in the house language, when a selected source cannot play",
+          "updatedAt": "2026-10-22T22:39:39Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "Post-transaction net-effect event derivation (#111 phase 3) does full event-handler resolution **twice** per transaction and then discards it again for events nobody subscribes to. Measured end-to-end cost is ~10% at the median, so this is an optimization rather than a blocker — but it is provably wasted work on the commit path, and the design had already specified the cheap shape.\n\n## Measured\n\nSame workload (`tests/workflows/interactive.tests`, 11 tests), same tree, both arms at production defaults, `execute` span from logmon:\n\n| arm | p50 | p80 | p95 |\n|---|---|---|---|\n| `event_derivation=1` | 1.036 ms | 2.447 ms | 18.08 ms |\n| `event_derivation=0` | 0.937 ms | 2.305 ms | 15.10 ms |\n\n~10% at p50. (An earlier apparent 61x was `event_audit=strict` contaminating the derivation arm — see the note in `scripts/pre-merge-check.sh`; the oracle costs ~55x and must never be armed over the full corpus.)\n\n## The mechanism\n\nThe parent spec (`2026-08-08-post-transaction-net-effect-events-design.md` §7) designed a cheap `TxRecord { touches, edges, deleted }` to REPLACE per-step narration, with the cost claim stated at §7.4: *\"per step → per (object, round)\"*. The implementation spec (`2026-08-09-...-derivation-design.md` §1.1) dropped it — *\"The per-step stream IS the touch log\"* — and §3 deliberately chose `add_event` as the derived emitter. Both choices are defensible alone. Their product keeps the expensive thing and adds it: there is no subtraction anywhere on the resolution axis.\n\n`add_event` (`store_server/src/command/precommit_store.rs:2952-3238`) is still called per write from `set_property.rs:1618/1660/1675/1733/1774`, `create.rs:627/632`. `derive_post_transaction_events` then does `mem::take` (`:4471`), discards five of the seven kinds, and re-emits through the same body (`:4716-4720`).\n\nResolutions per transaction:\n\n| shape | before | after |\n|---|---|---|\n| K single writes (the common shape) | K | **2K** |\n| create with K properties | K+4 | **2K+8** |\n| one property written 10x (the collapse case) | 10 | 11 |\n| pure deletion | D | D |\n\nThe only shape where the derivation *reduces* resolution work is repeated writes to one property — which the branch's own `repeat_writes` counter exists to show is rare.\n\n## Why it is safe to fix\n\n**Nothing reads `Event::triggered_scripts` before the derivation runs.** `compute_tx_filter_fireset` (`:3628-3789`) reads only `event_data` and `class_ids`; the fixpoint loop consumes the narrated stream as a pure touch log, exactly as the spec's §3 table says. The only production reader is post-commit dispatch (`processor.rs:260`), after `get_events()`.\n\nAnd the side effects are separable: finalizers (`:2962-2963`), ref-rewire (`:2970-3009`) and auto-grow/shrink (`:3199-3229`) live in their own blocks, and nothing in the resolution path (`:3011-3184`) feeds them.\n\n## Ranked remedies\n\n1. **Split `add_event` into `narrate_touch` + `resolve_and_push`.** Narration keeps the side effects and pushes with an empty `triggered_scripts`; the derivation resolves once. `Triggered` and `ObjectDeleted` keep the full path — they are the two kinds carried forward, and their resolved scripts ARE the capture-at-destruction. Recovers the entire duplicate. No new data structure.\n2. **Skip resolution where no handler can match.** The terminal `retain` (`:3599`) drops every event with no subscriber, after the cost is paid twice. `get_store_scripts()` is already the index (`ScriptMap = HashMap<ScriptKey, …>`); what is missing is a cheap probe, since reaching it currently costs an owned `object_name` plus 2-4 key constructions. Suggested: a per-transaction `HashMap<PropertyId, DispatchPlan>` memo, with the two wildcard keys (`AnyPropertyChanged` / `ChildAnyPropertyChanged`) probed once per transaction as an escape hatch, invalidated where `script_overlay` is mutated.\n3. **`reference_deltas` clones each touched target's inbound referrer set twice** (`:4398-4412`, via the cloning accessor at `store_layer/imp.rs:240`). The `Cow`-borrowing sibling `references_of` (`:1218`) was written for exactly this and its own doc says the cloning form \"was assumed to be a slow path; it is the opposite\". Two accessor swaps; fully isolated from (1), so it is the best standalone A/B.\n4. **`get_class_inheritance_chain` rebuilt per property instead of per object** (`:4582`, also `:4619`, `:4662`). It is an uncached BFS allocating three collections per call. An object with 20 changed properties pays 19 redundant builds.\n5. **`narrated_identities` built even when the oracle is off** (`:4472-4480`, discarded at `mod.rs:658`). Gate on the mode.\n6. `context_string()` — a `join` plus two allocations — now runs twice per first-touch write (`:5402-5403` and `:2943`). Folds into (1).\n7. `Vec<ClassId>` cloned per emission (`:4610`, `:4645`, `:4684`). Folds into (4) via `Arc<[ClassId]>`.\n\n(1) recovers the most and restores the cost model the parent spec actually designed. (3) is the cheapest to land.\n\n## Note for whoever measures this\n\nUse the `execute` span via logmon, not `test-body time` (gh #130: varies ~50% run-to-run and cannot attribute a perf change). Confirm both arms' tunables by asking the server — `store-cli script --eval 'store.tunables'` — not by reading the launch command. And check the logs for `kind=event_derivation_engagement`: if it appears, the audit was armed and the run is contaminated.\n",
+          "closedAt": null,
+          "comments": {
+            "nodes": [],
+            "totalCount": 0
+          },
+          "createdAt": "2026-08-11T02:49:11Z",
+          "id": "I_kwDONszNXs8AAAABMPKhJg",
+          "labels": {
+            "nodes": [
+              {
+                "name": "todo"
+              },
+              {
+                "name": "p3"
+              },
+              {
+                "name": "kernel"
+              }
+            ],
+            "totalCount": 3
+          },
+          "milestone": null,
+          "number": 142,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "OPEN",
+          "stateReason": null,
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABMPKhJs8AAAAHCT2n0Q"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABMPKhJs8AAAAHCT2n6Q"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABMPKhJs8AAAAHCT2n9A"
+              }
+            ]
+          },
+          "title": "Event derivation resolves handlers twice per transaction, then discards it for events with no subscriber",
+          "updatedAt": "2026-08-29T20:27:41Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "Two residuals raised by the P2 pre-merge gate. Neither is a live defect — both are named\nhere so they are not rediscovered as surprises.\n\n## 1. The write gate tests `TYPE_IMAGE` by exact id, so a future Image subtype bypasses it\n\n`store_server/src/command/validate.rs` gates on `type_class_id == TYPE_IMAGE`. A type\n*derived* from `Image` would not match, and a descriptor-less blob could reach it.\n\nNo such subtype exists today (`boot_xml/boot.xml` — `Image` has no descendants), so this\nis a residual rather than a bug. The hardening is one line: `is_of_type_id(…,\nTYPE_IMAGE)`.\n\nWorth doing deliberately rather than incidentally, because it widens what the gate\nrejects — anything currently storing a raw blob on an Image-derived type would start\nfailing, and that is exactly the behaviour we want but it should land with its own test\nrather than inside an unrelated change.\n\n## 2. `images { }` entries are ingested eagerly on every reconcile\n\n`codegen.rs::generate_images_block` resolves every entry — read, decode, resample,\nre-encode for a raster — and codegen always runs. The incremental skip is a *post-pass*\nover emitted commands, so it does not prevent the ingest. A module with N raster entries\npays N full ingests on a **no-change** reconcile.\n\n`data/` has zero `file(…)` images today, so nothing regresses now. It becomes real with\nthe curated media catalog this feature exists for.\n\n**MAGNITUDE UNMEASURED — do not act on this without a number.** The rule this repo\nlearned the expensive way is that a mechanism traced is not an impact measured: state the\naddressable market as a fraction of end-to-end reconcile time and multiply, before\ndesigning anything. The measurement is cheap once a catalog with real artwork exists;\nuntil then this is a note, not a task.\n\nIf it does turn out to matter, the shape is probably a digest-keyed ingest cache rather\nthan laziness — the digest is already computed for the node-hash fold (`file_digests`),\nso the expensive half is the only part that would need memoising.\n\nSpec: `docs/superpowers/specs/2026-08-16-image-support-design.md` §7, §16w.\nRelated: #171 (the annotation family), #168 (G1's hook position).\n",
+          "closedAt": null,
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-08-18T05:40:40Z"
+              }
+            ],
+            "totalCount": 1
+          },
+          "createdAt": "2026-08-17T05:13:14Z",
+          "id": "I_kwDONszNXs8AAAABNBGbrA",
+          "labels": {
+            "nodes": [
+              {
+                "name": "todo"
+              },
+              {
+                "name": "p3"
+              },
+              {
+                "name": "kernel"
+              }
+            ],
+            "totalCount": 3
+          },
+          "milestone": null,
+          "number": 172,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "OPEN",
+          "stateReason": null,
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABNBGbrM8AAAAHCT2uZg"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABNBGbrM8AAAAHCT2ufg"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABNBGbrM8AAAAHCT2uiQ"
+              }
+            ]
+          },
+          "title": "Image residuals from the P2 gate: exact-id write gate, and eager images{} ingest",
+          "updatedAt": "2026-08-29T20:27:46Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "#175 gave `<artifacts>/images/` a startup sweep. This is the rest of spec §12.2 — the half that bounds a *running* server rather than resetting growth at each restart.\n\n**What shipped** (`image_materializer::sweep`, called once from `RendererManager::new`): age-since-write, 30-day retention, plus orphaned `.tmp` files on a 1-hour clock. That resets growth across restarts. It does not bound the run: a server up for six months — the design's own target — sweeps exactly zero times in that window.\n\n**What §12.2 specified and is still missing:** \"LRU by access time under a byte budget, swept at ht_server start **and on a timer**.\"\n\n**The two missing pieces depend on each other, which is why neither shipped alone.**\n\n1. **An access clock.** `is_present` and `image_publish` only `stat`; nothing refreshes an mtime after the first write. So retention measures age since *materialisation*, never since *use* — a wallpaper painted daily for 31 days is swept, and a file nothing has shown for 29 days is kept. A `set_modified` on the present-hit is the obvious fix and is genuinely cheap.\n\n2. **A timer**, which is unsafe without (1) — and, importantly, **not safe with (1) either.** Refresh-on-use cannot supply a live set on its own: a panel parked on one screen never re-asks ht_server for a name its renderer already holds in L1, so a long-displayed image's mtime goes stale exactly like an unused one's. Sweeping it mid-run leaves a permanently blank gadget, because the renderer's L1 is keyed on `(name, mtime)` and ht_server has no reason to republish a store value that never changed.\n\n**The shape that actually works.** ht_server can compute the live set exactly: for every live subscription (`RendererSubscriptions` already maps `sub_id -> (object, property)`), read the current value from the mirror and take its `image_cache_key`. A timed sweep that spares that set is safe by construction, and the byte budget then has something sound to evict against. ht_server does not compute this today.\n\n**Note on §12.2's \"content-hash names make eviction always safe\".** That is true of *identity* — a re-fetch reproduces the same bytes under the same name — and false of *timing*, which is the property that matters for a live panel. The spec row has been amended to say so.\n\nSpec row: `docs/superpowers/specs/2026-08-16-image-support-design.md` §12 item 2, now marked DECIDED, HALF-BUILT with the same breakdown, so a later reader does not see RESOLVED and assume this is done.\n",
+          "closedAt": null,
+          "comments": {
+            "nodes": [],
+            "totalCount": 0
+          },
+          "createdAt": "2026-08-17T16:09:50Z",
+          "id": "I_kwDONszNXs8AAAABNFogGg",
+          "labels": {
+            "nodes": [
+              {
+                "name": "todo"
+              },
+              {
+                "name": "p3"
+              },
+              {
+                "name": "renderer"
+              }
+            ],
+            "totalCount": 3
+          },
+          "milestone": null,
+          "number": 178,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "OPEN",
+          "stateReason": null,
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABNFogGs8AAAAHCT2y2w"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABNFogGs8AAAAHCT2y8Q"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABNFogGs8AAAAHCT2zBA"
+              }
+            ]
+          },
+          "title": "Image cache GC: the byte budget, the access clock and the timer (rest of §12.2)",
+          "updatedAt": "2026-08-29T20:27:50Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "**Live document.** Edited in place as batches land.\n\nGoal: ship with as few open issues as possible — every **bug** closed, every **todo** closed\nexcept implementation steps of a larger feature still in flight.\n\n> **PHASE 0 IS COMPLETE (2026-08-18).** §A–§H below are rewritten from its verdicts. The full\n> per-issue verdict ledger is §I. 87 issues were grounded by 4+4 parallel agents against\n> current `main` (`66eb571c`), one verdict per issue with a `file:line`.\n\n---\n\n## The four rules this plan is built on\n\n1. **Ground before sequencing.** This project's record is that ~6 of 7 filed follow-ups are\n   wrong as written. Phase 0 tested that and it held: **19 of 87 issues (22%) changed shape** —\n   5 close with no code at all, 14 are materially re-scoped. Nothing was sequenced until it\n   reported.\n2. **Instruments before the code they measure.** #138 (log-bucket attribution is by *drain*\n   time, so a burst bleeds into the next script's bucket) and #165 (the gate never compiles\n   the Web UI) decide whether every later batch's \"green\" means anything.\n3. **Batch by SURFACE, because gates are the dominant cost.** Measured: a deep-gate finder is\n   166–230k tokens; a full pre-merge run is ~15–20 min wall clock. One gate per issue is\n   ~88 gates ≈ 35M tokens ≈ 29 h of suite time. Batched by surface it is ~12 gates ≈ 4.8M\n   tokens ≈ 4 h. **~85% of the cost of this backlog is decided by batch size, not by the fixes.**\n4. **Match ceremony to risk, not to habit.** Most of these are T1 bug fixes: memo, one gate,\n   done. Exactly one is T3 (#163). Docs-only changes get self-review and merge — no finders.\n\n### What this plan deliberately does NOT do\n\n- No per-issue gate. No three finders on a docs change (lens-to-surface, not tier-to-lens).\n- No full suite per fix. Targeted tests per fix; **one** full suite per batch, run\n  speculatively *in parallel* with the gate.\n- No re-litigating a `needs-decision` issue inside a batch. Those go to §H, decided in one sitting.\n\n### WIP limit\n\nThree lanes. Home stays on `main`. Real concurrency is 1–2 batches, and two may run\nconcurrently only if their file sets are disjoint.\n\n**Lane state is a claim about a moment — re-read `store-cli dev-track list` before believing it.**\nAs of **2026-09-19** all three lanes hold other work and NONE is claimed for this campaign:\n\n| Lane | Branch |\n|---|---|\n| t1 | `feat/extensible-palette` |\n| t2 | `feat/instrumentation-volume` |\n| t3 | `fix/script-output-ceiling` |\n\nA full pool is the signal this plan's own rule 3 depends on: with no lane, every `.tests`-dependent\nbatch is blocked, and the campaign can only spend itself on Rust-, docs- and tooling-only issues.\nThat is a real constraint on sequencing, not a footnote — pick the batches accordingly, or free a\nlane first.\n\n---\n\n## Status\n\n| | count |\n|---|---:|\n| Open at plan start | 88 |\n| **Open now** | **79** |\n| Closed so far | 10 (#180, §A's five, #165, #156, #181, #5) |\n| Re-scoped by Phase 0 | 14 |\n| Deferred by design (§G) | 23 |\n| **Target open at ship** | **~23** |\n\n---\n\n## PHASE 0 — DONE. What it bought\n\n**Cost:** ~2.0M subagent tokens, ~45 min wall (higher than the ~320k estimate: without LSP,\nevery \"does this symbol still exist\" needed a second grep pass with a different pattern).\n\n**Yield — the five findings that change the plan:**\n\n1. **#151 was already fixed by gh #180 itself** (`ed00aa3b`, `scripts/pre-merge-check.sh:158,236`).\n   The plan called it \"not negotiable\" for batch I1. It is done. I1 shrinks to two issues.\n2. **#115's fix already exists, unmerged, on `fix/115-cast-rekey` in lane t2**\n   (`883202da1` + `1c16b33f`). **#143 shares its root cause.** K1 is therefore \"land and verify\n   an existing branch\", not \"design a fix\" — and #143 may fall out of it.\n3. **#142's headline defect is fixed** (`c41b641d`, narrate-the-touch/resolve-once). What\n   remains are three smaller perf residuals the fixing commit's own message enumerates.\n4. **#116 shrank from 4 sites to 1** — an unrelated image refactor (`330ecff4`) fixed the\n   subscribe paths incidentally; only `forwarding_handle` still fabricates.\n5. **#181's symptom is gone, its substance is not.** It is a design question, not a bug (§H).\n\n**LSP (Phase 0 input, now resolved).** The earlier revision's diagnosis was wrong in a\nspecific, useful way. Client 2.1.139 *does* ship LSP — as **one tool named `LSP`** with an\n`operation` parameter (`goToDefinition`/`findReferences`/`hover`/`documentSymbol`/\n`workspaceSymbol`/call hierarchy). The `lsp_*` names in CLAUDE.md's catalog row **do not exist**\nin the client; the only `lsp_*` strings in the binary are telemetry event names. The real cause:\nthe plugin manifest is read from `.claude-plugin/plugin.json` (not the plugin root), the\n**marketplace catalog declares `lspServers` but the installed copy had that block stripped**, so\nthe loader registered no server and the tool never appeared. Restoring the block registers the\ntool; verified by a real cross-crate query returning the documented 26 references over 4 crates.\nFix currently lives in the plugin cache, so a plugin update will undo it. **CLAUDE.md's catalog\nrow must be corrected — it names five tools that do not exist** (folded into batch I1).\n\n---\n\n## §A — ✅ CLOSED 2026-08-18, no code change (5)\n\n| # | verdict | evidence |\n|---|---|---|\n| #9 | already fixed | `a6195691d` — `ht_server/src/main.rs:349` hardcodes the ephemeral bind. Fixed same-day as the original chip, before the issue was filed. |\n| #76 | already delivered | MP-108 Spotify: `docs/media-port-dag.md` records \"MERGED 2026-08-15 — `d9b632dd`\"; `d9b632dd5` is an ancestor of HEAD; `SpotifySource` live at `data/frameworks/media/modules/media/air_zone_audio.sdl:189`. The only media-port exception found. |\n| #149 | already fixed | `a6558f95` — `server.toml:50` now matches templates; rebake no longer dirties the tree. |\n| #150 | premise false | The issue's own final comment retracts both diagnoses (\"I was wrong, twice\"). |\n| #151 | already fixed | `ed00aa3b` (gh #180) — `scripts/pre-merge-check.sh:158,236` now assert test registration. |\n\n(#144 already closed — redb migration shipped.)\n\n---\n\n## §B — PHASE 1 · Instruments (make \"green\" mean something)\n\n### I1 · ✅ SHIPPED 2026-08-18 (`a5f785b9` on main) — IG=0, full pre-merge green\n| # | scope after Phase 0 | state |\n|---|---|---|\n| #165 | `ui/` is a SEPARATE workspace root (own `[workspace]`, own lock, own `[profile.dev]`) — not merely an omitted member, which makes the issue's option 2 far worse than it framed. **Gates all of §F/N2.** | done |\n| #156 | `scripts/pre-merge-check.sh` — no \"deep gate\" line; and the script had no notion of a base ref, which its acceptance criterion assumed. Derived via `merge-base`. | done |\n| — | **CLAUDE.md catalog correction**: the `lsp` row named five nonexistent tools. | done |\n\n~~#151~~ — removed, already fixed (§A).\n\n**What duty 0 changed before a line was written:** #165's recommended one-liner could not have run at all\n— `ui/assets/tailwind.css` is generated and was gitignored, so a fresh clone or newly-claimed lane cannot\ncompile `ui/` (dx fails before rustc). It is now TRACKED, after measuring that regeneration is\nbyte-deterministic (two lanes, identical bytes; two consecutive runs, identical bytes). The real hazard is\ngenerator VERSION, not nondeterminism: dx bundles Tailwind 4.1.5, `package.json` declares ^4.1.17, outputs\ndiffer — regenerate with `dx build` only. Also: the `--target` flag is not what makes the check work\n(`ui/.cargo/config.toml` already pins wasm).\n\n**Two defects the negative controls found, both fixed in the same commit:**\n- `^error` cannot match a `--message-format=short` diagnostic (the line starts with its file path), so a\n  broken build printed only cargo's \"could not compile\" summaries and never said WHERE. Fixed on the new\n  Web UI path **and** on the pre-existing workspace path, which had the same defect (hazard symmetry).\n- `test-pre-merge-precondition.sh` extracts its phase-0 slice by matching a literal `[0/3]`. Renumbering\n  the phases makes awk match nothing, so the \"slice\" becomes the ENTIRE gate script — and **both existing\n  \"has phase 0 been renamed?\" guards still pass**, because their strings all appear in the full file. Each\n  arm would then run the whole gate. Added a proper-prefix line-count guard and verified the old guards do\n  not catch it. **This is why placement mattered:** running the ui check as a new phase `[2/4]` would have\n  tripped exactly this, so it lives inside phase 1.\n\n### I2 · Log assertions may be attributing to the wrong script — T2, one gate · NEXT, duty-0 done\n| # | grounded scope |\n|---|---|\n| #138 | `log_broker.rs:144-182` unchanged. Nuance the issue omits: the marker branch `continue`s, so the rest of THAT batch is still collected — the loss is records not yet indexed when the drain returned. **The fix is already enabled**: `NormalizedLog` (`log_filter/match_entry.rs:13-23`) carries both `seq: u64` and `timestamp`, so an emit-time partition needs no broker change. The `BARRIER_TIMEOUT` exit at `:174-180` has the same shape — hazard symmetry. |\n| #38 | `server.toml:50` unchanged; template at `:62`. **One real decision: the default LEVEL.** `EnvFilter` discards its default directive when the filter string is non-empty, so `store_server=trace` means \"store_server only, everything else OFF\" — that is why absent targets are silent. Recommend `warn,store_server=trace`, not `info`: it matches the zero-at-idle contract, where `info` would re-admit the dependency chatter that once put 255k lines / 110 MB into an idle server. |\n\n**#176 SPLIT OUT** — cross-binary trace propagation (harness `traceparent` → ht_server/DebugCommands → renderer's `debug_command` span). Confirmed still true (`rg set_remote_parent|traceparent hometouch_renderer/src` → nothing). A wire-carried field between two binaries is a contract, so it gets its own tier call rather than inheriting I2's.\n\nT2 because it changes what tests can observe — a contract, not a fix.\n\n## §C — PHASE 2 · The one p1: data destruction — **IN FLIGHT 2026-08-19** (lane t2, `fix/i163-release-value-blob`)\n\n> **#186 turned out to be the same defect at a different call site**, and shipping it first\n> was accidental preparation: the fix pattern (`hydrate_value_at_rest` — load the bytes via\n> the committed store's lazy-aware `get_blob_bytes` before touching the value) and the\n> reproduction (`store.lazify_persisted_blobs()` to put a store in its at-rest state) are\n> both built, gated and merged. #163 is the same shape at `release_value`.\n\n| # | |\n|---|---|\n| #163 | `release_value` re-emits the stored value, so releasing an unloaded blob persists a payload-less record and **destroys the content**. |\n\n**Confirmed live, by unusually strong evidence:** the commit that fixed the *sibling* bug\n(`21f38cda`) says in its own message that `release_value` \"has the same shape and is NOT fixed\nhere… Filed as gh #163.\" Current shape: `store_server/src/command/set_property.rs:862-887` reads\nvia `get_optional_value_by_id` (raw stored `Repr`, not the lazy-aware `get_blob_bytes`) and\nre-emits it; `redb_backend.rs:1080` writes verbatim with no residency guard.\n\n**Alone, T3** — failing-test-first, blast-radius review, two gates from different model families.\nThe only issue here earning that ceremony, and the reason is the verb: *destroys*.\n\n**Test note (load-bearing):** the assertion must read the payload at the **store layer**. An\nimage/blob is invisible from the DSL — a value whose payload was destroyed still reports the\nright descriptor and still reads back as set, so a `.tests` script cannot see this defect at all.\n\n---\n\n## §D — PHASE 3 · Kernel (lanes must have disjoint file sets)\n\n### K1 · Transaction / event derivation — T2, one gate *(lane A, `command/`)*\n**Order inside the batch is fixed:**\n\n1. **#161 first, not negotiable** — `precommit_store.rs:4869-4871`, the \"writes cancelled\" arm is\n   unconditional amnesty and `PropertyEntry` has no write counter. It is the instrument for the\n   rest; an audit whose failure arm is an amnesty cannot witness #143.\n2. **#115 + #143 together** — recover `fix/115-cast-rekey` from t2 (`883202da1`, `1c16b33f`),\n   rebase on main, re-gate (a rebase invalidates a green gate). #143's root cause is shared:\n   `precommit_store.rs:5396-5410` captures `committed_value = None` for the re-key destination\n   (the counterfeit create-seed) and `:5594-5615` tombstones the old id (the spurious clear); no\n   `property_rekeys` carrier exists. Verify whether the branch resolves #143 too before\n   designing anything new.\n3. #117 — `schema_change.rs:3629-3667`, a clear of a mandatory schema-defining property reaches\n   `record_pending_inheritance_change` with `new_value: None`; only `Name`/`Class` are eagerly\n   guarded (`set_property.rs:1693-1710`).\n4. #118 — latent but the code gap is definite: `sync.rs:534-538` pre-marks, `delete.rs:210-216`\n   returns on `Skip` before its own mark, and `delete_or_defer`'s `Ok` arm never unmarks, so\n   `objects_with_surviving_tombstones` skips the object.\n5. #103 — `schema_change.rs:1829-1884`, `validate_casts` never re-checks incoming references or\n   `AllowedClass` against the new class.\n\n### K2 · Value authority / blob equality — T1, one gate *(lane B, `store_layer/` + `store_mirror/`)*\n| # | |\n|---|---|\n| #162 | `store_layer/boot/reconcile.rs:205-206` raw `cur != new`; its own comment asks for the predicate. |\n| #164 | `store_mirror/src/lib.rs:337` raw compare; `optional_values_equal` (`shared/src/value.rs:585`) has zero call sites in `store_mirror/`. |\n| #34 | `schema_change.rs:1303-1304` consults the per-definition axis only; `store_artifact/src/lib.rs:481-484` resets provenance to `Plain` on every substituted record. |\n| #116 | **re-scoped to one site**: `ht_server/src/renderer.rs:1213-1215` (`forwarding_handle`). The subscribe paths were fixed incidentally by `330ecff4`. |\n\n#162 and #164 are **one defect in two crates** — one predicate, two call sites. Fixing either\nalone is the hazard-symmetry failure this repo has paid for repeatedly.\n\n### K3 · Dispatch / teardown ordering — T1, one gate *(after K1: shares `command/`)*\n#114 (`precommit_store.rs:3496-3511` doesn't sort; its sibling at `:3772` does) · #136\n(`processor.rs:2032-2035` breaks without draining) · #56 (both producers live:\n`service_manager.rs:221-228`, `mqtt.rs:317,339-340`) · #134 (`config_watcher.rs:19-24`, still no\nsender).\n\n---\n\n## §E — PHASE 4 · Reconcile, SDL, Rhai\n\n- **R1** (T1, one gate): **#113** (`sync.rs:327-340`, the create branch never reads\n  `unset_properties`) · **#37 re-scoped** — half the claim is stale (`detect_collisions` already\n  merges `ext_parents`, fixed by `561d48484` *before* the issue was filed); the real gap is\n  `codegen.rs:4073-4081`, whose gate counts only `ClassMember::Is` toward `parent_count`, so an\n  extends-only diamond never reaches the detector. An adversarial extends-diamond test still\n  does not exist.\n- **R2** (T2, one gate): **#179 re-scoped** — shape (1) (DEBUG audit + characterization test)\n  shipped at `de9d2e60`. Shape (2), the real fix (resolve the target against the class chain\n  *before* converting the value), is unbuilt: `object.rs:2306` still converts first.\n- **R3**: #183 (split `object.rs`, still exactly 4,152 lines). Mechanical, compiler-checked —\n  **no finders** — but must not overlap R2 in time (same file). **UNBLOCKED 2026-08-18**: it was\n  waiting on images P2b, which has landed on main (`2ccb38646` .. `6de9dbe34`). Scope note from\n  the P2b session, worth keeping so it is not rediscovered: the issue also names `manager.rs`\n  (10,071 lines) as the bigger sibling, and that one is **not** the same job — no banner sections\n  and genuinely entangled concerns rather than merely co-located, so it wants a design pass\n  rather than a pure move. Splitting them is the right call; only `object.rs` is R3.\n\n---\n\n## §F — PHASE 5 · Non-server\n\n- **N1 renderer**: #19 (`script_pipeline.rs:60-96`, path-keyed cache, no rename hook) · #135\n  (`ht_server/src/grpc.rs:197`, the #14 no-op in the sibling binary) · #2 (all four sub-claims\n  confirmed live) · #160 · #157 *(docs-only: self-review, no gate)*\n- **N2 web UI** *(blocked on #165)*: #100 (`ui/assets/main.css:246`)\n- **N3 drivers**: #121 + **#96 re-scoped** (mechanism real at `mdns.sdl:408,422`, but the issue's\n  own comment already corrected it — bindings never break, impact unconfirmed; needs a\n  scope-narrowing comment more than code) · #95\n- **N4 dev-loop**: #147 · #152 · #139 · #26 · #29 · #31 · #170 · **#148 re-scoped** (the test\n  exists; the reporter's own comments refute \"deterministic on main\" — it is an unconfirmed\n  environment-pressure hypothesis)\n- **N5 harness flakes — root-cause, do not isolate**: **#129 re-scoped** (the budget fix landed\n  at `a6206e24`; the prune-leg defect at `tests/media/publish.tests:223-224` is what remains, and\n  one of the two sightings was the reporter's own negative control) · **#132** (the 30 s cap at\n  `panel_drive.rs:747` is unchanged; the thread's *attribution* work was self-retracted as\n  contaminated — trust the code mechanism, not the thread)\n- **N6 harness todos**: **#8 re-scoped** (the emulator-store pattern already exists for\n  ynca/mdns/media; the real scope is \"port it to coolmaster\", not a new design) · #12 · #16 ·\n  #28 · #41 (blocked on #5) · #146\n\n---\n\n## §G — DEFERRED BY DESIGN (23, not counted against the target)\n\nMedia-port implementation steps — closing them individually would destroy the tracker\n`docs/media-port-dag.md` mirrors:\n#71 #73 #74 #75 #77 #78 #81 #83 #86 #87 #88 #92 #98 #99 #133 #137 (#104 reassigned to the media session)\n\n(#76 removed — delivered, closes in §A. Bookkeeping: **#133 and #137 carry empty labels** and are\nmissing the `media-port` label every sibling has.)\n\nAlso deferred: #166 (animated GIF/WebP — explicitly low priority).\nIn flight with the images feature: #171 · #178 · #182 · **#172 re-scoped** (residual 1 is\nsuperseded by #182 per the issue's own comment; only residual 2 remains) · **#167 re-scoped**\n(boot v17 `828a93e8` gave `Type Image` a `Default`, changing the mechanism — the throw-on-unset\nsymptom persists but now via `NoDefaultValue`, `shared/src/api.rs:1792`).\n\n> **Memory correction:** project memory records #167 and #174 as closed. #167 is **open**, with\n> zero comments. Verified directly.\n\n---\n\n## §H — ✅ SITTING HELD 2026-08-18. All eight decided.\n\n| # | decision | disposition |\n|---|---|---|\n| **#5** | **KEEP the cache, all three lanes.** The \"net-negative / 29.9% hit rate\" framing was wrong and the source predicts the mistake — *\"a 29.9% hit rate looks like a cache being destroyed, and is equally consistent with a cache that is simply cold.\"* A miss IS a build (so never extra work), entries are never removed, and 99.47% of builds are COLD. The `names` interner measured immaterial: 446 distinct property names in the corpus, tens of KB, dropped on `ClearStore`. | **CLOSED** (not planned). **Unblocks #41.** |\n| **#45** | **Adopt both remaining candidates**, A2 `HomeTouchPanel` and A3 `DMX` — consolidating every hand-rolled `LastError` pair onto the one mixin rather than keeping a second convention. A1/B1/B2 verified already adopted. | queued for a batch |\n| **#46** | **Change to a GIT dependency.** A path dep compiles the sibling repo's live tree, so an edit elsewhere breaks Store with no commit — and latently, surfacing at production's next post-merge restart. Tripwire and adapter rejected: both keep the hazard. | queued for a batch |\n| **#49** | **Re-ground first — do NOT implement from the old number.** Structural claim confirmed still true, but the `None` is deliberate and correctness-bearing (it holds the wrapper's slot in a one-hash-per-`SyncObject` positional invariant). A wrapper may only be skipped when nothing in its subtree changed, and skipping one saves ONE `SyncObject`, not the subtree — so the 47% \"floor\" is not 47% of recoverable work. | stays open, needs a fresh measurement |\n| **#66** | **Move the MSG protocol into the existing `hometouch_wire` crate.** Cheaper than the issue assumed — the crate exists and both sides already depend on it. Chosen over a round-trip test: remove the possibility of desync rather than detect it. | queued for a batch |\n| **#92** | **Deferred to §G** as a media-port step, not a decision. | moved to §G |\n| **#104** | **Assigned to the media/AirZone session**, which holds the player-design context — and that session closes it. | out of this campaign |\n| **#108** | **Guard the handlers, fan the CLEAR down.** A group means \"all my units\", including when cleared. The discrimination must use `get_value(\"P\")`; the dot read returns the natural default and cannot see absence — reading the value the handler was handed IS the bug. All five properties, hazard symmetry. Needs a new test both ways; none exercises a group-level unset today. | queued for a batch |\n\n**What the sitting cost and what it bought:** one sitting, eight decisions, two closed outright (#5 here, #181 earlier). Three of the eight were decided AGAINST the issue's own framing, and in two cases against this plan's recommendation — #5 (the owner's mechanism argument was right and my \"net-negative\" repeat was wrong) and #66 (the owner took the structural fix over the cheap detector).\n\n## §I — PHASE 0 VERDICT LEDGER\n\n`R` reproduces · `F` already fixed · `P` premise false · `S` scope changed\n\n| # | | # | | # | | # | |\n|---|---|---|---|---|---|---|---|\n| 2 | R | 41 | R | 118 | R | 152 | R |\n| 5 | R | 45 | **S** | 121 | R | 155 | R |\n| 8 | **S** | 46 | R | 129 | **S** | 156 | R |\n| 9 | **F** | 49 | R | 132 | R | 157 | R |\n| 12 | R | 56 | R | 134 | R | 160 | R |\n| 16 | R | 66 | R | 135 | R | 161 | R |\n| 19 | R | 76 | **F** | 136 | R | 162 | R |\n| 26 | R | 95 | R | 138 | R | 163 | R |\n| 28 | R | 96 | **S** | 139 | R | 164 | R |\n| 29 | R | 100 | R | 142 | **S** | 165 | R |\n| 31 | R | 103 | R | 143 | R | 166 | R |\n| 34 | R | 108 | R | 145 | R | 167 | **S** |\n| 37 | **S** | 113 | R | 146 | R | 170 | R |\n| 38 | R | 114 | R | 147 | R | 171 | R |\n| 115 | R | 116 | **S** | 148 | **S** | 172 | **S** |\n| 117 | R | 149 | **F** | 150 | **P** | 176 | R |\n| 151 | **F** | 178 | R | 179 | **S** | 181 | **S** |\n| 182 | R | 183 | R | | | | |\n\nMedia-port steps (#71 #73 #74 #75 #77 #78 #81 #83 #86 #87 #88 #92 #98 #99 #133 #137 (#104 reassigned to the media session)):\ndeferred, each confirmed still outstanding against `docs/media-port-dag.md`.\n\n**Two issues Phase 0 could not settle from code alone**, flagged rather than guessed: **#34**\nfinding B (needs a live rebake diff) and **#49** (needs a fresh measurement). Neither is\ncloseable on a read.\n\n---\n\n## §J — ✅ DECIDED 2026-08-18 — `BlobSource` is the canonical blob-read seam\n\n**Decided by the user and assigned to the image session, which is implementing it.** Out of §H;\nrecorded here because the reasoning is worth keeping and because two earlier framings of it — the\nissue's and this plan's — were both wrong.\n\n**The decision:** `BlobSource` is the seam. `PersistenceProvider::read_blob`, the `Persistence`\ndispatcher copy, and redb's trait impl are deleted; redb's inherent `read_blob` stays.\n\n**What settled it, verified independently on main:**\n\n- `persistence/mod.rs:284` — `fn blob_source(&self) -> BlobSource` is a **live** trait member (not\n  `cfg(test)`), called at `memory.rs:1671`. So the seam is TWO compile-enforced steps:\n  `PersistenceProvider::blob_source()` → `BlobSource::read_blob`. A new backend must implement the\n  trait method AND add an enum variant, or it does not build.\n- `persistence/mod.rs:470` — `Persistence` is `#[derive(Debug)]` only, **not Clone**. All three\n  callers read off the store lock and two hand the reader to `spawn_blocking`, which needs\n  `Clone + Send + 'static`. So the issue's option (a) — route the callers back through the\n  dispatcher — **was never available**; it would undo the property `BlobSource` exists to provide.\n\n**Consequence for the gh #180 record:** the `#[cfg(test)]` marking was **correct**. It labelled a\nmember nothing can use. #180's retro should not carry that as a self-criticism.\n\n**Why this issue is the campaign's best worked example of one failure mode.** It produced the same\nerror twice, from three different people, with correct citations every time:\n\n1. *\"A second backend would receive no `read_blob` traffic\"* — false; `BlobSource` is an enum\n   dispatcher and a new variant is a compile error.\n2. *\"Route the three callers back through the dispatcher\"* — presented as a live option; the type\n   system had already removed it, visible only by checking what `Persistence` derives.\n\nEvery `file:line` in both was right. **Nothing in the pipeline checks the inference drawn over\ncorrect citations** — not the filing, not a grounding sweep that mandates a `file:line` per verdict,\nnot a deep gate that demands evidence per finding, and least of all two sessions agreeing with each\nother, which reads as corroboration while being the same unchecked step twice. The sharpened rule is\nin `docs/process/retro-log.md`: a claim about a HYPOTHETICAL cannot be settled by citation — name the\nmechanism that would govern it (exhaustiveness, a trait bound, a derive) and read that.\n\nLoose end handed to the implementer: `memory.rs:1668` still says \"Capture the **sled** handle\" —\nthe sibling of the prose `dba20fdf` fixed above `BlobSource`, one caller away.\n\n## Measurement\n\nEach batch records a row in `docs/process/gate-kpi.md`: **DG** (design-gate escapes), **IG**\n(implementation-gate escapes), post-merge defects, `lens:` per finding, `cost:` in subagent\ntokens. Without `lens:` the \"demote a lens\" rule cannot fire; without `cost:` every \"make the\ngate cheaper\" proposal is unfalsifiable.\n\nRead DG and IG only against **post-merge defects**. Both falling while post-merge holds at zero\nis real improvement; either falling while post-merge rises means the gates got quieter, not the\nwork better.\n\n---\n\n## Progress log\n\n| date | batch | closed | notes |\n|---|---|---:|---|\n| 2026-08-18 | gh #180 | 1 | Workspace 34→0 warnings, baseline→0. Two gate bugs: it could not certify a clean tree (`set -e` + empty `grep`), and a failed `cargo check` was read as a warning count. Found one test that had never executed. |\n| 2026-08-18 | Phase 0 | — | 87 issues grounded, ~2.0M tokens. 22% changed shape: 5 close with no code, 14 re-scoped. Found #115's fix sitting unmerged on t2, and #151 already done by #180. |\n| 2026-08-18 | LSP | — | Root-caused and fixed: the installed plugin manifest had the marketplace's `lspServers` block stripped, and the tool is `LSP` with an `operation` param — not the five `lsp_*` names CLAUDE.md records. Verified against known ground truth. Follow-on trap found in use: `workspaceSymbol` reports MACRO-EXPANDED symbols and under-reports source items (asked for `release_value`, which has four definitions, it returned one — a `*_token` struct that exists nowhere in the source). Use position-based operations; use `rg` for \"does this name exist\". |\n| 2026-08-18 | §A | 5 | #9, #76, #149, #150, #151 closed with no code change, each with its evidence. 88 → 83 open. |\n| 2026-08-18 | I1 | 2 | #165 + #156 shipped (`a5f785b9`). Deep gate 0 findings; full pre-merge green (DSL 1804 passed, 0 failed). Duty 0 found #165's recommended fix could not have run at all; both defects that surfaced came from negative controls, both in error paths. 83 → 81 open. |\n| 2026-08-19 | I2 + K1 | — | Shipped; see `docs/process/retro-log.md` 2026-08-19 entry. |\n| 2026-08-19 | 2nd half | 10 | #38 #41 #46 #49 #115 #147 #152 #185 #187 #188. Built the `--quick` gate off measured phase timings (5.5x). 88 → 73 open. |\n| 2026-08-19 | §C prep | 1 | **#186 shipped (`4ec20eed`)** — T3. Full pre-merge green (1856 passed / 0 failed). Duty 0 killed two of my OWN claims: the \"boot-schema change with a version bump\" was neither (boot.xml has no script element at all), and \"does FromValue fire on ordinary writes?\" was a fact, not a decision (a `Repr` carries no type identity). Deep gate: 2 severe + 5 lower, S0=0, one root — **only a failure that is a VERDICT ABOUT THE VALUE may clear it**. The CRITICAL one was live data destruction: a blob AT REST is a payload-less header, the write path rejects it as an omitted CLIENT placeholder, so best-effort unset DELETED every payload on any loaded store. Filed forward: #192, #193. |\n| 2026-08-19 | gate fix | — | **The `--quick` gate ran what did NOT change and skipped what did, in BOTH phases.** Phase 3 selected `--tag smoke`, a curated set of OLD tests. Phase 2 appended the net filters to the same `cargo test` as the changed crates, filtering every target (`shared` ran 0 of 129) — and the guard against exactly that was DEAD (newline-vs-space in a `case` pattern), so **the check that would have exposed the bug could not fire**. Fixed and verified by running it: `shared` 0→129, `store_server` 156→1214, new DSL tests 0→13. |\n\n",
+          "closedAt": null,
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-08-18T19:37:25Z"
+              },
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-08-18T20:02:22Z"
+              },
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-08-18T20:27:56Z"
+              },
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-08-18T22:43:57Z"
+              },
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-08-19T00:00:43Z"
+              },
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-08-20T02:02:42Z"
+              },
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-08-20T02:45:12Z"
+              },
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-08-20T04:13:41Z"
+              },
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-08-27T11:03:14Z"
+              },
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-08-29T20:30:09Z"
+              },
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-08-29T23:52:26Z"
+              },
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-08-31T16:09:46Z"
+              },
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-09-01T12:19:48Z"
+              },
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-09-01T20:13:55Z"
+              },
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-09-19T12:54:55Z"
+              },
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-09-23T13:15:59Z"
+              }
+            ],
+            "totalCount": 16
+          },
+          "createdAt": "2026-08-18T06:56:33Z",
+          "id": "I_kwDONszNXs8AAAABNLGupA",
+          "labels": {
+            "nodes": [
+              {
+                "name": "todo"
+              },
+              {
+                "name": "p1"
+              },
+              {
+                "name": "process"
+              }
+            ],
+            "totalCount": 3
+          },
+          "milestone": null,
+          "number": 184,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "OPEN",
+          "stateReason": null,
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABNLGupM8AAAAG5HD43A"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABNLGupM8AAAAG5HD5vA"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABNLGupM8AAAAHCT3IyA"
+              }
+            ]
+          },
+          "title": "Issue-closing plan: ship with as few open issues as possible (live document)",
+          "updatedAt": "2026-09-23T13:16:00Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "The ingest core applies the key colour **after** the resample. Its design says the opposite, and the order is not cosmetic — it decides whether keyed artwork gets a halo.\n\n## What the design says\n\n`docs/superpowers/specs/2026-08-16-image-support-design.md:797`, §4.4 \"Key colour at ingest, with tolerance\":\n\n> Applied **once, before the resample**, into a real alpha channel.\n\nThe same claim is repeated in the doc comment on `PartialIngestParams::key` (`shared/src/image_annotations.rs:114`): *\"Keying is applied before the resample, into a real alpha channel, and the original is discarded\"* — which is the stated reason that field carries a two-level `Option` at all.\n\n## What the code does\n\n`store_server/src/image_ingest.rs:173-176`:\n\n```rust\nimg = resample(img, &params);\nif let Some(key) = params.key {\n    img = apply_key_color(img, key);\n}\n```\n\nResample first, key second — the reverse of both texts.\n\n## Why it matters\n\n`apply_key_color` matches within `TOLERANCE: 12` (`store_server/src/image_ingest.rs:281`). Resampling first blends key-coloured background pixels with adjacent content pixels, so the blended edge pixels fall **outside** that tolerance and stay opaque. The result is a fringe of near-key-coloured pixels tracing every edge — the classic green-screen halo — and it is worse the more the image is downscaled, because more blending happens.\n\nKeying first avoids it by construction: alpha is punched on crisp pixels at full resolution, and the resample then interpolates RGBA, producing soft partial-alpha edges rather than a fringe.\n\nThere is a second-order effect too: `effective_format` is overridden away from JPEG when `params.key.is_some()` (`image_ingest.rs:181`), which is correct either way, but the halo means the stored PNG carries the fringe permanently — the original is discarded, so it is not recoverable.\n\n## How it surfaced\n\nFound by the design gate for image P5b (Web UI upload). P5b puts a **preview of the keyed result** in front of a user for the first time, so this becomes visible rather than merely stored — and the natural reading is that the upload tool damaged the image.\n\n## Scope\n\nMoving the `apply_key_color` call above the `resample` call is the fix. It changes the stored bytes of **future** ingests that use a key colour; existing stored values are untouched (the write gate is a write gate, and a re-ingest is what would refresh them).\n\nWorth a test that asserts the edge behaviour rather than just the call order — e.g. a small image with a keyed background and a hard-edged shape, downscaled, asserting no near-key opaque pixels remain adjacent to the shape.\n",
+          "closedAt": null,
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-08-19T15:29:26Z"
+              },
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-08-19T17:59:56Z"
+              }
+            ],
+            "totalCount": 2
+          },
+          "createdAt": "2026-08-18T23:47:11Z",
+          "id": "I_kwDONszNXs8AAAABNTHXmA",
+          "labels": {
+            "nodes": [
+              {
+                "name": "bug"
+              },
+              {
+                "name": "p3"
+              },
+              {
+                "name": "kernel"
+              }
+            ],
+            "totalCount": 3
+          },
+          "milestone": null,
+          "number": 191,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "OPEN",
+          "stateReason": null,
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABNTHXmM8AAAAG52hCiw"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABNTHXmM8AAAAHCT3NAA"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABNTHXmM8AAAAHCT3NEw"
+              }
+            ]
+          },
+          "title": "Ingest keys the image AFTER the resample; its design says before, and the difference is a halo",
+          "updatedAt": "2026-08-29T20:28:11Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "`IngestImage` carries its ingest parameters as a serde JSON string (`params_json`). That was a deliberate decision — `IngestParams` already crosses a durability boundary as serde JSON inside a stored `StoredImage` descriptor, and mirroring the family in proto would create a second encoding of one struct with the persisted one as the contract of record.\n\nThe cost of that decision is that **the grammar exists only in Rust `#[derive]`s**. A non-Rust client has to know all of the following, none of which appears in the `.proto`, in `docs/guides/images.md`, or in the design spec:\n\n- field names are `snake_case` (`max_edge`, not `maxEdge`) — and since `deny_unknown_fields` landed, getting this wrong is now a loud error rather than a silent empty rung, which helps but does not teach\n- `key` is an externally-tagged serde enum with four spellings: `\"inherit\"`, `\"none\"`, `{\"colour\": 16711680}`, `{\"corner\": \"tl\"}`\n- the serde spellings of `FitMode` (`fit` / `fill`), `FormatPolicy` (`keep` / `png`), `ResampleFilter` (`lanczos3` / `triangle` / `nearest`), and `Corner` (`tl` / `tr` / `bl` / `br`)\n- `null` is an **error**, not \"unset\" — `{\"key\": null}` fails to parse. That is the opposite of the usual JSON convention and the most likely thing a client author assumes\n- the wire spells the key-colour variant `colour` while the rest of the tree spells the concept `Color`\n\n## Why this matters more than it looks\n\nThe `key` parameter destroys pixels: keying is applied into a real alpha channel and the original is discarded. A client author who guesses the grammar wrong for that field does not get an approximate result, they get an irreversible one.\n\n## Suggested fix\n\nWrite the grammar into the `.proto` comment on `params_json`, since that is the file a non-Rust client actually reads, and cross-link it from `docs/guides/images.md`. A worked example of each `key` spelling would carry most of the weight.\n\nThe alternative — mirroring the rung as proto messages — was considered and rejected in the P5b design (§D2); this issue is about documenting the choice that was made, not revisiting it.\n\nFound by the P5b pre-merge deep gate.\n",
+          "closedAt": null,
+          "comments": {
+            "nodes": [],
+            "totalCount": 0
+          },
+          "createdAt": "2026-08-19T11:03:49Z",
+          "id": "I_kwDONszNXs8AAAABNXY84A",
+          "labels": {
+            "nodes": [
+              {
+                "name": "docs"
+              },
+              {
+                "name": "p2"
+              },
+              {
+                "name": "kernel"
+              }
+            ],
+            "totalCount": 3
+          },
+          "milestone": null,
+          "number": 194,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "OPEN",
+          "stateReason": null,
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABNXY84M8AAAAG6OhH0w"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABNXY84M8AAAAG6OhIfA"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABNXY84M8AAAAHCT3PcQ"
+              }
+            ]
+          },
+          "title": "IngestImage's params_json grammar exists only in Rust derives; a non-Rust client cannot discover it",
+          "updatedAt": "2026-08-29T20:28:13Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "Found while closing #227 item 1 (the dead `HebrewTitle`/`EnglishTitle` convention, two of whose three sites live inside this button). Filed rather than fixed — it is a side finding, not part of the i18n work.\n\n## The claim, verified\n\n`data/frameworks/hometouch/panel_scripts/Subsystem/Lights.xml` defines three things nothing uses:\n\n- `ColorLightButton` (`:289`)\n- `ColorLightWindowLayout` (`:669`-ish)\n- `ColorLightDesignWindowLayout` (`:484`-ish)\n\nA tree-wide grep for each name (every file type, excluding `target/`, `.git/` and agent worktrees) returns only their own definitions, one comment I added there, and one mention in `docs/requirements/HomeTouch/panelscript_scripts.md:293` — a requirements document, not a `Using=` or a `<Use Ref=>`.\n\n**And the button could not work if something did reach it.** It declares\n\n```xml\nWindowName=\"`ButtonPath`/GetColorLightWindow\"\n```\n\nand `GetColorLightWindow` **does not exist** — there is no such `fn` anywhere in `data/`. Compare `DimmedLightButton`, whose `WindowName=\"`ButtonPath`/GetDimmerWindow\"` resolves to `light_button.sdl:68`. So a press would ask the server to generate a window from a method that isn't there.\n\nThat in turn means the two window layouts are unreachable: `ColorLightWindowLayout` and `ColorLightDesignWindowLayout` are only ever instantiated by a generator, and the only generator that would name them is the missing one.\n\n## Why this is worth an issue rather than a quiet delete\n\nIt is roughly 190 lines of PanelScript (the two window layouts carry swatch grids, component sliders and a design mode), and the shape suggests colour-light support was authored and then either superseded by `SceneLight` or never wired up. Deleting it is probably right, but that is a product call about whether colour lights are coming back — and if they are, the missing generator is the actual bug rather than the dead code.\n\nEither disposition closes it:\n\n- **Delete** the three defines. Low risk: nothing references them, and the missing generator means the button is inert even if something did.\n- **Wire it up**: add `GetColorLightWindow` to `LightButton` alongside `GetDimmerWindow`, and give `ColorLightButton` a caller.\n\n## Not a regression\n\nNothing in the current work touched these defines except a comment. Their `OpenWindowParameters` did lose two `<Set>` lines in `2f1e318a`, along with the same lines in the two live buttons — those set `HebrewTitle`/`EnglishTitle`, which nothing reads (see #227).\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)",
+          "closedAt": null,
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-08-30T05:36:16Z"
+              }
+            ],
+            "totalCount": 1
+          },
+          "createdAt": "2026-08-29T23:52:01Z",
+          "id": "I_kwDONszNXs8AAAABO0ak0A",
+          "labels": {
+            "nodes": [
+              {
+                "name": "todo"
+              },
+              {
+                "name": "p3"
+              },
+              {
+                "name": "hometouch"
+              }
+            ],
+            "totalCount": 3
+          },
+          "milestone": null,
+          "number": 248,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "OPEN",
+          "stateReason": null,
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABO0ak0M8AAAAHCXRtww"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABO0ak0M8AAAAHCXRt6w"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABO0ak0M8AAAAHCXRuCQ"
+              },
+              {
+                "id": "UNLE_lADONszNXs8AAAABO0ak0M8AAAAHCcTzkw"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABO0ak0M8AAAAHCcTzpw"
+              }
+            ]
+          },
+          "title": "Colour lights: the two window layouts exist, but GetColorLightWindow and the equipment model do not",
+          "updatedAt": "2026-08-30T05:36:18Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "## Symptom\n\nOn a full 20-way `store-test tests/` run (2026-08-26), `tests/uibuilder/renderer_e2e/main_screen_demo.tests` V11 failed with:\n\n```\nRuntime error: renderer-e2e handshake timed out after 600000ms for\nbatch_id=\"16b617ef-ddcc-4090-9746-c362592297e3\": this batch produced NOTHING —\ndebug_result.json belongs to batch <other>\n```\n\nThe two preceding scripts in the same test succeeded (`clear_button_icon ... ok (152ms)`, `seed_button_icon ... ok (101ms)`); only the batch that drives the renderer never came back.\n\n## Why it is worth a look rather than a shrug\n\n**\"This batch produced NOTHING\"** is the informative part. It is not a slow renderer that eventually answered — the artifact on disk belonged to a *different* batch, so for the full ten minutes nothing was written for this one. Either the batch was never dispatched, or its reply was written under an id the waiter was not watching.\n\n**Ten minutes is already an enormous budget.** The default is 30 s; this site had been raised to 600 s. A budget that large being crossed is not \"the machine was busy\" — something did not happen at all.\n\n**It reproduces only under load.** The same file passed 2/2 in isolation immediately afterwards, and a second full corpus run on identical code was 1927/0. So the trigger is contention, but the mechanism above is not a timing margin.\n\n## Not the known flake class\n\nThe three historical renderer-E2E mechanisms are all closed and none matches:\n\n- #52 `WaitForIdle` budget — closed (`2bbd982c`)\n- #65 op-window 15 s auto-close — closed (`3b65f306`)\n- #60 write → echo → visibility in one batch — closed by the store-sync gate (`2553ae82`)\n\nEach of those produced a *wrong* or *early* result. This one produces no result at all, which is a different signature.\n\n## Suggested first steps\n\n1. Find whether the batch was dispatched — the renderer's `debug_command` span for that `batch_id`, or its absence, settles \"never sent\" vs \"reply lost\".\n2. If it was dispatched, check the LDBI publish path: `HomeTouchPanel.LastDebugBatchId` is the handshake target, and a lost `PropertyChanged` echo would look exactly like this.\n3. The artifact-handshake layer already retries on `exec_id` mismatch (`docs/superpowers/specs/2026-05-19-renderer-e2e-artifact-handshake-design.md`); worth confirming the retry can actually fire when the mismatch persists rather than resolving.\n\nFiled rather than fixed because it is unrelated to the branch that surfaced it (gh #233 containment), and diagnosing it properly needs a reproduction under load rather than a guess.\n",
+          "closedAt": "2026-09-29T21:29:30Z",
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-08-30T10:55:15Z"
+              },
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-09-01T16:28:54Z"
+              },
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-09-05T23:16:26Z"
+              },
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-09-18T05:22:03Z"
+              },
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-09-29T21:29:29Z"
+              }
+            ],
+            "totalCount": 5
+          },
+          "createdAt": "2026-08-26T18:49:17Z",
+          "id": "I_kwDONszNXs8AAAABOYtv3w",
+          "labels": {
+            "nodes": [
+              {
+                "name": "bug"
+              },
+              {
+                "name": "p2"
+              },
+              {
+                "name": "renderer"
+              },
+              {
+                "name": "harness"
+              }
+            ],
+            "totalCount": 4
+          },
+          "milestone": null,
+          "number": 237,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "CLOSED",
+          "stateReason": "COMPLETED",
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABOYtv388AAAAHCT25fw"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABOYtv388AAAAHCT25oA"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABOYtv388AAAAHCT25sQ"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABOYtv388AAAAHCT25wg"
+              }
+            ]
+          },
+          "title": "Renderer-E2E handshake times out with NOTHING produced, only under full-corpus load",
+          "updatedAt": "2026-09-29T21:29:30Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "`dev-track release` leaves the lane's `dx serve` / `tailwindcss --watch` running, and it survives into the next tenant\n\n## Observed\n\nA released lane keeps a live `tailwindcss --watch` writing into its **tracked** `ui/assets/tailwind.css`. It is not stopped by `release`, so it survives the release, the next `claim`, and the next session's whole occupancy.\n\nMeasured 2026-08-27 across three trees simultaneously:\n\n| lane | pid | notes |\n|---|---|---|\n| t3 | (killed) | running since **Aug 24** — orphaned through a release and a fresh claim, 3 days |\n| t1 | 22334 | `lstart Thu Aug 27 11:18:59`, elapsed 03:41:35 — survived **two** full release/claim cycles (`land --release` on `feat/media-orchestrator`, again on `feat/display-names-from-strings`, then a claim of `feat/hw-control-app`) |\n| t2 | 71217 | present in a lane a background agent had just claimed and had never started a dev server in |\n| home | 96385 | live |\n\nThe t1 measurement is the sharpest: **two** release/claim cycles, not one.\n\n## Why it is not obvious\n\nTwo things make a released lane look genuinely idle while it is still writing to a tracked file:\n\n- **`release --full` names cargo-watch specifically in its output.** So the omission reads as deliberate scope rather than an oversight, and anyone auditing the message will believe it.\n- **`dev-track status` derives lane liveness from the claim marker and the gRPC port.** A tailwind watcher touches neither, so it is invisible to the one command you would use to check.\n\n## Why it surfaced now\n\nIt is the missing half of gh #204. Staleness explains *what* the diff is; it does not explain *who performs the write* in a lane where nobody started a dev server. The orphaned watcher is the writer. Both were needed to explain the observation, and reasoning from staleness alone led one session to report that a lane's own `dx serve` was \"ruled out\" when a watcher was in fact running in it.\n\n## Severity, honestly: LOW after #204\n\nWith the tracked artifact fresh (#204), the watcher rewrites identical bytes and the tree stays clean, so the visible symptom is closed. What remains is a resource leak plus a latent writer that will dirty trees again the next time the artifact drifts — which the new phase-1 gate step now prevents. Filing rather than folding into #204 because the fix lives in `dev_track.rs`'s release path, not in the UI artifact, and the symptom is already closed.\n\n## The sequence is worse than \"survives a release\"\n\n`dev-track claim` seeds stores and cuts a fresh branch **while the previous tenant's watcher is still writing into the worktree**. So the next tenant's very first `git status` is dirty through no action of their own — which is exactly the observation that gets read as \"dx noise\" and reflex-discarded. Two sessions did precisely that today, and one of them told its user the wrong mechanism before the process table settled it.\n\n## Fix sketch — a claim-time REAPER, not just a release-time kill\n\nThe obvious fix is to stop the lane's `dx serve` in `release --full`, beside the existing cargo-watch teardown. That is necessary but not sufficient: it only helps when a release actually runs. A watcher orphaned by a crashed or force-quit session never sees one, and t3's three-day-old process is what that looks like.\n\nSo the load-bearing half is a **reap at claim time**: before seeding, kill any process still writing into this worktree. Same argument the store-server side already makes for binding prior orphans at startup regardless of how the last instance died. Do both; the claim-time one is the one that cannot be skipped.\n\n**Kill by exact path, never by `pkill -f \"dx serve\"`** — CLAUDE.md's standing trap: a loose `-f` pattern matches cargo-watch's and sh's command lines and takes down the whole dev stack, and here it would additionally kill the *other* lanes' watchers and home's. The watcher's command line carries its own worktree path (`--input <lane>/ui/tailwind.css`), so a lane-scoped match is available and is the only safe form. Both sessions that killed one today did it by pid for exactly this reason.\n\nWorth checking at the same time whether `dev-track status` should report a lane as non-idle when a `dx serve` is alive in it, since that is the check that currently cannot see this.\n\n## Credit\n\nFound jointly while coordinating gh #204 across four sessions: t3 (3-day-old orphan), t1 (survived two release/claim cycles), t2 (previous tenant's, live in a freshly claimed lane, since killed), home.\n",
+          "closedAt": null,
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-08-27T14:16:16Z"
+              },
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-10-16T00:14:16Z"
+              }
+            ],
+            "totalCount": 2
+          },
+          "createdAt": "2026-08-27T12:16:49Z",
+          "id": "I_kwDONszNXs8AAAABOfZSJw",
+          "labels": {
+            "nodes": [
+              {
+                "name": "bug"
+              },
+              {
+                "name": "p3"
+              },
+              {
+                "name": "dev-loop"
+              },
+              {
+                "name": "self-contained"
+              }
+            ],
+            "totalCount": 4
+          },
+          "milestone": null,
+          "number": 239,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "OPEN",
+          "stateReason": "REOPENED",
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABOfZSJ88AAAAHAj-jSQ"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABOfZSJ88AAAAHAj-kAw"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABOfZSJ88AAAAHAj-khQ"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABOfZSJ88AAAAHAj-lLQ"
+              }
+            ]
+          },
+          "title": "dev-track release leaves the lane's dx serve / tailwindcss --watch running, and it survives into the next tenant",
+          "updatedAt": "2026-10-16T00:14:16Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "## What\n\nLet a panel (or a room, or the site) choose °C or °F for climate display, backed by a **store property** so the choice survives a restart.\n\n## Why this is filed now\n\nThe system used to have a version of this, bolted onto the language toggle: a long press on the EN/HE button prompted for °C/°F when switching Hebrew → English, and forced °C going the other way. The reasoning was sound at the time — someone switching a panel to English might be American and want Fahrenheit.\n\nIt never worked, in two independent ways, and both are instructive for whoever builds the replacement:\n\n1. **The prompt could not open.** It named its window by file path (`Windows/SelectTemperatureUnit`), but `OpenWindow` resolves `<store-object>/<GeneratorFn>`. Every real Hebrew → English long press raised `Script object Windows not found`, logged an ERROR and latched FailState on the panel — while the language changed anyway, so nothing was visible on screen.\n\n2. **The answer could not persist.** `!TemperatureUnit` is a renderer *device variable*. `BootScreen.xml`'s `<Initialize>` sets it to `\"C\"`, so even a working dialog would have been overwritten on the next panel boot. A user's °F would have lasted exactly one session.\n\nBoth are removed in `2e71a796`; the language toggle now only changes the language. This issue is the feature done properly.\n\n## Where it belongs\n\nClimate, not language. All nine consumers of the unit are climate surfaces:\n\n- `Subsystem/Climate.xml` — display at :60, :324; ± step at :119, :122\n- `Subsystem/HVAC.xml` — display at :55, :198; ± step at :85, :88\n- `Subsystem/ClimateDynamicList.xml` — display at :39\n\nNothing outside climate reads it.\n\n## Design notes for whoever picks this up\n\n- **A store property, not a device var.** That is the whole point — the current mechanism cannot remember anything. Scope is the open question: per-panel (an American guest's panel), per-room, or site-wide on `/Global/Settings`. Per-panel matches the original intent.\n- **Unset must keep meaning Celsius.** It already does, by code rather than by accident: `ConvertTemperature`'s target-unit match falls through `_ => celsius` (`expression.rs:497`), and the ± steps read `If(!TemperatureUnit = 'F', 5/9, 1)`. Preserve that so an unmigrated store is unaffected.\n- **The old dialog's body is worth reading** before writing a new one — `git show 2e71a796^:data/frameworks/hometouch/panel_scripts/Windows/SelectTemperatureUnit.xml`. Note its text was hardcoded English and never localized, which is its own reason not to resurrect it as-is; a new one should use `TextIsLiteral` against `/Global/Strings`.\n- **If a dialog is wanted at all.** It may be better as a row on the climate screen or in More Options than as a modal. An unprompted modal on a language toggle is what made the original feel wrong in the first place.\n\n## Not urgent\n\nNothing is broken by its absence — every panel reads Celsius today, which is correct for the deployed sites.\n",
+          "closedAt": null,
+          "comments": {
+            "nodes": [],
+            "totalCount": 0
+          },
+          "createdAt": "2026-08-28T17:42:48Z",
+          "id": "I_kwDONszNXs8AAAABOsJV2A",
+          "labels": {
+            "nodes": [
+              {
+                "name": "todo"
+              },
+              {
+                "name": "p2"
+              },
+              {
+                "name": "hometouch"
+              }
+            ],
+            "totalCount": 3
+          },
+          "milestone": null,
+          "number": 244,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "OPEN",
+          "stateReason": null,
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABOsJV2M8AAAAHCT3C6g"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABOsJV2M8AAAAHCT3C-A"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABOsJV2M8AAAAHCT3DBg"
+              }
+            ]
+          },
+          "title": "Temperature unit (°C/°F) as a persisted climate setting",
+          "updatedAt": "2026-08-29T20:28:03Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "## What is missing\n\nThe SDL and XML exporters have no rendered form for a **cross-object qualified\nsubscription** — `on class(X) PropertyChanged(P)`, `on ref(P) …`, `on children(#C) …`.\nTheir script keys carry a qualifier (`class~` / `ref~` / `referrers~`) that the exporters'\n`on <EventName>(<Property>)` shape cannot express.\n\nAs of gh #235 this is handled by emitting a comment naming the omitted subscription:\n\n```sdl\n// cross-object subscription \"referrers~Parent;*Scheduler/ScheduleItem|.Description\" omitted — this exporter has no form for a qualified subscription\n```\n\nSo the export succeeds and never misrepresents the store, but it is **lossy**: the\ndocument does not round-trip, and a reader of `obj.sdl` on such a class does not see one\nof its handlers.\n\n## Why it is worth fixing rather than leaving\n\nIt is not a rare shape. `Std/Scheduler`'s `Schedule` has one; so do classes across\n`ui_builder`, `mdns` and the `ha` framework. `/Schema/Modules` as a whole contains several,\nwhich means `obj.sdl` on any large subtree is currently incomplete.\n\nThe consumers are real: `obj.sdl` backs the Web UI's **View SDL** dialog (see the source-spans\nwork), and `get_sdl_for_object` / `get_xml_for_object` back the export RPC that `store-cli`\nuses.\n\n## History, because it explains the current shape\n\nThis case used to `panic!` — in `ScriptDescriptor::get_event_name_from_script_key`, whose\n`&'static str` return type could not carry the computed name a qualified key derives. Both\ncallers were the two exporters, so **`obj.sdl` on any class with such a handler killed the\nrequest**. The panic ran on a tokio worker, so the caller saw only `h2 protocol error` and\nnever a diagnosis. `store_layer/blob_access.rs` still carries a `catch_unwind` around the two\nexporters that was added because of exactly this.\n\nAn intermediate fix substituted `get_event_name` — which produces the *script object name* —\nand that was worse: it emitted `on Tag_Changed(Tag) {` for a plain `on PropertyChanged(Tag)`,\nwhich does not parse. Both are described in\n`docs/superpowers/specs/2026-08-26-query-in-transaction-hooks-design.md` §14.\n\n## What a fix looks like\n\nThe information is all present — `parse_qualified_key` already decomposes a key into\n`(qual_type, qual_value, class_filter, base_event_key)`. What is missing is the rendering:\n\n1. SDL: emit `on class(<qual_value>) <BaseEvent>(<Prop>)` / `on ref(<prop>) …` /\n   `on children(#<class>) …`, matching the parser's accepted forms in\n   `store_server/src/import/sdl/parser.rs`.\n2. XML: needs an element shape for the qualifier — there is none today, so this half is a\n   format decision, not just a rendering one.\n3. A round-trip test. `tests/schema/export_event_names.tests` currently pins that the\n   omission is *stated*; it should become a pin that the subscription is *rendered*.\n\nWorth checking while there: the `catch_unwind` in `blob_access.rs` and its comment are now\nstale (the panic it guards is gone). Deleting it would turn the `tlv_apartment` corpus into a\nregression net for the whole exporter — which is what would have caught the intermediate fix\nabove.\n\n## Not in scope here\n\nWhether `obj.sdl` should render `on ObjectCreated` or `on Created` — the exporter emits the\ninternal event name, and whether the SDL parser accepts it round-trip is a separate question\nthat predates all of this.\n",
+          "closedAt": "2026-09-30T12:19:58Z",
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-09-06T21:13:30Z"
+              },
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-09-30T12:19:57Z"
+              }
+            ],
+            "totalCount": 2
+          },
+          "createdAt": "2026-09-06T20:57:48Z",
+          "id": "I_kwDONszNXs8AAAABP-9HSw",
+          "labels": {
+            "nodes": [
+              {
+                "name": "todo"
+              },
+              {
+                "name": "p3"
+              },
+              {
+                "name": "sdl"
+              }
+            ],
+            "totalCount": 3
+          },
+          "milestone": null,
+          "number": 270,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "CLOSED",
+          "stateReason": "COMPLETED",
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABP-9HS88AAAAHUf5H4Q"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABP-9HS88AAAAHUf5H8w"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABP-9HS88AAAAHUf5IAw"
+              }
+            ]
+          },
+          "title": "SDL exporter has no form for a cross-object qualified subscription (omitted with a comment)",
+          "updatedAt": "2026-09-30T12:19:58Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "## The failure\n\nA `store-test tests/mdns tests/media` run (172 tests) failed one test on the implicit WARN\nbaseline:\n\n```\nASSERTION FAILED  no_logs { level_min: WARN }\n  [WARN] BatchSpanProcessor dropped a Span due to queue full. ...\n      file=.../opentelemetry_sdk-0.31.0/src/trace/span_processor.rs\n      name=BatchSpanProcessor.SpanDroppingStarted\n```\n\nThe named test (`media.spotify.guard: junk, the legacy user form, and an empty value are all\nrefused`, `tests/media/spotify_adversarial.tests`) has nothing to do with spans. Alone it is\n**7 passed, 0 failed**; it only fails as part of a large run.\n\n## The mechanism\n\n`OTEL_BSP_MAX_QUEUE_SIZE` is handled in exactly one place — `store_server/src/main.rs`\n(`otel_queue_size`, plus the deliberate ignore-unparseable behaviour documented at :360) — and\nexported in exactly one place, `scripts/dev-server.sh:228` (16384), which reaches the **server**\nit launches.\n\n`store-test` is a separate process started from the operator's shell. It neither reads the\nvariable nor inherits dev-server.sh's export, so **its own span queue runs at the SDK default**\nwhile emitting a span per script across the whole run. A large selection overflows it, and the\nSDK's complaint about its own queue lands in whichever test's log bucket is open.\n\n## Why it is worth fixing rather than tolerating\n\nThis is the shape gh #138 just closed on the other side: **an instrument must not emit into the\nchannel it measures.** A telemetry-pipeline WARN is not a statement about the store, but the\nimplicit baseline cannot tell the difference, so it fails an unrelated test and teaches everyone\nthat a red mdns/media run might be nothing. That erosion is the actual cost.\n\nIt has been seen before — `docs/superpowers/notes/2026-08-26-containment-invariant-findings.md`\nattributed the same overflow and attached the evidence to #199. **#199 is now CLOSED** (it\nexposed the knob in `OtelConfig` with env precedence), so the flake itself currently has no open\nhome; this is that home.\n\n## Two candidate fixes, not a decision\n\n1. **Mirror `store_server`'s handling in store_test's tracing init** — the smaller change, and it\n   makes the knob mean the same thing in both processes. Worth copying the ignore-unparseable\n   nuance rather than re-deriving it.\n2. **Classify SDK-internal records out of the baseline**, the way `log_broker::is_harness_internal`\n   already drops store_test's own records. Broader, and it fixes the class rather than one queue —\n   but it needs a rule that cannot accidentally swallow real WARNs.\n\n(1) alone leaves a larger run failing the same way; (2) alone leaves the queue genuinely dropping\nspans, which is a real observability loss. They are probably both wanted.\n\n## Noticed while\n\nWorking on gh #96 (mDNS superseded-service re-bind). Not caused by that change — reproduced with\nthe branch's own tests passing 34/34 — and out of its blast radius, hence filed rather than fixed\ninline.",
+          "closedAt": "2026-09-28T23:44:42Z",
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-09-05T19:32:25Z"
+              },
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-09-06T16:51:35Z"
+              },
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-09-08T08:22:20Z"
+              },
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-09-15T13:13:50Z"
+              },
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-09-15T20:46:35Z"
+              },
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-09-15T21:55:09Z"
+              },
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-09-28T01:27:58Z"
+              },
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-09-28T23:44:41Z"
+              }
+            ],
+            "totalCount": 8
+          },
+          "createdAt": "2026-09-05T05:19:53Z",
+          "id": "I_kwDONszNXs8AAAABPzse_Q",
+          "labels": {
+            "nodes": [
+              {
+                "name": "bug"
+              },
+              {
+                "name": "p2"
+              },
+              {
+                "name": "harness"
+              }
+            ],
+            "totalCount": 3
+          },
+          "milestone": null,
+          "number": 266,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "CLOSED",
+          "stateReason": "COMPLETED",
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABPzse_c8AAAAHH7Q67Q"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABPzse_c8AAAAHRAltmw"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABPzse_c8AAAAHUf5FrQ"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABPzse_c8AAAAHUf5Fvg"
+              },
+              {
+                "id": "UNLE_lADONszNXs8AAAABPzse_c8AAAAHdZHYEw"
+              }
+            ]
+          },
+          "title": "store-test's own OTel span queue is at the SDK default, so a large run fails an innocent test",
+          "updatedAt": "2026-09-28T23:44:44Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "## Observed\n\n`tests/media/audio_app.tests:943` — `media.audio_app: every State producer, and both guards` — failed on a full `scripts/pre-merge-check.sh` run (20-way parallel, 2141 passed / 2 failed):\n\n```\nscript <assert> ... failed [ASSERTION]\n  a refresh during Setup leaves Setup\n```\n\nRe-run solo: 3 consecutive runs, 36 passed / 0 failed each time.\n\nObserved on branch `feat/scoped-annotations-phase1`, but see \"Confirmed\" — the branch is not the cause.\n\n## Confirmed\n\nThe assertion is a race against a **wall-clock budget that lives in the code**, not a sync problem.\n\n`MockResource` (`data/frameworks/media/modules/media/orchestrator_testing.sdl:260`) carries\n`default AssumeDelayMs = 150` and its own comment says it \"self-confirms after a short settle,\nwhich is the Assumed path a write-only device really uses.\"\n\nThe guard at `audio_app.tests:937-943` does:\n\n```\n:938  create MockResource \"Slow\" under /RoomB/Media/Resources\n:939  aa_select        -> setup begins, the 150 ms settle starts\n:940  aa_app           -> round-trip 1\n:941  assert state == \"Setup\"\n:942  aa_verb refresh  -> round-trip 2\n:943  aa_app + assert state == \"Setup\"   <-- round-trip 3\n```\n\nSo the assertion requires **three gRPC round-trips to complete inside 150 ms**.\n\n- Solo, a script round-trip here is ~10-50 ms, so the three fit and the guard holds.\n- Under the gate's 20-way parallelism the same run reports **p50 82 ms / p90 898 ms / p99 2743 ms**\n  per script. Three round-trips at p90 exceed the 150 ms settle several times over, the mock\n  self-confirms early, and the app has legitimately left `Setup` before the assertion reads it.\n\nThis matches CLAUDE.md's description of the ONLY case where contention is the honest\nexplanation: *\"a named, code-resident wall-clock budget ... gets legitimately crossed under N-way\nparallelism.\"* The budget is `AssumeDelayMs = 150` and the crossing is the three round-trips.\n\n## Hypotheses (NOT confirmed)\n\n- The failing run was the first after a `manifest.rs` `FORMAT_VERSION` bump (5 -> 6) on that\n  branch, which forces one full re-sync of every module. That lengthens first-load setup and\n  would WIDEN the window, but it does not create it — the race is present on `main` at any\n  parallelism high enough to push three round-trips past 150 ms. I did not reproduce on `main`,\n  so \"pre-existing\" is inference from the mechanism rather than a measurement.\n- I have not checked whether the sibling guard at `:933-936` (room off -> NotActive) has the same\n  shape. It does not depend on the settle, so probably not.\n\n## Suggested fix (for whoever owns this area)\n\nPer CLAUDE.md, scale the budget before reaching for isolation:\n\n- make `AssumeDelayMs` scale with `STORE_BUDGET_FACTOR`, like the Rhai deadlines do, so the\n  settle grows with the parallelism that is squeezing it; **or**\n- raise it for this fixture only — the guard needs \"long enough for three round-trips\", not\n  150 ms specifically; **or**\n- last resort, `isolated group \"media\" reason contention`.\n\nWhat would NOT be right is deleting the guard or asserting on a different state: the thing it\npins — a refresh mid-setup must not knock the app out of `Setup` — is real, and it is the kind\nof guard that is only interesting while the device is genuinely mid-settle.\n",
+          "closedAt": "2026-09-30T09:15:19Z",
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-09-19T09:56:29Z"
+              },
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-09-30T09:15:18Z"
+              }
+            ],
+            "totalCount": 2
+          },
+          "createdAt": "2026-09-12T08:14:25Z",
+          "id": "I_kwDONszNXs8AAAABQ8gMiQ",
+          "labels": {
+            "nodes": [
+              {
+                "name": "bug"
+              },
+              {
+                "name": "p3"
+              },
+              {
+                "name": "harness"
+              }
+            ],
+            "totalCount": 3
+          },
+          "milestone": null,
+          "number": 298,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "CLOSED",
+          "stateReason": "COMPLETED",
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABQ8gMic8AAAAHUf5V_w"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABQ8gMic8AAAAHUf5WGQ"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABQ8gMic8AAAAHUf5WLg"
+              }
+            ]
+          },
+          "title": "flake(media): audio_app's mid-setup guard races MockResource's 150ms AssumeDelayMs under parallel load",
+          "updatedAt": "2026-09-30T09:15:19Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "Found by the deep gate of the store-side `ArtHash` consumer (memo `docs/superpowers/specs/2026-09-07-art-hash-consumer-memo.md` §7, Codex rounds 3 and 4). Two residuals share one root cause and are recorded here rather than papered over in SDL.\n\n## The gap\n\nAn inbound MQTT message carries no identity of the CONNECTION (or subscription round) it arrived on. `DispatchItem` in `store_server/src/mqtt.rs` has topic, payload and retain flag; a handler cannot tell a message queued from the previous connection from one belonging to the retained replay of the new connection.\n\n## Where it bites\n\n`AudioMediaSystem` keeps a per-session, memory-only `ArtSinceDocument` flag: \"a picture arrived after the last state document\", which makes a null `ArtHash` in the NEXT document not clear the picture (the defence against a retained replay delivering the new picture and then the previous, null, document). The flag is reset on every replay boundary the SDL can see — the client's `Status` flipping to `Connected` (the ConnAck arm awaits that write before it resubscribes) and the system's `MqttClient` reference being re-pointed (which starts a retained delivery through `refresh_subscription` with no `Status` transition).\n\n- **Residual A (round 3, S1):** an Art message from the OLD connection still sitting in the dispatch queue when the connect reset runs is dispatched afterwards and re-arms the protection; the new replay's genuine null is then absorbed and the previous track's cover strands beside a null mirror.\n- **Residual B (round 4, S1):** one transaction that enables a client and then points the system at it can let CONNACK, the replay and the Art dispatch all run before the pending `PropertyChanged(MqttClient)` handler does; same outcome.\n\nBoth are narrow (they need a queued stale picture or a same-transaction enable-and-point) and both are unfixable from SDL: every sound remedy needs the connection identity the store does not expose, and the obvious SDL guards contradict each other (round 4's own S3).\n\n## A shape\n\nStamp each `DispatchItem` with a per-client connection generation (bumped on ConnAck) and expose it to handlers — e.g. a `connection_gen` key beside `retain` in the `+props` map — so a handler can drop, or treat as stale, a message from a generation older than the one it last saw the boundary event for. The `+props` handler form already exists (`docs/guides/mqtt.md`); a retained-replay marker would be a second consumer of the same field. Sizing: kernel + guide + one SDL consumer; T2 because it is a wire-adjacent handler contract.\n",
+          "closedAt": null,
+          "comments": {
+            "nodes": [],
+            "totalCount": 0
+          },
+          "createdAt": "2026-09-07T18:38:48Z",
+          "id": "I_kwDONszNXs8AAAABQI5aAA",
+          "labels": {
+            "nodes": [
+              {
+                "name": "todo"
+              },
+              {
+                "name": "p3"
+              },
+              {
+                "name": "kernel"
+              }
+            ],
+            "totalCount": 3
+          },
+          "milestone": null,
+          "number": 278,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "OPEN",
+          "stateReason": null,
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABQI5aAM8AAAAHJmdbrQ"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABQI5aAM8AAAAHJmdb5g"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABQI5aAM8AAAAHJmdcMQ"
+              }
+            ]
+          },
+          "title": "Inbound MQTT dispatch carries no connection identity, so a handler cannot tell a stale queued message from the new connection's retained replay",
+          "updatedAt": "2026-09-07T18:38:48Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "Observed once on 2026-09-09, lane t3, in a full `cargo test -p store_server --bin store_server` run (1516 passed / 1 failed). Green in isolation, and green on the immediately following full run (1517/0) and two full runs before it.\n\n```\n---- class_defaults_tests::a_type_with_a_display_script_still_gets_the_script_output stdout ----\nassertion `left == right` failed: a type WITH a GetDisplayValue must still get its\nscript's output; `2.5` alone would mean the display lookup was skipped, not narrowed\n  left: \"\"\n right: \"2.5 units\"\n```\n\n## The named mechanism (hypothesis, not yet confirmed)\n\n`\"\"` is not an arbitrary wrong answer — it is the **documented degradation for a `GetDisplayValue` that raises**, pinned by the sibling test `a_throwing_display_script_degrades_to_no_display_value` in the same file.\n\nA Rhai script that crosses its per-invocation wall-clock deadline surfaces as a throw (`Script terminated`), which is the same arm. So the reading is: under N-way parallelism in the Rust suite, `Labeled`'s `on GetDisplayValue` (`value.to_string() + \" units\"`) crossed its deadline and degraded exactly as a throwing script does.\n\nThat is the flake class `STORE_BUDGET_FACTOR` exists for. `scripts/dev-server.sh` exports `8`; **`cargo test` exports nothing**, so the in-process Rust suite runs every Rhai deadline at factor 1 while running ~16 tests concurrently, several of which reconcile whole templates.\n\n## Why it is filed rather than fixed\n\nThe mechanism above is consistent with every observation but is **not confirmed** — the degradation is silent, so there is no log line naming a deadline breach at the moment it happened, and the run is gone. Confirming it means either capturing the error text before it is discarded, or reproducing under deliberate load.\n\nWhat makes it worth recording rather than shrugging at: the failure is **indistinguishable from a real regression** in the display-value narrowing that test guards (gh #229), so the next person to see it will spend the same time deciding whether it is one.\n\n## Suggested next steps\n\n1. Make the degradation **observable**: when `GetDisplayValue` raises, log at DEBUG with `kind=` and the error text, rather than silently returning `\"\"`. That alone turns this from an unfalsifiable flake into a one-line diagnosis, and it costs nothing at runtime.\n2. Then decide whether the Rust suite should carry `STORE_BUDGET_FACTOR` the way `dev-server.sh` does. If step 1 shows deadline breaches under load, it should.\n3. If step 1 shows something else raising, that is a real bug and this issue is the trace.\n\nDo **not** paper over it with a retry or a widened assertion — the repo's own rule is that a flake without a code-level explanation is the start of an investigation.\n\n## Context\n\nSeen while arming the property-collision detector (`fix/collision-temperature-ack`). Arming adds a whole-store pass to every aggregate reconcile, which plausibly increased contention and tipped a marginal case; that would make this newly *visible* rather than newly *broken*. The suite was green on that same code immediately afterwards.\n",
+          "closedAt": null,
+          "comments": {
+            "nodes": [],
+            "totalCount": 0
+          },
+          "createdAt": "2026-09-09T20:46:33Z",
+          "id": "I_kwDONszNXs8AAAABQiMiRw",
+          "labels": {
+            "nodes": [
+              {
+                "name": "bug"
+              },
+              {
+                "name": "p3"
+              },
+              {
+                "name": "harness"
+              }
+            ],
+            "totalCount": 3
+          },
+          "milestone": null,
+          "number": 291,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "OPEN",
+          "stateReason": null,
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABQiMiR88AAAAHUf5TjQ"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABQiMiR88AAAAHUf5Tqw"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABQiMiR88AAAAHUf5TvQ"
+              }
+            ]
+          },
+          "title": "Flake: a_type_with_a_display_script_still_gets_the_script_output reads \"\" under load — GetDisplayValue degrades silently, so a deadline breach is indistinguishable from a regression",
+          "updatedAt": "2026-09-19T09:55:34Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "`airplay_output.tests` asserts a message COUNT on the lane that is allowed to coalesce it.\n\n## What happened\n\n`tests/media/airplay_output.tests:320` failed once in a full `pre-merge-check.sh` run\n(2130 passed, 1 failed) and passes in isolation:\n\n```\nassert(e3.count == 2 && e3.payload == \"\" && e3.topic == `${root}/Session/${name}`, ...)\n  got: #{\"count\": 1, \"payload\": \"\", \"topic\": \"AO1789067006106/Session/m3298\"}\n```\n\n`payload` and `topic` are exactly right. Only the COUNT is short.\n\n## The mechanism (named, not \"load\")\n\n`SessionPublishCount` is incremented in `on_session_echo`, an **inbound** MQTT handler\n(`data/frameworks/media/modules/media/air_zone_audio.sdl:1197`), so it counts messages\ndelivered back from the broker — not store-side publishes.\n\nThe step under test publishes **twice to the same topic**: the emptied member set, then the\nretained clear. The inbound dispatch queue coalesces retained latest-state messages\n**last-wins per (consumer, method, topic)** with `COALESCE_PER_KEY_DEPTH=1`\n(`store_server/src/mqtt.rs`, `CoalescingQueue`; spec\n`2026-06-22-mqtt-inbound-dispatch-coalescing-design.md`). Two same-topic retained messages\narriving while the first is still pending collapse into one, keeping the later.\n\nThat predicts the observation exactly: `count == 1`, `payload == \"\"` (the clear is the later\none), correct topic. Coalescing is a no-op at ≤1 pending per key, which is why it only shows\nunder backpressure — and a full gate runs phase 3 immediately after two Rust suites, with\n`STORE_PRECOMMIT_AUDIT=strict` armed, so the server is slower than in a bare corpus run.\nReplacing a pending item is a designed last-wins, not an overflow, so it emits no\n`kind=mqtt_backpressure` WARN — silent by construction.\n\n**So the test asserts \"no coalescing happened\", which is not a property of the feature.**\n\n## What is NOT in question\n\nThe invariant the test's own comment cares about — the retained clear must be LAST, or the\nbroker keeps a zero-member document for a session that no longer exists — is fully asserted\nby `payload == \"\"`, the topic, and `ao_sessions().len() == 0` on the line above. All three\npassed. Nothing about the delete path is suspected.\n\n## What is worth deciding\n\nThe count also carried a second claim: that the **emptied member set is published BEFORE the\nclear**, which is what lets the daemon park the speaker. Coalescing can eat that message from\nthis echo lane entirely, so the lane cannot observe that ordering under load. Softening the\nassertion to `count >= 1` would make the test honest but would silently drop that coverage.\nGiving the ordering an observable that survives coalescing is media-domain work — hence a\n`design-question`, not a one-line test fix.\n\n## What I did not verify\n\nI did not instrument `CoalescingQueue` to catch the replacement in the act; the mechanism is\ninferred from a prediction that matches all three observed fields plus the isolation result,\nnot from a counter that witnessed it. A definitive check would be a per-key coalesce counter\non the dispatch queue.\n\nFound while landing an unrelated branch (property-name collisions); nothing in that diff\ntouches MQTT dispatch, and the test passes in isolation on it.\n",
+          "closedAt": "2026-09-30T09:15:24Z",
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-09-30T09:15:23Z"
+              }
+            ],
+            "totalCount": 1
+          },
+          "createdAt": "2026-09-10T19:14:53Z",
+          "id": "I_kwDONszNXs8AAAABQtaunw",
+          "labels": {
+            "nodes": [
+              {
+                "name": "design-question"
+              },
+              {
+                "name": "p2"
+              },
+              {
+                "name": "harness"
+              },
+              {
+                "name": "media-port"
+              }
+            ],
+            "totalCount": 4
+          },
+          "milestone": null,
+          "number": 293,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "CLOSED",
+          "stateReason": "COMPLETED",
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABQtaun88AAAAHM1N30Q"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABQtaun88AAAAHM1N5Fg"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABQtaun88AAAAHM1N6Jw"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABQtaun88AAAAHM1N7PQ"
+              }
+            ]
+          },
+          "title": "airplay_output.tests asserts a message count on the lane that is allowed to coalesce it",
+          "updatedAt": "2026-09-30T09:15:24Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "A mutation gate (2026-09-11) found a test whose `intent` block claims coverage the body does not\nhave. This is the failure class where a reader auditing by test intent is **actively misled**, so\nit is worth more than the missing assertion itself.\n\n## The test\n\n`media.audio_app: a wind-down waits only on keys the daemon was asked to remove`\n(`tests/media/audio_app.tests`)\n\nIts `intent.description` states, verbatim, that it covers **two** defects:\n\n> \"...and `request_exit` decided by presence while `leave` acts by intent, so a presence-only\n> session armed a wait for a removal nobody was ever asked to perform. Both found by an adversarial\n> gate.\"\n\nThe body exercises only the first. There is **no presence-only arm anywhere in it** — no case where\nintent has left while the daemon is still rendering. What it actually asserts is (a) the `Members`\nintersection and (b) the session-scoped escape hatch, which it carries in its last two lines.\n\n## What the gate measured\n\n- Replacing `session_by_intent(keys)` with `find_session()` (the presence-falling-back picker, i.e.\n  the defect direction): **233 passed, 0 failed.**\n- Replacing it with a presence-ONLY picker: 227 passed, **6 failed**. So the suite pins \"must find\n  the session by intent\" but not \"must not additionally fall back to presence\".\n\n## The open question this raises, which should be settled before adding a test\n\nThe finder's own analysis, not executed: this may be an **equivalent mutant** rather than a coverage\nhole. With the `Members` intersection in place, a presence-only session contributes no keys to\n`waiting` (intent gone means the keys are not in `Members`), so both pickers reach the same empty\n`waiting` and the same immediate `exit_completed()`. If that is right, `session_by_intent` is now\ndefence-in-depth that the intersection subsumes, and no test *can* distinguish them.\n\n**Either way the `intent` block's claim is false** and must be fixed — by adding the arm, or by\nstriking the claim and saying why the guard is redundant.\n\nReport: `gate2-mutation-report-store.md`.\n",
+          "closedAt": "2026-09-30T09:15:22Z",
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-09-11T18:02:31Z"
+              },
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-09-30T09:15:21Z"
+              }
+            ],
+            "totalCount": 2
+          },
+          "createdAt": "2026-09-11T09:54:13Z",
+          "id": "I_kwDONszNXs8AAAABQzuc4A",
+          "labels": {
+            "nodes": [
+              {
+                "name": "bug"
+              },
+              {
+                "name": "p2"
+              },
+              {
+                "name": "harness"
+              }
+            ],
+            "totalCount": 3
+          },
+          "milestone": null,
+          "number": 294,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "CLOSED",
+          "stateReason": "COMPLETED",
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABQzuc4M8AAAAHNZPE5w"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABQzuc4M8AAAAHNZPFUA"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABQzuc4M8AAAAHNZPHrw"
+              }
+            ]
+          },
+          "title": "A test's intent block claims the presence-vs-intent defect it never exercises (and the guard may be an equivalent mutant)",
+          "updatedAt": "2026-09-30T09:15:22Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "A mutation gate (2026-09-11) found that only **two of five** op-window close sites are pinned by\nany test — and the unpinned ones include the entry point of the feature that just shipped.\n\n## Method note, because it changes what the results mean\n\nRescoping `Class=\"OpWindow\"` to a bare `<CloseWindow/>` is an unreliable probe on its own: where\nthe op window happens to be the TOP window, a bare close closes it anyway, so the mutant is\nbehaviourally equivalent and a green result proves nothing. The finder therefore also **deleted**\nthe close at each site.\n\n## Results\n\n| site | what it is | scope changed | close DELETED |\n|---|---|---|---|\n| `Media.xml:1252` `FromAnotherRoomButton` — this feature's own entry into the playing-rooms list | green (equivalent) | **GREEN — no test** |\n| `Media.xml:1405` recent row | green (equivalent) | RED |\n| `Media.xml:1525` `MixButton` to `play_mix_now` | — | **GREEN — no test** |\n| `Media.xml:1831` source cell to `play_source_path` | RED | (implied) |\n| `DynamicListView.xml:420` `DynListPickerEntry` | — | **GREEN — no test** |\n\nOnly the source-cell path has its *scope* pinned. The recents path passes with a bare close, so\nnothing holds `Class=\"OpWindow\"` there — fine today because the op window is the top window, and it\nstops being fine the moment anything stacks above it.\n\n## Related, and the reason this is worth its own issue\n\n`DynamicListView.xml` appears not to be exercised by the media suite **at all** — deleting a close\nin it changes nothing. That is also why gate #1's LOW-10 (the new `OnValueChange` /\n`ListDismissTimer` / `NavigateBack` indirection being unguarded against a double-pop, and\n`DismissGen` being shared across panels) **cannot be ruled on by any test**. The store-side\n`DismissGen` bump is tested; the XML that consumes it is not.\n\nReport: `gate2-mutation-report-store.md`.\n",
+          "closedAt": "2026-09-30T09:15:26Z",
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-09-30T09:15:25Z"
+              }
+            ],
+            "totalCount": 1
+          },
+          "createdAt": "2026-09-11T09:54:15Z",
+          "id": "I_kwDONszNXs8AAAABQzudkg",
+          "labels": {
+            "nodes": [
+              {
+                "name": "bug"
+              },
+              {
+                "name": "p2"
+              },
+              {
+                "name": "harness"
+              }
+            ],
+            "totalCount": 3
+          },
+          "milestone": null,
+          "number": 295,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "CLOSED",
+          "stateReason": "COMPLETED",
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABQzudks8AAAAHNZPJxQ"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABQzudks8AAAAHNZPKbQ"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABQzudks8AAAAHNZPK-A"
+              }
+            ]
+          },
+          "title": "Three of five op-window close sites have no test, including this feature's own entry point",
+          "updatedAt": "2026-09-30T09:15:26Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "## Observed\n\n`fix/script-method-error-chain` fixed three sites in `store_server/src/scripting/rhai/mod.rs`\nwhere a Rhai-visible error message was built with `format!(\"...: {e}\")` and `e` is an\n`error_stack::Report`. A Report's plain `Display` prints **only its first context**\n(error-stack 0.7, `src/fmt/mod.rs`, `impl Display for Report`), so every context below the\ntop one — which is where the actual reason usually lives — was rendered nowhere. The\nreported symptom was a script catching exactly this and nothing more:\n\n```\nError calling store method 'Login': Calling method \"Login\"\n```\n\nReproduction of the fixed instance: `tests/rhai/method_error_chain.tests`, with `{e:#}`\nreverted to `{e}` at the shorthand dispatch site.\n\nThe same `format!(\"...{e}\")` shape appears widely across the rest of the Rhai layer, and\nthose sites were deliberately left out of that change as an unrelated sweep:\n\n```\n$ grep -rn \"{e}\\|{err}\\|{e:?}\" store_server/src/scripting/rhai --include='*.rs' | grep format | awk -F: '{print $1}' | sort | uniq -c | sort -rn\n  13 store_server/src/scripting/rhai/misc.rs\n  11 store_server/src/scripting/rhai/service_process.rs\n   8 store_server/src/scripting/rhai/image.rs\n   5 store_server/src/scripting/rhai/object/json/inbound.rs\n   4 store_server/src/scripting/rhai/store.rs\n   4 store_server/src/scripting/rhai/mqtt.rs\n   2 store_server/src/scripting/rhai/timer_syntax.rs\n   1 store_server/src/scripting/rhai/strict_map.rs\n   1 store_server/src/scripting/rhai/object/write_functions_impl.rs\n   1 store_server/src/scripting/rhai/object/read_functions_impl.rs\n```\n\n## Expected\n\nA message a script (or a log line) can act on names the reason, not only the operation\nthat was attempted. Where the value is a Report, that means the alternate form — `{e:#}`,\nwhich joins every context with `\": \"` — or routing through `into_rhai`\n(`store_server/src/scripting/rhai/errors.rs`), which renders the full `{:#?}` tree and is\nalready the house convention for the `obj.call_method(...)` path.\n\n## Confirmed\n\n- `error-stack` 0.7 `Display` prints the first context and stops unless the alternate flag\n  is set; with it, contexts are joined by `\": \"`. Attachments are skipped either way —\n  `~/.cargo/registry/src/*/error-stack-0.7.0/src/fmt/mod.rs`, `impl<C: ?Sized> Display for Report<C>`.\n- The three sites in `store_server/src/scripting/rhai/mod.rs` (the store-method dispatch\n  callback) were truncating, and now use `{e:#}`. Fixed, with a negative control.\n- `into_rhai` / `error_to_rhai` render `{r:#?}` ANSI-stripped —\n  `store_server/src/scripting/rhai/errors.rs`.\n\n## Hypotheses — UNVERIFIED, do not trust\n\n- **The counts above are candidate sites, not confirmed defects.** The grep matches any\n  `{e}`-shaped interpolation. Some of those `e` values are plain `thiserror` enums or\n  `Box<EvalAltResult>`, where the alternate flag changes nothing and the text is already\n  complete. Each site needs its own type check; a blind sweep to `{e:#}` would be churn.\n- The likely-real subset is wherever a Report arrives with a `change_context` above the\n  reason — the same shape as the fixed bug. `store.rs` and `object/json/inbound.rs` are\n  worth reading first, since both sit on paths that wrap store-layer errors.\n- Whether any of these are reachable from a script that *catches* the error (user-visible)\n  versus only from a log line (still worth fixing, lower priority) is unknown per site.\n\n## The work\n\nWalk the candidate list, classify each site as Report-truncating / not-a-Report /\nalready-complete, fix the first class, and note the classification in the commit so the\nnext reader does not re-derive it. A DSL regression test is only warranted where a site is\nscript-catchable; `tests/rhai/method_error_chain.tests` is the pattern to copy, including\nthe by-hand negative control it documents.\n",
+          "closedAt": "2026-09-28T01:27:53Z",
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-09-28T01:27:53Z"
+              }
+            ],
+            "totalCount": 1
+          },
+          "createdAt": "2026-09-17T22:27:44Z",
+          "id": "I_kwDONszNXs8AAAABR22tOA",
+          "labels": {
+            "nodes": [
+              {
+                "name": "bug"
+              },
+              {
+                "name": "p2"
+              },
+              {
+                "name": "sdl"
+              },
+              {
+                "name": "self-contained"
+              }
+            ],
+            "totalCount": 4
+          },
+          "milestone": null,
+          "number": 326,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "CLOSED",
+          "stateReason": "COMPLETED",
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABR22tOM8AAAAHTNGubQ"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABR22tOM8AAAAHTNGuzA"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABR22tOM8AAAAHTNGvNA"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABR22tOM8AAAAHTNGvuQ"
+              }
+            ]
+          },
+          "title": "Rhai-layer error messages built with {e} truncate an error_stack Report to its first context",
+          "updatedAt": "2026-09-28T01:27:53Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "## The invariant that is violated today\n\nht_server mints a key for a panel **before the store has told it which object that panel is**. The UDP\ndiscovery query (`mdns.rs`) and the debug profile (`main.rs`) each convert the device's name and put the\nrenderer into `renderer_manager` under that string — no login has happened yet. Only later does\n`Login` (`service.sdl`) answer with the object id of the panel that name actually refers to.\n\nSo there are two answers to \"what is this panel called\", produced at two different times by two\ndifferent processes, and nothing reconciles them. gh #284 spent **five re-gate rounds** discovering that\nmoving the authority from one side to the other does not fix this — it only changes which side is wrong,\nand for which input:\n\n- **Store-side authority** (`Login` renames the object to match what ht_server derived): a pre-rule panel\n  duplicated; then, once found, a rename onto its twin that failed every later login at the commit\n  boundary; then a rewrite that MOVED a sort-prefix boundary (`_1-2_Kitchen` → `_1_2_Kitchen`, displayed\n  `2_Kitchen`) and left the panel unaddressable under the name that had just matched it.\n- **ht_server-side authority** (ht_server reads the store's name for the panel `Login` returned): reading\n  the RAW name split the manager key from the addressing key for every sort-prefixed panel — the\n  lifecycle task was spawned under a key the manager does not hold, so `RestartAll`, an admin stop and\n  the watchdog's respawn all silently did nothing (round 4). Reading the DISPLAY name instead is unsound\n  because **display names are not unique among siblings**, so one key can address two panels (round 5).\n\n## What shipped instead (gh #284, \"Option 3\")\n\nht_server uses its own converted name everywhere (manager key, lifecycle key, `LoginReply`), and the\nstore's `Login` finds but never renames. That is sound for every panel under the rule, because\n`find_object` matches an object's raw **or** display name, so `Kitchen` reaches `_1_Kitchen`.\n\n**Residual, accepted and stated** (spec §6.2 row 3): a panel whose stored name predates the rule is\nFOUND by `Login` — it is never duplicated — but its renderer's store paths do not resolve under the\nconverted spelling until the one-time migration script renames it. The rollout order runs the script\nfirst, and zero live panels are in that window today.\n\n## The actual fix\n\nKey the renderer by the panel `Login` RETURNED, so there is one authority and it speaks at the moment\nthe identity is known. Two shapes, neither designed yet:\n\n1. **Re-key after login.** The manager entry minted at discovery is moved to the name (or id) the store\n   answered with, once. Needs a design pass on what happens to a renderer that is already running under\n   the old key, and to the `debug_ready` sentinel directory, which is on disk.\n2. **Key by panel object id.** The id is the store's own identity for the panel and cannot be two\n   strings. Bigger change: the manager key, the lifecycle key and the sentinel path are all names today,\n   and the on-disk debug tree is named by the panel for a human to read.\n\nShape 2 also closes a smaller inconsistency this issue should carry: `script_pipeline.rs:1226` names the\ndebug directory for expanded scripts from the panel's RAW stored name while the sentinel beside it\n(`renderer_manager.rs:188`) uses the manager key, so a sort-prefixed panel writes into\n`panels/_1_Kitchen/` and `panels/Kitchen/`. Debug output only, no functional path; `PanelInfo` carries no\nname, so passing the key is a signature change through the pipeline.\n\n## Why this is its own task\n\nThe five rounds cost far more than the defect they were chasing, and every round after the third was\npaying for a design fault rather than a code fault. This wants the architect beat — duty 0 against both\nprocesses' actual behaviour, then 2–3 shapes with what each trades — not another patch at the call site.\n\nEvidence: spec `docs/superpowers/specs/2026-09-17-identifier-object-names-design.md` §6.2 and §14;\n`docs/process/gate-kpi.md` (gh #284, IG 37 → 89); controls\n`docs/superpowers/notes/2026-09-17-identifier-names-controls.toml`.\n",
+          "closedAt": "2026-09-30T07:11:32Z",
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-09-30T07:11:31Z"
+              }
+            ],
+            "totalCount": 1
+          },
+          "createdAt": "2026-09-17T22:17:31Z",
+          "id": "I_kwDONszNXs8AAAABR2yvOQ",
+          "labels": {
+            "nodes": [
+              {
+                "name": "design-question"
+              },
+              {
+                "name": "p2"
+              },
+              {
+                "name": "hometouch"
+              }
+            ],
+            "totalCount": 3
+          },
+          "milestone": null,
+          "number": 325,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "CLOSED",
+          "stateReason": "COMPLETED",
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABR2yvOc8AAAAHTMvAFA"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABR2yvOc8AAAAHTMvA1g"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABR2yvOc8AAAAHTMvBOg"
+              }
+            ]
+          },
+          "title": "ht_server should key a renderer by the panel the store RETURNED, not by a name it minted first",
+          "updatedAt": "2026-09-30T07:11:32Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "## Observed\n\nOnce, in a run of `tests/media/bundle_commands.tests` (7 tests, parallel, lane t1), two tests failed\ntogether and one of them reported a refusal naming **another test's data**:\n\n```\nmedia.bundle_commands: a command exports a subtree and imports it back as all-unchanged\n  Runtime error: call_method rpc: ... Script error: Runtime error:\n  This bundle's manifest says /BcRoot, but it also writes /BcRootOld/Kept, which is outside it.\n```\n\nThat test exports `/BcRoot` and imports the bytes it just received back into `/BcRoot`. `/BcRootOld/Kept`\nbelongs to a DIFFERENT test in the same file (the foreign-root guard test), which exports `/BcRootOld`.\nFor this message to appear there, the bundle that reached `ImportIt` was not the one `ExportIt` returned\nin that test.\n\nBoth tests pass in isolation, and the file passed 7/7 on ten subsequent runs (five on the unmutated\nbinary, five on a mutated one), so the frequency is roughly 1 in 10 and it did not reproduce.\n\n## Expected\n\nEach `.tests` test runs against its own `_harness_*` store; a value returned by `call_method` in one\ntest cannot be the value another test's call produced.\n\n## Confirmed\n\n- The two tests use separate harness stores (their names appear in the run output and differ).\n- The new harness `call_method` (`store_test/src/test/harness_rhai.rs`, added 2026-09-18) reads the\n  server URI and token from `HARNESS_CTX` BEFORE entering `block_in_place`, the same ordering the\n  existing `export_bundle` / `import_bundle` helpers use.\n- The failing run was the first run after a `store-cli restart`, on a binary built seconds earlier.\n\n## Hypotheses — UNVERIFIED, do not trust\n\n- A per-test token/context mixup in the harness when several tests call `call_method` concurrently —\n  the obvious candidate, since `call_method` is new, but the read ordering above argues against it.\n- A first-run-after-restart artefact: stores still loading while the first tests connect.\n- Something in `--show-failure`'s substring matching attributing one test's detail to another, in which\n  case the real failure was only in the foreign-root test and the cross-test appearance is a reporting\n  artefact rather than a store one. This is the cheapest to check and was not checked.\n\nFound while building phase 2 of the extensible palette (feat/extensible-palette). Filed rather than\ndismissed because a flake without a named mechanism is exactly what this repo does not accept; the\nevidence is one occurrence and is recorded here so the next occurrence has something to join.\n",
+          "closedAt": "2026-09-29T18:32:37Z",
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-09-29T18:32:37Z"
+              }
+            ],
+            "totalCount": 1
+          },
+          "createdAt": "2026-09-18T02:24:52Z",
+          "id": "I_kwDONszNXs8AAAABR4WnHQ",
+          "labels": {
+            "nodes": [
+              {
+                "name": "bug"
+              },
+              {
+                "name": "p3"
+              },
+              {
+                "name": "harness"
+              }
+            ],
+            "totalCount": 3
+          },
+          "milestone": null,
+          "number": 327,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "CLOSED",
+          "stateReason": "COMPLETED",
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABR4WnHc8AAAAHTV6NZQ"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABR4WnHc8AAAAHTV6NvA"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABR4WnHc8AAAAHTV6OAw"
+              }
+            ]
+          },
+          "title": "A bundle_commands test once saw another test's bundle (one occurrence, not reproduced)",
+          "updatedAt": "2026-09-29T18:32:37Z"
+        }
+      ]
+    }
+  },
+  "variables": {
+    "ids": [
+      "I_kwDONszNXs8AAAABM-dq7A",
+      "I_kwDONszNXs8AAAABM5fM9g",
+      "I_kwDONszNXs8AAAABMCRDhw",
+      "I_kwDONszNXs8AAAABMHxFpA",
+      "I_kwDONszNXs8AAAABMPKhJg",
+      "I_kwDONszNXs8AAAABNBGbrA",
+      "I_kwDONszNXs8AAAABNFogGg",
+      "I_kwDONszNXs8AAAABNLGupA",
+      "I_kwDONszNXs8AAAABNTHXmA",
+      "I_kwDONszNXs8AAAABNXY84A",
+      "I_kwDONszNXs8AAAABO0ak0A",
+      "I_kwDONszNXs8AAAABOYtv3w",
+      "I_kwDONszNXs8AAAABOfZSJw",
+      "I_kwDONszNXs8AAAABOsJV2A",
+      "I_kwDONszNXs8AAAABP-9HSw",
+      "I_kwDONszNXs8AAAABPzse_Q",
+      "I_kwDONszNXs8AAAABQ8gMiQ",
+      "I_kwDONszNXs8AAAABQI5aAA",
+      "I_kwDONszNXs8AAAABQiMiRw",
+      "I_kwDONszNXs8AAAABQtaunw",
+      "I_kwDONszNXs8AAAABQzuc4A",
+      "I_kwDONszNXs8AAAABQzudkg",
+      "I_kwDONszNXs8AAAABR22tOA",
+      "I_kwDONszNXs8AAAABR2yvOQ",
+      "I_kwDONszNXs8AAAABR4WnHQ"
+    ]
+  }
+}

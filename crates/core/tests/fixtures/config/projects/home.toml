@@ -1,0 +1,18 @@
+schema   = 1
+name     = "Villa Rakavy home automation"
+owner_id = "user_owner"
+maintainers = ["yuvalrakavy"]
+history_days = 30
+time_limits_days = { p0 = 2, p1 = 14, p2 = 60, p3 = 180 }
+
+[[member]]
+repo = "yuvalrakavy/Store"
+
+[[member]]
+repo = "yuvalrakavy/airzoned"
+
+[[member]]
+repo      = "rhaiscript/rhai"
+filter    = "author:yuvalrakavy"
+also      = [1193, 1194]
+read_only = true

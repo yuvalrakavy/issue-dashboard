@@ -1,0 +1,15 @@
+{
+  "seq": 40,
+  "time": "2026-10-23T08:00:00Z",
+  "kind": "outbox",
+  "subject": "Home Project",
+  "pred": 31,
+  "distinct": {
+    "taken_at": "2026-10-23T08:00:00.000Z"
+  },
+  "identity": "66cb47e7aa432ca1958b1428bd67ab1b138d34793c7f3e6101bc38cf1cc42809",
+  "data": {
+    "project": "home",
+    "taken_at": "2026-10-23T08:00:00.000Z"
+  }
+}

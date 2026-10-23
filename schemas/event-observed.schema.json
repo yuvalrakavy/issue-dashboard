@@ -305,8 +305,22 @@
                           "UNKNOWN"
                         ]
                       },
+                      "changes_requested_on": {
+                        "description": "The commits each reviewer's latest change-requesting review is on (absent in a read without reviews).",
+                        "type": "array",
+                        "items": {
+                          "$ref": "common.schema.json#/$defs/commit"
+                        }
+                      },
                       "head": {
-                        "$ref": "common.schema.json#/$defs/commit"
+                        "anyOf": [
+                          {
+                            "$ref": "common.schema.json#/$defs/commit"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
                       },
                       "checks": {
                         "anyOf": [
@@ -328,6 +342,55 @@
                         "type": "array",
                         "items": {
                           "$ref": "common.schema.json#/$defs/nodeId"
+                        }
+                      }
+                    }
+                  },
+                  "comments": {
+                    "description": "Comment metadata, not text: each comment's author, association and time (4.4); the last 50.",
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "author",
+                        "association",
+                        "at"
+                      ],
+                      "properties": {
+                        "author": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "association": {
+                          "$ref": "common.schema.json#/$defs/authorAssociation"
+                        },
+                        "at": {
+                          "$ref": "common.schema.json#/$defs/timestamp"
+                        }
+                      }
+                    }
+                  },
+                  "linked": {
+                    "description": "Each linked item's alias and state as read with this one (parent, sub-issues, blockers, closing references), so a link to an untracked item can be shown and a blocker's state known.",
+                    "type": "object",
+                    "additionalProperties": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "alias",
+                        "state"
+                      ],
+                      "properties": {
+                        "alias": {
+                          "$ref": "common.schema.json#/$defs/alias"
+                        },
+                        "state": {
+                          "enum": [
+                            "open",
+                            "closed",
+                            "merged"
+                          ]
                         }
                       }
                     }

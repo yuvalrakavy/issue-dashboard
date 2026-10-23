@@ -1,0 +1,9 @@
+schema   = 1
+name     = "Store kernel"
+owner_id = "user_owner"
+maintainers = ["yuvalrakavy"]
+history_days = 30
+
+[[member]]
+repo   = "yuvalrakavy/Store"
+filter = "label:kernel"

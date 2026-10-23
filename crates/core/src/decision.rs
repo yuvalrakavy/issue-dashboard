@@ -12,7 +12,7 @@ use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::docs::{Action, Decision, Priority};
+use crate::docs::{Action, Decision, DecisionValue, Priority};
 use crate::event::{Event, Kind};
 use crate::ledger::{self, Dedupe, Recorded, Tx};
 use crate::{Error, Result};
@@ -94,9 +94,9 @@ pub enum Status {
     Cancelled { by: String },
 }
 
-/// The ingested decisions of `project`, one per document, in sequence order: the accepting
-/// event if there is one, else the latest refusal.
-fn decided(conn: &Connection, project: &str) -> Result<Vec<DecidedData>> {
+/// The ingested decisions of `project`, one per document, in sequence order with the seq of
+/// the chosen event: the accepting event if there is one, else the latest refusal.
+fn decided(conn: &Connection, project: &str) -> Result<Vec<(i64, DecidedData)>> {
     let mut chosen: HashMap<String, (i64, DecidedData)> = HashMap::new();
     for e in ledger::events_by_kind(conn, Kind::Decided)? {
         let d: DecidedData = serde_json::from_value(e.data)?;
@@ -110,7 +110,22 @@ fn decided(conn: &Connection, project: &str) -> Result<Vec<DecidedData>> {
     }
     let mut out: Vec<(i64, DecidedData)> = chosen.into_values().collect();
     out.sort_by_key(|(seq, _)| *seq);
-    Ok(out.into_iter().map(|(_, d)| d).collect())
+    Ok(out)
+}
+
+/// The decisions that already had an irreversible effect, with the seq of that effect: a
+/// `cancel_launch` that withdrew its launch. An undo accepted after the effect cannot take it
+/// back (10.5).
+fn effects(conn: &Connection) -> Result<HashMap<String, i64>> {
+    let mut out = HashMap::new();
+    for e in ledger::events_by_kind(conn, Kind::Launch)? {
+        if e.data.get("transition").and_then(|t| t.as_str()) == Some("withdrawn")
+            && let Some(d) = e.data.get("decision").and_then(|d| d.as_str())
+        {
+            out.entry(d.to_string()).or_insert(e.seq);
+        }
+    }
+    Ok(out)
 }
 
 /// The accepted undo that cancels `id`, if any. An undo cancels its target only while it is
@@ -129,23 +144,47 @@ fn cancelled_by(id: &str, undos: &HashMap<String, Vec<String>>, visiting: &mut H
     by
 }
 
-fn resolve(decided: &[DecidedData]) -> Vec<(Decision, Status)> {
+fn resolve(decided: &[(i64, DecidedData)], effects: &HashMap<String, i64>) -> Vec<(Decision, Status)> {
     let mut undos: HashMap<String, Vec<String>> = HashMap::new();
-    for d in decided
+    let mut too_late: HashMap<String, String> = HashMap::new();
+    for (seq, d) in decided
         .iter()
-        .filter(|d| d.accepted && d.document.action == Action::Undo)
+        .filter(|(_, d)| d.accepted && d.document.action == Action::Undo)
     {
         if let Some(target) = &d.document.target.decision {
-            undos.entry(target.clone()).or_default().push(d.document.id.clone());
+            // Too late when it would cancel, directly or along a chain of undos, a decision whose
+            // irreversible effect came before it. Undos are taken in sequence order, each against
+            // the ones before it.
+            let mut trial = undos.clone();
+            trial.entry(target.clone()).or_default().push(d.document.id.clone());
+            let reversed = effects
+                .iter()
+                .filter(|(_, at)| **at < *seq)
+                .filter(|(id, _)| {
+                    cancelled_by(id, &undos, &mut HashSet::new()).is_none()
+                        && cancelled_by(id, &trial, &mut HashSet::new()).is_some()
+                })
+                .min_by_key(|(_, at)| **at);
+            match reversed {
+                Some((id, at)) => {
+                    too_late.insert(
+                        d.document.id.clone(),
+                        format!("too late: decision {id} already took effect (seq {at})"),
+                    );
+                }
+                None => undos = trial,
+            }
         }
     }
     decided
         .iter()
-        .map(|d| {
+        .map(|(_, d)| {
             let status = if !d.accepted {
                 Status::Refused {
                     reason: d.refusal.clone().unwrap_or_default(),
                 }
+            } else if let Some(reason) = too_late.get(&d.document.id) {
+                Status::Refused { reason: reason.clone() }
             } else if let Some(by) = cancelled_by(&d.document.id, &undos, &mut HashSet::new()) {
                 Status::Cancelled { by }
             } else {
@@ -156,21 +195,33 @@ fn resolve(decided: &[DecidedData]) -> Vec<(Decision, Status)> {
         .collect()
 }
 
+/// Every ingested decision of `project` with the seq of its chosen event and its status, in
+/// sequence order (what the acks of 10.5 report).
+pub fn resolved(conn: &Connection, project: &str) -> Result<Vec<(i64, Decision, Status)>> {
+    let decided = decided(conn, project)?;
+    let seqs: Vec<i64> = decided.iter().map(|(s, _)| *s).collect();
+    Ok(seqs
+        .into_iter()
+        .zip(resolve(&decided, &effects(conn)?))
+        .map(|(s, (d, st))| (s, d, st))
+        .collect())
+}
+
 /// The status of every ingested decision of `project`, by decision id.
 pub fn statuses(conn: &Connection, project: &str) -> Result<BTreeMap<String, Status>> {
-    Ok(resolve(&decided(conn, project)?)
+    Ok(resolved(conn, project)?
         .into_iter()
-        .map(|(d, s)| (d.id, s))
+        .map(|(_, d, s)| (d.id, s))
         .collect())
 }
 
 /// The decisions of `project` that take effect, in sequence order: accepted, not cancelled,
 /// and not themselves undos.
 pub fn effective(conn: &Connection, project: &str) -> Result<Vec<Decision>> {
-    Ok(resolve(&decided(conn, project)?)
+    Ok(resolved(conn, project)?
         .into_iter()
-        .filter(|(d, s)| *s == Status::Applied && d.action != Action::Undo)
-        .map(|(d, _)| d)
+        .filter(|(_, d, s)| *s == Status::Applied && d.action != Action::Undo)
+        .map(|(_, d, _)| d)
         .collect())
 }
 
@@ -187,6 +238,28 @@ pub fn project_priorities(conn: &Connection, project: &str) -> Result<BTreeMap<S
                 }
             }
             Action::ClearPriority => {
+                out.remove(&item);
+            }
+            _ => {}
+        }
+    }
+    Ok(out)
+}
+
+/// The overrides (4.3) each item has from the effective decisions: `set_override` replaces the
+/// item's override, `clear_override` removes it; the later decision wins. Each override comes
+/// with the decision's reason.
+pub fn overrides(conn: &Connection, project: &str) -> Result<BTreeMap<String, (DecisionValue, Option<String>)>> {
+    let mut out = BTreeMap::new();
+    for d in effective(conn, project)? {
+        let Some(item) = d.target.item.clone() else { continue };
+        match d.action {
+            Action::SetOverride => {
+                if let Some(v) = d.value.clone() {
+                    out.insert(item, (v, d.reason.clone()));
+                }
+            }
+            Action::ClearOverride => {
                 out.remove(&item);
             }
             _ => {}

@@ -1,0 +1,3130 @@
+{
+  "name": "nodes",
+  "response": {
+    "data": {
+      "nodes": [
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "## Observed\n\n`tests/admin_ui/palette_commands.tests`, test \"admin_ui.palette: the shipped classes declare the commands the palette offers\" (script `declared_commands`), fails:\n\n```\nassert { result.commands.len() == 6 }: evaluated falsy\n```\n\nThe script finds 15 declared commands. The 9 beyond the original six are all from the MQTT bridge kit in `data/globals/schemas/Std/mqtt_bridge.sdl`:\n\n- `Bridge/Forget`\n- `BridgeInstance/PurgeRetained`\n- `BridgeManager/AdoptAll`\n- `BridgeManager/PurgeRetained`\n- `BridgeTarget/Ignore`\n- `BridgeTarget/Unignore`\n- `DiscoveredInstance/Adopt`\n- `DiscoveredInstance/Ignore`\n- `DiscoveredInstance/Unignore`\n\nSeen 2026-10-13 on lane t1 (branch feat/tags). The cause is on main: `git show main:data/globals/schemas/Std/mqtt_bridge.sdl | grep -c 'AdminUi, Command'` reports 9.\n\n## Expected\n\nThe test pins the set of shipped palette commands, so a new command updates its expected list in the same change.\n\n## Confirmed\n\n- The test was last changed in 2108bc9f4 (2026-09-18, the palette's first six commands). It still hardcodes `== 6`.\n- `mqtt_bridge.sdl` on main declares 9 `[#AdminUi, Command]` members (last touched efd086a55, 2026-10-12).\n\n## Hypotheses — UNVERIFIED\n\n- The bridge-kit work added its commands without updating this census. The fix is probably to list the 15 by path, rather than raise the count, so the next addition fails naming itself.\n",
+          "closedAt": null,
+          "comments": {
+            "nodes": [],
+            "totalCount": 0
+          },
+          "createdAt": "2026-10-13T17:41:28Z",
+          "id": "I_kwDONszNXs8AAAABW8pB5w",
+          "labels": {
+            "nodes": [
+              {
+                "name": "bug"
+              },
+              {
+                "name": "p2"
+              },
+              {
+                "name": "harness"
+              }
+            ],
+            "totalCount": 3
+          },
+          "milestone": null,
+          "number": 379,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "OPEN",
+          "stateReason": null,
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABW8pB588AAAAHuFZllA"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABW8pB588AAAAHuFZmjA"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABW8pB588AAAAHuFZppA"
+              }
+            ]
+          },
+          "title": "palette_commands.tests still expects 6 declared commands; main declares 15 (bridge kit added 9)",
+          "updatedAt": "2026-10-13T17:41:28Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "## Observed\n\nA type whose `Repr` is `String` and which declares `on ParseValue` has that hook run on the\n`Description` of every PROPERTY DEFINITION typed with it, during reconcile. Reproduced on a fresh\nstore with `store.reconcile_inline_sdl`:\n\n```sdl\nmerge \"/Schema/User\" {\n    type ProbeExpr(String) {\n        on ParseValue {\n            if value_string.contains(\"BOOM\") { throw \"ParseValue refused: \" + value_string }\n            value_string\n        }\n    }\n    class ProbeHolder is RootObject {\n        Value: /Schema/User/ProbeExpr? { description: \"the BOOM description on the definition\" }\n    }\n}\n```\n\nThe reconcile aborts:\n\n```text\nParsing value script error: \"Runtime error: ParseValue refused: the BOOM description on the\ndefinition\" when setting property \"Description\" of \"/Schema/User/ProbeHolder/Value\" class\n\"/Schema/User/ProbeExpr\"   (validate.rs:609)\n```\n\n`Std/types/json_value.sdl:8-14` records the same incident for `JsonValue` and removed its hook\nrather than keep it.\n\n## Expected\n\nA type's `ParseValue` converts VALUES of that type. A property definition's `Description` is a\nplain `String` of `Object`; its text is not a value of the type and must never reach the hook.\n\n## Confirmed\n\n- `store_server/src/command/validate.rs:158-190`: when the property's own type has no\n  `ParseValue`, a fallback looks at the OWNING object's class; if that class derives from\n  `CLASS_TYPE` and its `Repr` equals the property's `Repr`, the owning type's hook runs. The\n  comment's example (`Description:String` on `TimeSpan:Int` → no match) shows the heuristic was\n  written for Int-repr types; for a String-repr type every String property of the definition\n  matches, `Description` included.\n- A property definition object's class IS the type it is typed with, so every definition typed\n  with a String-repr type is \"owned\" by that type in the fallback's sense.\n- Workaround that works (probed 2026-10-13): the hook reads the `property` in its scope and\n  returns `value_string` unchanged unless `property.Class` is the type itself. The behaviors\n  `ValueExpression` type (topic 4) ships with that guard.\n\n## Hypotheses — UNVERIFIED\n\n- The fallback exists for a type's own constraint properties (`Default`, `Min`, `Max`) whose\n  declared type is a bare repr. If those were declared with the type itself (as `Temperature`\n  does with `prop Default: Temperature?`, `tests/seed/sdl-Types.tests:371`), the fallback could\n  be deleted, which is the clean fix. Not checked which types rely on it.\n",
+          "closedAt": null,
+          "comments": {
+            "nodes": [],
+            "totalCount": 0
+          },
+          "createdAt": "2026-10-13T20:45:01Z",
+          "id": "I_kwDONszNXs8AAAABW_CBQA",
+          "labels": {
+            "nodes": [
+              {
+                "name": "bug"
+              },
+              {
+                "name": "p2"
+              },
+              {
+                "name": "kernel"
+              }
+            ],
+            "totalCount": 3
+          },
+          "milestone": null,
+          "number": 380,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "OPEN",
+          "stateReason": null,
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABW_CBQM8AAAAHuSGWMg"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABW_CBQM8AAAAHuSGW-A"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABW_CBQM8AAAAHuSGX6Q"
+              }
+            ]
+          },
+          "title": "A String-repr type's ParseValue runs on its property definitions' Description during reconcile",
+          "updatedAt": "2026-10-13T20:45:01Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "## Observed\n\nThree incidents in four days, each a different surface of one thing: a logmon read or binding made in one Claude conversation reached another conversation's lane.\n\n1. 2026-10-16, picker find box (retro entry): a `add_bookmark` from one conversation landed in the other lane's domain (~2 min).\n2. 2026-10-17, tree value promotion (retro entry): \"t1's corpus logs filled the t3 logmon domain, pushing t3's own records out\" (~5 min).\n3. 2026-10-17, the process-retro landing: `use_domain(\"t2\")` from the retro conversation (lane t2) returned this warning, verbatim:\n   > session Store-t1-feat-behaviors-engine-lines was bound to \"t1\" and is now rebound to \"t2\". If you did not just switch domains on purpose, another client is sharing this session (two agent conversations behind one MCP server process?) and your reads may silently target its domain. Fix the setup: give each client its own `--session <name>` — do NOT paper over it by re-binding before each query, which only hides the collision.\n   `Store-t1-feat-behaviors-engine-lines` is the name the TOP conversation (lane t1) had given its logmon session. The retro conversation's `rename_session` then renamed that same session; both were restored by hand (`use_domain(\"t1\")`, the old name).\n\n## Expected\n\nEach conversation's logmon reads target the lane that conversation works in. A `use_domain`, `rename_session` or `add_bookmark` in one conversation never moves another's binding or lands in another's domain.\n\n## Confirmed\n\n- The broker itself diagnosed the shape in incident 3: two clients behind one MCP server process, one logmon session. Its `rebind_warning` is the only reason the collision was noticed; a plain `get_recent_logs` would have read t2's logs under t1's name silently.\n- `scripts/logmon-mcp-wrapper.sh` computes the session name once at spawn (`Store-Main-<short8>`, from cwd and branch), so a shared process has exactly one name whoever is talking to it.\n- Nothing in the repo's `.mcp.json`/wrapper distinguishes conversations; whether the desktop app spawns one logmon-mcp process per project directory (shared by every conversation launched there) or per conversation was NOT read — this is the fact the fix depends on.\n\n## Hypotheses — UNVERIFIED, do not trust\n\n- The app dedupes MCP servers per project config, so every conversation launched from the Store checkout (home, or a lane entered later via EnterWorktree) shares one `logmon-mcp` process and therefore one broker session; `EnterWorktree` does not relaunch it (the using-dev-tracks skill already notes the bind is at session launch).\n- Possible fixes, in order of where the fact lands: (a) the shim keeps a binding PER CLIENT CONNECTION rather than per process (then `--session` per connection, as the broker suggests); (b) the wrapper derives a per-conversation name from an environment variable the app sets per conversation, if one exists; (c) the broker refuses a rebind from a second connection on the same session instead of warning.\n- Incident 2 may be a different mechanism (GELF routed to the wrong port rather than a read-side rebind); it is listed because the symptom matches and the window is the same.\n\nRelated, not the same: gh #26 (dev-track lanes need MCP config wired automatically) is about which config a lane's MCP servers get; this is about one running server being shared by two conversations.\n\nFiled from the 2026-10-17 process-retro (proposal 3, owner-accepted). The using-dev-tracks skill step 3 tells a conversation to `use_domain` after entering a lane; under a shared process that step is what performs the collision.\n",
+          "closedAt": null,
+          "comments": {
+            "nodes": [],
+            "totalCount": 0
+          },
+          "createdAt": "2026-10-17T03:56:13Z",
+          "id": "I_kwDONszNXs8AAAABX1hVZA",
+          "labels": {
+            "nodes": [
+              {
+                "name": "bug"
+              },
+              {
+                "name": "p2"
+              },
+              {
+                "name": "dev-loop"
+              }
+            ],
+            "totalCount": 3
+          },
+          "milestone": null,
+          "number": 393,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "OPEN",
+          "stateReason": null,
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABX1hVZM8AAAAHzNi6lA"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABX1hVZM8AAAAHzNi7Bg"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABX1hVZM8AAAAHzNi7iw"
+              }
+            ]
+          },
+          "title": "logmon: one MCP server process is shared by two conversations, so a use_domain/rename/bookmark in one lane reaches another",
+          "updatedAt": "2026-10-17T03:56:13Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "## Observed\n\nRelation-change handling runs only for objects under `/Schema`: `set_property.rs:1279` (validation of a relation property write) and `delete.rs:275` (relation deletion) are gated on the object's location. A class object may live outside `/Schema` — `tests/schema/user_schema_mutability.tests:445` creates one as a control — and then adding, re-pointing or deleting an `is`/`extends`/`contains` relation on it queues none of the commit-boundary checks: containment recheck, cardinality, stranded-value cleanup, and (once it lands) the declared-children backfill.\n\n## Expected\n\nThe checks a relation change owes depend on WHAT the object is (a relation of a class), not WHERE the class sits. Either a class outside `/Schema` is refused outright, or relation handling keys on identity.\n\n## Confirmed\n\n- The two gates, at the lines above (read at `09b337967`).\n- Found by the Codex re-verification of the declared-children backfill spec (`docs/superpowers/specs/2026-10-17-declared-children-backfill-design.md`, §6 and §9b F5).\n\n## Hypotheses — UNVERIFIED\n\n- Classes are reconciled into `/Schema` and the schema write guard (gh #249) keeps scripts out of it, so the only route to a class outside `/Schema` may be a privileged or test path; if so, refusing a class object outside `/Schema` at the commit boundary is the cheaper fix than re-keying every handler.\n",
+          "closedAt": null,
+          "comments": {
+            "nodes": [],
+            "totalCount": 0
+          },
+          "createdAt": "2026-10-17T19:39:06Z",
+          "id": "I_kwDONszNXs8AAAABX86cBA",
+          "labels": {
+            "nodes": [
+              {
+                "name": "bug"
+              },
+              {
+                "name": "p3"
+              },
+              {
+                "name": "kernel"
+              }
+            ],
+            "totalCount": 3
+          },
+          "milestone": null,
+          "number": 394,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "OPEN",
+          "stateReason": null,
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABX86cBM8AAAAHzvvNig"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABX86cBM8AAAAHzvvN_w"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABX86cBM8AAAAHzvvOlQ"
+              }
+            ]
+          },
+          "title": "Relation-change checks run only for classes under /Schema; a class elsewhere skips containment, cardinality and value cleanup",
+          "updatedAt": "2026-10-17T19:39:06Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "## Observed\n`scripts/pre-merge-check.sh --full` on lane t2 (branch `fix/add-tag-perf`, SHA `567ed18fb`, 2026-10-17): phase 3 was 2830 passed, 1 failed. The failure was `tests/mqtt_bridge_kit/keeper.tests:2349`, \"keeper: a retraction whose echo was lost is settled by the sweep's fresh read-back\".\n\n- The assertion: \"the sweep's fresh read-back settles the pending retraction\". `PendingRetractions` still held `TKKLE…/Config/I1` when the 30 s `wait_for` gave up (`[ERROR +67.778s] gave up waiting for the drop`).\n- The implicit baseline also reported \"1 unmatched WARN log(s)\". That record had rolled out of the logmon buffer before it could be read.\n- Every precondition before it passed: the dispatcher was busy (handled < 400), and the echo was lost (the read-back still showed the old Config).\n- Alone, on the same lane, binary and SHA, the test passes 3 of 3.\n- The previous `--full` run on `09b337967`, the same branch one fix set earlier, passed this test. That run failed a different bridge-kit test instead (`desired.tests`, \"ConfirmTimeout abandons…\"). That one had a named mechanism: a single read of the emulator log raced the MQTT round trip. It is fixed in `567ed18fb`.\n\n## Expected\nThe sweep (SweepEvery 1.5 s) re-reads the root and drops the pending retraction within the test's 30 s bound, under the full corpus's parallel load as well as alone.\n\n## Confirmed\n- `Std/mqtt_bridge.sdl` `sweep()` (~line 4018) re-reads a root only once a pending retraction is older than one SweepEvery. It does so through `await_inventory`, which asks for the ROOT's whole retained inventory. Under this test's root, that inventory includes the 4,500 `Flood` topics the test publishes.\n\n## Hypotheses — UNVERIFIED, do not trust\n- Each sweep's inventory request replays more distinct retained topics (4,500+) than the dispatch queue keeps (`DISPATCH_MAX_KEYS` = 4096, CLAUDE.md MQTT row). Under load, the replay may shed the marker that closes the read-back, or deliver it before the inventory has drained. If so, the root never reads as complete on a fresh marker within 30 s. The unmatched WARN would then be a backpressure record. This is the same family as #384: a bridge-kit window crossed under full-corpus load.\n- Not from `fix/add-tag-perf`. That branch makes object creates cheaper (the annotation latch and the containment pair walk) and touches neither `mqtt_bridge.sdl` nor this test. This is an argument, not a measurement.\n\nReproduction: run the full corpus (`scripts/pre-merge-check.sh --full`). The test alone does not reproduce it.\n",
+          "closedAt": "2026-10-18T01:33:29Z",
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-10-18T01:33:28Z"
+              }
+            ],
+            "totalCount": 1
+          },
+          "createdAt": "2026-10-17T21:03:41Z",
+          "id": "I_kwDONszNXs8AAAABX9nHTg",
+          "labels": {
+            "nodes": [
+              {
+                "name": "bug"
+              },
+              {
+                "name": "p2"
+              }
+            ],
+            "totalCount": 2
+          },
+          "milestone": null,
+          "number": 395,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "CLOSED",
+          "stateReason": "COMPLETED",
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABX9nHTs8AAAAHzy8j2g"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABX9nHTs8AAAAHzy8kjQ"
+              }
+            ]
+          },
+          "title": "bridge kit: keeper 'retraction whose echo was lost' sweep does not settle within 30 s under full-corpus load",
+          "updatedAt": "2026-10-18T01:33:29Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "## Observed\n\nA script cannot turn an object's `ID` back into an object: `store.object_from_id(obj.ID)` fails with\n`Function not found: object_from_id (…, u32)`. The general Rhai value conversion\n(`store_server/src/scripting/rhai/values.rs`, the `Repr::ObjectId` arm of `to_rhai_dynamic_with_source`)\nyields a `u32`, and `object_from_id` takes an `i64` (`scripting/rhai/store.rs`, `object_from_id`).\nRhai dispatch is type-exact, so the two do not meet.\n\n## Expected\n\nAn `ID` read in a script is an `i64`, the type every other id-taking binding accepts, so\n`object_from_id(obj.ID)` works.\n\n## Confirmed\n\n- Query result ROWS already carry `ID` as `i64` (query evaluator phase 3, spec\n  `docs/superpowers/specs/2026-10-13-query-evaluator-design.md` §7). This issue is the general arm, which\n  is wider than the query: every property read of an `ObjectId` value.\n- The lowercase getter `obj.id` (`scripting/rhai/object/read_functions_impl.rs:69`) ALREADY returns\n  `i64`, so `object_from_id(obj.id)` works today. Only the property spelling `obj.ID` is `u32`.\n- Census, `rg '\\.ID\\b' data/`: 17 sites. 16 are string interpolations (`m${self.ID}`,\n  `recent_${src.ID}`, …), which are type-neutral. ONE is a typed call:\n  `sys.publish_resolve(self.ID, gen, req)` at `data/frameworks/media/modules/media/air_zone_audio.sdl:426`.\n  Whether it still dispatches after the change depends on the Rust binding's parameter type, so that\n  binding must change in the same commit (or take `i64` already — check).\n\n## Hypotheses — UNVERIFIED\n\n- `tests/` may hold `.ID` comparisons against `u32`-typed values; not censused.\n\n## Decision\n\nChange the general `Repr::ObjectId` arm to `i64`, with `publish_resolve`'s parameter (and any other\n`u32`-taking binding the census turns up) moved in lockstep.\n",
+          "closedAt": null,
+          "comments": {
+            "nodes": [],
+            "totalCount": 0
+          },
+          "createdAt": "2026-10-13T22:28:34Z",
+          "id": "I_kwDONszNXs8AAAABXAOIMA",
+          "labels": {
+            "nodes": [
+              {
+                "name": "todo"
+              },
+              {
+                "name": "p2"
+              },
+              {
+                "name": "kernel"
+              }
+            ],
+            "totalCount": 3
+          },
+          "milestone": null,
+          "number": 381,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "OPEN",
+          "stateReason": null,
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABXAOIMM8AAAAHuYQ3pg"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABXAOIMM8AAAAHuYQ4Yw"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABXAOIMM8AAAAHuYQ5VA"
+              }
+            ]
+          },
+          "title": "Rhai: obj.ID reads as u32, so object_from_id(obj.ID) does not dispatch",
+          "updatedAt": "2026-10-13T22:28:34Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "## What happened\n\nA pre-merge gate was stopped mid-run (its test process killed), so the `Drop` that removes the pre-wipe artifacts stash never ran and `data/stores/_templates/.artifacts-stash-unittest-artifacts-preserve-0dd7ea30/` stayed on disk. The NEXT gate on the same lane then failed `manager::tests_template::save_preserves_the_templates_artifacts_when_the_source_has_none` with \"the pre-wipe artifacts stash must be cleaned up on Drop\" — a red run for a defect that is not in the diff under gate (lane t2, 2026-10-14 ~05:03 kill, failure seen on the following run).\n\n## Why the test is fragile\n\nThe leak assertion (`store_server/src/manager.rs:14985`, prefix built at `:14979`) reads every sibling under `_templates/` whose name starts with `.artifacts-stash-<tpl_name>-`. `tpl_name` is a constant (`unittest-artifacts-preserve`), so a stash left by a PREVIOUS run (killed before `Drop`, a crash, a power loss) matches the current run's prefix and is reported as THIS save's leak. The scoping comment above it (\"other tests' rebuilds stash their own templates… those are not this save's leak\") is right about concurrent siblings and wrong about prior-run siblings of the same name.\n\n## Fix shape (either)\n\n- Make the prefix per-run: include the `unique` suffix the save mints (`manager.rs:9637`) in what the test looks for — snapshot the directory listing BEFORE the save and assert only on entries ADDED by it.\n- Or sweep `.artifacts-stash-<tpl_name>-*` at the START of the test (it owns that name), so a prior run's debris cannot reach the assertion.\n\nThe first is the sharper test; the second also cleans the lane.\n\n## Process note\n\nA gate killed mid-run plants debris that fails the next run's phase 2. Until fixed, after stopping a gate check `ls -a data/stores/_templates/ | grep artifacts-stash` on that lane and remove the leftovers.\n\nFound during the query evaluator phase 2 gate (not caused by that diff). Self-contained: one test file edit + a rerun of `cargo test -p store_server manager::tests_template`.\n",
+          "closedAt": null,
+          "comments": {
+            "nodes": [],
+            "totalCount": 0
+          },
+          "createdAt": "2026-10-14T03:17:42Z",
+          "id": "I_kwDONszNXs8AAAABXCt3BQ",
+          "labels": {
+            "nodes": [
+              {
+                "name": "bug"
+              },
+              {
+                "name": "p3"
+              },
+              {
+                "name": "harness"
+              },
+              {
+                "name": "self-contained"
+              }
+            ],
+            "totalCount": 4
+          },
+          "milestone": null,
+          "number": 382,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "OPEN",
+          "stateReason": null,
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABXCt3Bc8AAAAHulcT6A"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABXCt3Bc8AAAAHulcUrw"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABXCt3Bc8AAAAHulcV0A"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABXCt3Bc8AAAAHulcW1A"
+              }
+            ]
+          },
+          "title": "manager::tests_template stash-leak assertion reads a PRIOR killed run's debris as this run's leak",
+          "updatedAt": "2026-10-14T03:17:42Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "**Observed.** The query evaluator has no `[Secret]` handling: `rg -i secret store_server/src/query/` finds nothing. A predicate on a secret property — `[*] { Password = 'hunter2' }` from `store.query` in any script, or from the gRPC `Query` — returns the objects whose secret equals the literal, so a caller who cannot read the value can still test it: a one-bit oracle per query, enough to recover a short credential by enumeration. The expressions facility refuses the same read outright (owner ruling 2026-10-14, \"an expression never reads a secret, no opt-in\"; `secret_value` in `store_server/src/expr/`), and `h.splice` refuses a secret only when given a class (`store_server/src/expr/rhai.rs:478`).\n\n**Expected.** A query never evaluates a `[Secret]` property: a predicate or projection naming one is refused at compile (strict and lenient alike, since the hole is the comparison, not the fault reporting), with a message naming the property — the query-side counterpart of the expressions ruling. Which arm (compile refusal vs. the property reading as absent) is the decision to make; refusal is the one that cannot be mistaken for \"no match\".\n\n**Confirmed.** Found during the behaviors engine design's self-review (spec `docs/superpowers/specs/2026-10-14-behaviors-core-design.md` §5.2, §16 R9, commit 755c3d6fc): the engine compiles a `Compare` node to a query fragment, so a `Compare` on a secret property would be exactly this oracle. The engine refuses the shape it can see (`Check` rule C19 and a fault at evaluation), which covers behaviors only; the general path stays open for every other query caller.\n\n**Hypotheses / where to look.** `store_server/src/query/` — the compile step that resolves a property name to a `PropertyId` is where the `[Secret]` stamp (bit 4 of the value flags; `shared/src/value_authority.rs`) can be consulted on the class property; the gRPC `Query` and `store.query` share the compiler, so one refusal covers both. Tests: `store_server/src/query/tests.rs` (a secret property in a predicate and in a projection, strict and lenient; a non-secret sibling still works), plus one `.tests` row through the gRPC origin.\n",
+          "closedAt": "2026-10-15T07:09:03Z",
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-10-15T07:08:59Z"
+              }
+            ],
+            "totalCount": 1
+          },
+          "createdAt": "2026-10-14T20:28:07Z",
+          "id": "I_kwDONszNXs8AAAABXP4kPA",
+          "labels": {
+            "nodes": [
+              {
+                "name": "kernel"
+              }
+            ],
+            "totalCount": 1
+          },
+          "milestone": null,
+          "number": 383,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "CLOSED",
+          "stateReason": "NOT_PLANNED",
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABXP4kPM8AAAAHvtEqpQ"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABXP4kPM8AAAAHvtEr4w"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABXP4kPM8AAAAHvtEtCA"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABXP4kPM8AAAAHvtEuEQ"
+              },
+              {
+                "id": "UNLE_lADONszNXs8AAAABXP4kPM8AAAAHwT3o-Q"
+              },
+              {
+                "id": "UNLE_lADONszNXs8AAAABXP4kPM8AAAAHwT3pHg"
+              },
+              {
+                "id": "UNLE_lADONszNXs8AAAABXP4kPM8AAAAHwT3pSA"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABXP4kPM8AAAAHwT3pxg"
+              }
+            ]
+          },
+          "title": "The query evaluator reads [Secret] values: a predicate on a secret property is a one-bit oracle",
+          "updatedAt": "2026-10-15T07:09:03Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "**Seen** in a \\`scripts/pre-merge-check.sh --full\\` run on feat/behaviors-core (lane t2, 2026-10-15): \\`tests/mqtt_bridge_kit/processes.tests\\` — \"processes: a first discovery of many instances asks for the Status lane once\" failed with \\`one replay for the burst, not one per instance: 10\\`. Alone it passes (2/2), and in a targeted run of the file (25/0).\n\n**Mechanism (named, code-resident):** \\`Std/mqtt_bridge.sdl\\` \\`replay_status_lane\\` debounces by re-arming \\`bridge-status-replay-@\\` with \\`wait = min(first + 2000 - now, 400)\\`. Each instance creation re-arms the timer with at most 400 ms. The ten instances are created by ten MQTT-driven State messages; under the full corpus's 20 parallel lanes those creations can be spaced more than 400 ms apart, so the timer fires between them and every creation sends its own replay — the per-instance regression the test guards, reproduced by load rather than by code. The test's own comment allows 2 (a loaded run spreading past the 2 s cap), not 10.\n\n**Not from feat/behaviors-core:** that branch touches neither \\`mqtt_bridge.sdl\\` nor the test.\n\n**Options:** scale the 400 ms re-arm by load the way the harness-side budgets scale (\\`max_parallel_tests\\`), or make the debounce event-driven (one replay after the last creation of a burst, bounded by the 2 s cap, not re-armed per creation at 400 ms), or measure the test's burst under the same parallelism and widen its allowance with the mechanism stated.",
+          "closedAt": null,
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-10-15T06:46:59Z"
+              },
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-10-15T09:31:14Z"
+              },
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-10-16T00:31:21Z"
+              },
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-10-16T15:21:10Z"
+              },
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-10-16T19:22:10Z"
+              },
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-10-16T20:57:26Z"
+              },
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-10-16T23:54:57Z"
+              },
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-10-16T23:57:25Z"
+              },
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-10-17T22:14:28Z"
+              }
+            ],
+            "totalCount": 9
+          },
+          "createdAt": "2026-10-15T04:19:53Z",
+          "id": "I_kwDONszNXs8AAAABXUiefg",
+          "labels": {
+            "nodes": [
+              {
+                "name": "bug"
+              },
+              {
+                "name": "p2"
+              },
+              {
+                "name": "drivers"
+              }
+            ],
+            "totalCount": 3
+          },
+          "milestone": null,
+          "number": 384,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "OPEN",
+          "stateReason": "REOPENED",
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABXUiefs8AAAAHwJnrkA"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABXUiefs8AAAAH6pJSHQ"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABXUiefs8AAAAH6pJScA"
+              }
+            ]
+          },
+          "title": "bridge kit: replay_status_lane's 400 ms re-armed window is crossed under full-corpus load (processes test sees 10 replays)",
+          "updatedAt": "2026-10-22T22:39:53Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "**Observed.** The kernel orders an object's children by full name, lexically (`store_server/src/store_layer/iterators.rs:60-62`; the Rhai `children` list and the query language's `[]` follow it). The Admin UI hides `_N_` prefixes (`shared::api::strip_sort_prefix`) and presents them as order, and a reader assumes numeric order. The two agree for one to nine items and diverge from ten on: `_10_X` sorts before `_2_Y` for the kernel, so anything that says \"run in the order listed\" over a `_N_`-prefixed list (regions' entries, workflow groups and steps, the scheduler's items) runs `_10_` second once there are ten or more. DMX already enforces numeric prefixes server-side (`data/frameworks/ha/modules/dmx.sdl:614-620`), which is the tell that someone hit it.\n\n**Where it was noticed.** The behaviors Admin UI design (topic 8, `docs/superpowers/specs/2026-10-16-behaviors-admin-ui-design.md` §23) — behaviors avoid it by naming ordered children with five zero-padded digits spaced by 1000 (`_01000_`, `_02000_`), maintained by the client, which keeps lexical and numeric order identical up to 99,999. That closes it for behaviors only.\n\n**Expected.** One of: (a) every `[#AdminUi, Ordered]` container uses the same fixed-width scheme, the client migrating existing `_N_` names on first touch (regions, workflows, scheduler); (b) the kernel sorts a leading `_<digits>_` prefix numerically (a change to `iterators.rs`, the query's `[]` and SDL export/reconcile agreeing, so it is a T2 with a differential test over the three readers); (c) a reconcile-time lint refusing a `_N_` list past nine items unless zero-padded. (a) is the cheapest and matches what behaviors do; (b) is the one that makes the hazard impossible to reintroduce.\n\n**Not blocking anything today**: no shipped list is known to exceed nine items. Filed from the behaviors whole-picture session on the topic 8 report.",
+          "closedAt": "2026-10-17T03:58:58Z",
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-10-16T19:54:16Z"
+              },
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-10-17T03:58:56Z"
+              }
+            ],
+            "totalCount": 2
+          },
+          "createdAt": "2026-10-15T22:48:17Z",
+          "id": "I_kwDONszNXs8AAAABXi9UBA",
+          "labels": {
+            "nodes": [
+              {
+                "name": "bug"
+              },
+              {
+                "name": "kernel"
+              },
+              {
+                "name": "admin-ui"
+              }
+            ],
+            "totalCount": 3
+          },
+          "milestone": null,
+          "number": 385,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "CLOSED",
+          "stateReason": "COMPLETED",
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABXi9UBM8AAAAHxg45eg"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABXi9UBM8AAAAHxg46Wg"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABXi9UBM8AAAAHxg47MA"
+              },
+              {
+                "id": "UNLE_lADONszNXs8AAAABXi9UBM8AAAAHy3mnhw"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABXi9UBM8AAAAHy3mnyg"
+              }
+            ]
+          },
+          "title": "Kernel orders children lexically while the Admin UI sorts _N_ prefixes numerically: beyond nine items _10_ runs before _2_",
+          "updatedAt": "2026-10-17T03:58:58Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "## What happens\n\nA behavior's Publish refusal (a `throw` in the `BehaviorsFence` handler reached through the `Publish` trigger)\nreaches a client as a raw script error:\n\n```\nError Executing script \"/Schema/User/Behaviors/Behavior/_event_Triggered_Publish\": Runtime error: GarageDoorLeftOpen cannot be published:\\nMaster_GarageDoorLeftOpen sets DoorTimeout, which the draft no longer declares @ 'BehaviorsFence' (line 367, position 13) in call to function 'publish' (from 'BehaviorsFence') (line 1, position 17)\n```\n\nThe sentence is right; everything around it is the script's frame, and the line break arrives escaped.\nMeasured in the behaviors Admin UI browser pass (`docs/superpowers/notes/2026-10-16-behaviors-admin-ui-browser-pass.md`, W7).\n\n## The bridge in place\n\nThe Admin UI now extracts the sentence with a heuristic (`ui/src/session/mod.rs::script_error_message`: the text\nafter the innermost `Runtime error: `, before the first ` @ '`, `\\n` restored). It works for this shape and would\nbreak silently if the frame's wording changes.\n\n## The ask\n\nA typed refusal: when a handler deliberately refuses (a `throw` of a message meant for a person), the server\nreturns that message as a structured field of the error — not interpolated into the script-error text — so\nevery client shows it without parsing. The frame (script path, line, call chain) stays available for logs.\n\nDifferent subsystem from the Admin UI work; filed from behaviors topic 8 (spec\n`docs/superpowers/specs/2026-10-16-behaviors-admin-ui-design.md` §26.2).\n",
+          "closedAt": null,
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-10-16T05:09:50Z"
+              }
+            ],
+            "totalCount": 1
+          },
+          "createdAt": "2026-10-16T02:58:37Z",
+          "id": "I_kwDONszNXs8AAAABXlOs_A",
+          "labels": {
+            "nodes": [
+              {
+                "name": "bug"
+              },
+              {
+                "name": "p2"
+              },
+              {
+                "name": "behaviors"
+              }
+            ],
+            "totalCount": 3
+          },
+          "milestone": null,
+          "number": 386,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "OPEN",
+          "stateReason": null,
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABXlOs_M8AAAAH6pIkag"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABXlOs_M8AAAAH6pIkmQ"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABXlOs_M8AAAAH6pIkzw"
+              }
+            ]
+          },
+          "title": "A handler's refusal reaches clients as a raw script error; return it as a typed message",
+          "updatedAt": "2026-10-22T22:39:43Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "## Observed\n\nA `RunScript` from `store-cli script --store TLV --eval …` on home (t0, main at 9bd5919c2, store_server pid 86122) took the WHOLE server down: every store, every panel. The script:\n\n```rhai\nstore.with_command_budget(2000000, || {\n  let big = []; let stack = [store.find_object(\"/\")]; let n = 0; let max = 0;\n  while stack.len() > 0 {\n    let o = stack.pop(); let c = o.children; n += 1;\n    if c.len() > max { max = c.len(); }\n    if c.len() >= 60 { big.push(o.path + \" = \" + c.len().to_string()); }\n    for ch in c { stack.push(ch); }\n  }\n  #{ objects: n, max_children: max, nodes_with_60_or_more: big }\n})\n```\n\nThe client saw `transport error: stream closed because of a broken pipe`; the next call got `Connection refused`. The launcher log (the dev-server's stderr) carries three panics on one tokio worker, then the abort:\n\n```\nthread 'tokio-rt-worker' (10763321) panicked at …/rhai-1.25.1/src/types/dynamic.rs:345:77:\ncalled `Option::unwrap()` on a `None` value\nthread 'tokio-rt-worker' (10763321) panicked at …/rhai-1.25.1/src/func/call.rs:107:9:\nArgBackup::restore_first_arg has not been called prior to existing this scope\nthread 'tokio-rt-worker' (10763321) panicked at …/library/core/src/panicking.rs:233:5:\npanic in a destructor during cleanup\nthread caused non-unwinding panic. aborting.\nsh: line 1: 86122 Abort trap: 6           cargo run --bin store_server\n[Finished running. Exit status: 134]\n```\n\nmacOS crash report `~/Library/Logs/DiagnosticReports/store_server-2026-10-16-100730.ips`: `EXC_CRASH (SIGABRT)`, faulting thread `tokio-rt-worker`, frames `panic_in_cleanup` ← `rhai::func::call::Engine::exec_native_fn_call` ← `make_method_call` ← `eval_dot_index_chain` ← … ← `StoreServerService::run_script_body`. ht_server then logged `Store-Server stream error, reconnecting` and six failed reconnects until a manual `store-cli restart`.\n\n## Expected\n\nNo script, however written, may take the server down (owner rule 2026-09-30: no scenario, however rare, may hang — or kill — the system). A script fault is a script error returned to the caller; the process and every other store stay up.\n\n## Confirmed\n\n- `store.with_command_budget` is bound with `store: Shared<RhaiStore>` as its first parameter and runs the closure with `operation.call_within_context(&ctx, (store.clone(),))` — `store_server/src/scripting/rhai/store.rs:1901-1915`. `with_extended_budget` has the same shape at `:1882`. Two more bindings call back into script from a native call: `multilang.rs:390` and `filter_returns.rs:195`.\n- rhai 1.25.1 with the `sync` feature (`store_server/Cargo.toml:68`), so a closure-captured variable is a `Shared` `Arc<RwLock<Dynamic>>`.\n- `dynamic.rs:345` is `Union::Shared(ref cell, ..) => (*crate::func::locked_read(cell).unwrap()).type_id()` — a `try_read` that fails is unwrapped rather than returned as rhai's `ErrorDataRace`.\n- `func/call.rs:100-110` is `impl Drop for ArgBackup` with `assert!(self.orig_mut.is_none(), …)` — a panic in a destructor, which during an unwind is `panic_in_cleanup` → abort, so no `catch_unwind` on our side can contain it (the only one is around the whole runtime, `store_server/src/main.rs:566`).\n- Every engine use of the binding spells the closure `|s| …` and uses `s` inside (`data/globals/schemas/Std/behaviors/{fence.sdl:437,462,670, engine.sdl:1543,2184}`, `data/frameworks/hometouch/modules/ui_builder/base/extensions.sdl:196`), and the guide's example does too (`rhai-api.md`). The crashing script wrote `|| …` and used the captured `store`.\n\n## Hypotheses — UNVERIFIED, do not trust\n\n- Mechanism: the method-call syntax `store.with_command_budget(…)` takes the shared `store` cell as the call's `this` under a WRITE lock for the whole native call; the closure then evaluates the captured `store` (the same cell) for `store.find_object(...)`, whose `type_id()` needs a read lock on it → `None` → the unwrap panic; the unwind then trips `ArgBackup`'s assert → abort. The `|s|` form avoids it because `s` is a fresh value, not the locked cell. Not yet reproduced in a lane; reproduce there (never at home) and minimise — `store.with_command_budget(10, || store.find_object(\"/\"))` is the predicted one-liner.\n- Fix directions, to be probed: (1) push `store` (and the other scope singletons) as rhai CONSTANTS if a constant is captured by value rather than shared — then `||` closures never hold the cell; (2) in the four call-back bindings, release the receiver before invoking the closure (take the receiver by value / register as a function, not a method) so no lock is held across the callback; (3) upstream: rhai's `Dynamic::type_id` should return `ErrorDataRace` instead of unwrapping, and `ArgBackup::drop` should not assert while unwinding — file with rhai, but do not wait for it. Whatever lands, a `.tests` row drives the `||` form through `RunScript` and asserts the server answers an error and keeps serving.\n- The script console in the Admin UI and any `exposed fn` are the same `RunScript`/eval path, so any configurator can trip this with one line.\n",
+          "closedAt": "2026-10-16T15:57:15Z",
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-10-16T07:35:08Z"
+              },
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-10-16T07:36:27Z"
+              },
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-10-16T08:06:03Z"
+              },
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-10-16T15:57:14Z"
+              },
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-10-16T17:51:30Z"
+              }
+            ],
+            "totalCount": 5
+          },
+          "createdAt": "2026-10-16T07:12:56Z",
+          "id": "I_kwDONszNXs8AAAABXnlj2A",
+          "labels": {
+            "nodes": [
+              {
+                "name": "bug"
+              },
+              {
+                "name": "p1"
+              },
+              {
+                "name": "kernel"
+              },
+              {
+                "name": "self-contained"
+              }
+            ],
+            "totalCount": 4
+          },
+          "milestone": null,
+          "number": 387,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "CLOSED",
+          "stateReason": "COMPLETED",
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABXnlj2M8AAAAHyA6-ng"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABXnlj2M8AAAAHyA6_wQ"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABXnlj2M8AAAAHyA7AmQ"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABXnlj2M8AAAAHyA7BqQ"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABXnlj2M8AAAAHyCWxCA"
+              },
+              {
+                "id": "UNLE_lADONszNXs8AAAABXnlj2M8AAAAHynGisQ"
+              }
+            ]
+          },
+          "title": "A script closure that re-enters `store` inside `store.with_command_budget(n, || …)` aborts the whole server",
+          "updatedAt": "2026-10-16T17:51:30Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "**Context.** Behaviors master spec D44 (`docs/superpowers/specs/2026-10-13-behaviors-design.md`, owner ruling 2026-10-16): an action's two slots become classes chosen by type, never by name — `class Targets is Select`, `class When is Node { contains Node [Max=1] }`, and `Action` contains exactly those two (`Max=1` each). The schema half is the engine owner's (§11 line 9). This issue is the client half.\n\n**Wanted.** When the create dialog opens for a class whose `contains` relation on the parent admits it with `Max=1`, the `Name` field is prefilled with the class name (`Targets`, `When`), so the author presses Create without typing a name; the field stays editable. A sibling with that name already present (only possible if `Max` is wider) leaves the field empty as today. The ordered-container prefill (`_01000_`, D8 of the Admin UI spec) already exists for `Ordered` relations and is the pattern to follow (`ui/src/session/components/command_dialog.rs` / the create dialog's name row).\n\n**Why.** From the owner's first hands-on edit: under a `CallMethod` the `+` offered every node type and the author had to pick `Select` and spell its name `Targets` for the engine to find it. D44 makes the menu offer only the valid classes; this makes the name a non-step.\n\n**Done when.** A `.tests` row in `tests/admin_ui/behaviors_editor.tests` (or the host `command_dialog` tests) shows the prefilled name for a `Max=1` relation and no prefill for an unbounded one; a browser pass creates a `Targets` under an action with one click and Create.\n\nNot blocking: the engine half (D44) can land first and the name is then typed by hand.",
+          "closedAt": "2026-10-18T15:50:50Z",
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-10-17T03:59:27Z"
+              },
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-10-18T15:50:48Z"
+              }
+            ],
+            "totalCount": 2
+          },
+          "createdAt": "2026-10-16T19:56:03Z",
+          "id": "I_kwDONszNXs8AAAABXxdd6w",
+          "labels": {
+            "nodes": [
+              {
+                "name": "todo"
+              },
+              {
+                "name": "admin-ui"
+              },
+              {
+                "name": "self-contained"
+              }
+            ],
+            "totalCount": 3
+          },
+          "milestone": null,
+          "number": 388,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "CLOSED",
+          "stateReason": "COMPLETED",
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABXxdd688AAAAHy3uB6A"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABXxdd688AAAAHy3uC8g"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABXxdd688AAAAHy3uD3w"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABXxdd688AAAAH6pKnxw"
+              }
+            ]
+          },
+          "title": "Create dialog: default a node's Name to its class name, so a slot child lands without a typed name",
+          "updatedAt": "2026-10-22T22:40:12Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "## Observed\n\n`behaviors.scale.house_wide_select` (`tests/behaviors/scale.tests:97`) failed its implicit WARN baseline once, in\na parallel run of `tests/behaviors/ tests/docs/behaviors_examples.tests tests/admin_ui/behaviors_editor.tests`\n(156 tests, lane t1, 2026-10-16, branch `feat/behaviors-engine-lines`):\n\n```\n[WARN +32.327s] kind=behavior_stale_chase instance=/Global/Behaviors/Instances/House: 3 plans refused in a row (cause scope); waiting for the next cause\n```\n\nEvery functional assertion of the test passed (54 matches materialized, the toggle re-evaluated, idle stayed idle).\nRe-run alone with `engine_lines.tests` and `coverage.tests` (20 tests): green.\n\n## Expected\n\nNo WARN at idle or under the test's own load, or a WARN the test expects and names.\n\n## Confirmed\n\n- The WARN is `engine.sdl` `run_attempts`: `max_attempts()` (3) consecutive plans refused by the\n  `EvaluatedAt` compare-and-swap.\n- The branch's diff does not reach this path for this fixture: the behavior has no parameters and no action\n  slots, and `compute`/`apply` are unchanged (the diff touches Publish's copy values, Check's C17, `choices`,\n  and the action slot lookups).\n\n## Hypotheses — UNVERIFIED, do not trust\n\n- Under 20-way parallel load the house-wide create's `scope` evaluation and the routing evaluations it\n  triggers (`route_scope`, `structural`) keep moving the fence faster than one plan takes to compute\n  (~55 ms compute, ~4.6 s wall for the creation), so three attempts in a row lose. If so, the cap of 3 is a\n  budget this test can legitimately exceed, and the fix is either to chase longer or to expect the WARN.\n",
+          "closedAt": null,
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-10-17T00:51:35Z"
+              }
+            ],
+            "totalCount": 1
+          },
+          "createdAt": "2026-10-16T21:51:26Z",
+          "id": "I_kwDONszNXs8AAAABXyxO2A",
+          "labels": {
+            "nodes": [
+              {
+                "name": "bug"
+              },
+              {
+                "name": "p2"
+              },
+              {
+                "name": "behaviors"
+              }
+            ],
+            "totalCount": 3
+          },
+          "milestone": null,
+          "number": 389,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "OPEN",
+          "stateReason": null,
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABXyxO2M8AAAAHy_NzBA"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABXyxO2M8AAAAHy_Nzxw"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABXyxO2M8AAAAH6pIs3w"
+              }
+            ]
+          },
+          "title": "behaviors.scale.house_wide_select: behavior_stale_chase WARN under a parallel behaviors run",
+          "updatedAt": "2026-10-22T22:39:45Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "## Observed\n\n`ynca a disagreeing report is held back until confirmed or 5 s pass` (`tests/ynca/driver.tests:464`)\nfailed once in a full `scripts/pre-merge-check.sh --full` run (lane t1, `feat/behaviors-engine-lines`\n@ `6d9a2aec7`, 2026-10-17):\n\n```\nscript <assert> ... failed [ASSERTION]\n  a disagreeing report is held back while the request is pending\n```\n\nwith `Runtime error: Executing commands (/YkTest/RxOne/Main.index$set$() …)` in the script output.\nRun alone right after, with the rest of `tests/ynca/driver.tests`: green.\n\n## Expected\n\nDeterministic under the full corpus; the test's own 5 s window is the only clock it should depend on.\n\n## Confirmed\n\n- The branch touches no ynca or MQTT file (Std behaviors SDL, two read-only Rhai bindings, the\n  store-test parser).\n- `b6817da82` changed a different ynca test to wait for the value it asserts.\n\n## Hypotheses — UNVERIFIED, do not trust\n\n- Under 20-way load the \"pending\" state's window is crossed before the disagreeing report is read, so\n  the assertion reads a released value; if so, the test reads a time-dependent state instead of waiting\n  on an event that marks it.\n",
+          "closedAt": null,
+          "comments": {
+            "nodes": [],
+            "totalCount": 0
+          },
+          "createdAt": "2026-10-16T23:55:20Z",
+          "id": "I_kwDONszNXs8AAAABXz2BcA",
+          "labels": {
+            "nodes": [
+              {
+                "name": "bug"
+              },
+              {
+                "name": "p2"
+              },
+              {
+                "name": "drivers"
+              }
+            ],
+            "totalCount": 3
+          },
+          "milestone": null,
+          "number": 391,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "OPEN",
+          "stateReason": null,
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABXz2BcM8AAAAHzFBYYg"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABXz2BcM8AAAAHzFBY3g"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABXz2BcM8AAAAH6pJcKg"
+              }
+            ]
+          },
+          "title": "ynca driver: 'a disagreeing report is held back' failed under the full corpus, green alone",
+          "updatedAt": "2026-10-22T22:39:55Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "## Observed\n\n`store_server/src/command/processor.rs` wraps three `execute` call sites in `contain_transaction_panic` (lines 3298, 3669 and 4025 at `3631b3359`; the function is at :1756). The only panic-boundary source scan in the tree is `every_production_eval_site_is_contained` (`store_server/src/scripting/rhai/caller_frame.rs:455`), which counts `contain_script_panic` / `with_frame` at EVAL sites. A fourth `execute` call added to the processor loop without the wrapper fails no test.\n\n## Expected\n\ngh #387's own lesson, written into the Store ways-of-working skill on 2026-10-16: a protection over N sites is one named function plus a source-scanning test that counts its call sites against the sites that need it, so an added site fails a test instead of reopening the hole. The eval sites have that scan; the execute sites do not.\n\n## Confirmed\n\n- Three call sites: `rg -c \"contain_transaction_panic\\(\" store_server/src/command/processor.rs` prints 3 (the definition line reads `contain_transaction_panic<T>(`).\n- The eval scan exists and does not reach them: `caller_frame.rs:455`.\n\n## Proposed\n\nA test beside `every_production_eval_site_is_contained` that scans `processor.rs` for every `execute(` the processor's job loop awaits and asserts each sits inside a `contain_transaction_panic(` — or a restructure that makes the wrapper the only way the loop can call `execute`. Found by the deep-gate reader of the 2026-10-16 process-retro landing (its F7); the skill text now names the eval scan correctly and points here for the execute sites.\n",
+          "closedAt": null,
+          "comments": {
+            "nodes": [],
+            "totalCount": 0
+          },
+          "createdAt": "2026-10-17T00:03:13Z",
+          "id": "I_kwDONszNXs8AAAABXz6K5w",
+          "labels": {
+            "nodes": [
+              {
+                "name": "todo"
+              },
+              {
+                "name": "p3"
+              },
+              {
+                "name": "kernel"
+              },
+              {
+                "name": "self-contained"
+              }
+            ],
+            "totalCount": 4
+          },
+          "milestone": null,
+          "number": 392,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "OPEN",
+          "stateReason": null,
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABXz6K588AAAAHzFVXYA"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABXz6K588AAAAHzFVYBg"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABXz6K588AAAAHzFVYoQ"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABXz6K588AAAAHzFVZHA"
+              }
+            ]
+          },
+          "title": "processor: no source scan counts the contain_transaction_panic execute sites",
+          "updatedAt": "2026-10-17T00:03:13Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "## Observed\n\nFound by a deep-gate reader on the behaviors engine-owner lines (branch `feat/behaviors-engine-lines`,\n2026-10-17), outside that feature's scope. Read from code; not reproduced live.\n\nIn a behavior's CONDITION, these node placements pass Check and fault the instance at evaluation:\n\n- a `For` or a `Query` as a direct child of an ordinary `Select`;\n- an `Event`, `For` or `Query` inside a NESTED `Select` (a Select under a Select).\n\n## Expected\n\nCheck names them, as it names an Event directly under a For or under a Select whose Mode is not Any\n(C16), so Publish refuses the draft instead of the instance latching a fault later.\n\n## Confirmed\n\n- `engine.sdl` `eval_select` → `fragment_of`: a child kind with no fragment reaches the `else` arm\n  (`a ${k} node cannot be tested under a Select`), and a nested Select requires every child to compile\n  (`cannot be tested inside a nested Select`).\n- `fence.sdl` `check_structure` C16 covers only Event-under-For and Event-under-a-non-Any-Select.\n- The action slots (`Targets`, `When`) are covered by the same feature's `once_judged_problems`; this\n  issue is the condition-side sibling.\n\n## Hypotheses — UNVERIFIED, do not trust\n\n- One structural rule over `fragment_of`'s own accept list (the kinds it can compile under a Select)\n  would cover both shapes and stay in step with the engine, rather than a second hand-written list.\n",
+          "closedAt": "2026-10-17T07:15:30Z",
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-10-17T07:15:29Z"
+              }
+            ],
+            "totalCount": 1
+          },
+          "createdAt": "2026-10-16T22:37:38Z",
+          "id": "I_kwDONszNXs8AAAABXzNZOA",
+          "labels": {
+            "nodes": [
+              {
+                "name": "bug"
+              },
+              {
+                "name": "p2"
+              }
+            ],
+            "totalCount": 2
+          },
+          "milestone": null,
+          "number": 390,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "CLOSED",
+          "stateReason": "COMPLETED",
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABXzNZOM8AAAAHzBsr8A"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABXzNZOM8AAAAHzBssfw"
+              }
+            ]
+          },
+          "title": "Behaviors Check: a For/Query under a condition Select, or any time-bound node in a nested Select, faults at evaluation unreported",
+          "updatedAt": "2026-10-17T07:15:30Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "The `Was=\"_Tags\"` this issue was opened to remove is gone: 58af4235d (admin-ui step two, round two) demoted the library-wide folder, because a library entry now declares its own tags (`LibraryCondition`/`LibraryAction` each hold `_0_Tags`, `_1_Parameters` and one definition). What remains is the transitional admission of the OLD library-wide folder, which nothing reads any more.\n\n## What to remove\n\n- `contains TagDeclarations [Max=1]` on the Library class (`data/globals/schemas/Std/behaviors/objects.sdl:267`, with its comment).\n- `sweep_library_tags` in `data/globals/schemas/Std/behaviors/fence.sdl` (~:1490) and its call from the load sweep, plus the `kind=behavior_library_tags_left` row in `docs/guides/logging-policy.md`.\n- The two rows in `tests/behaviors/extract.tests` that pin the sweep (an empty `Library/_0_Tags` deleted at load; a filled one left with the WARN, ~:480 and ~:493), and the `library_wide` assertion at ~:290.\n- The sentence about the earlier library-wide folder in `docs/guides/behaviors.md`/the spec, if any survives.\n\n## When it can be removed\n\nEvery store on every machine has loaded once on 58af4235d or later (the sweep deletes an EMPTY `Library/_0_Tags` at load), AND no store still holds a FILLED one. Check each store:\n\n```\nstore-cli script --store <S> --eval 'store.find_object(\"/Global/Behaviors/Library/_0_Tags\") == () && store.find_object(\"/Global/Behaviors/Library/_Tags\") == ()'\n```\n\nA filled one logs `kind=behavior_library_tags_left` at every load; move each declaration into the entry that tests it, then delete the folder. Tracked templates hold no Behaviors, so only live stores, lane seeds and `db.pre-restore-*` copies matter.\n\nA store that still holds the folder after removal is refused at its next reconcile (a child of a class no longer contained). Recovery: delete the folder by hand, then reconcile.\n\nThe kernel `Was` follow-ups that were listed here moved to their own issue (linked below).\nKernel follow-ups: #400.\n",
+          "closedAt": null,
+          "comments": {
+            "nodes": [],
+            "totalCount": 0
+          },
+          "createdAt": "2026-10-18T19:43:05Z",
+          "id": "I_kwDONszNXs8AAAABYHeTpA",
+          "labels": {
+            "nodes": [
+              {
+                "name": "todo"
+              },
+              {
+                "name": "p3"
+              },
+              {
+                "name": "behaviors"
+              }
+            ],
+            "totalCount": 3
+          },
+          "milestone": null,
+          "number": 396,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "OPEN",
+          "stateReason": null,
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABYHeTpM8AAAAH6pI15g"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABYHeTpM8AAAAH6pI2Mw"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABYHeTpM8AAAAH6pI2cQ"
+              }
+            ]
+          },
+          "title": "Remove the Library's transitional TagDeclarations admission and load sweep once no store holds Library/_0_Tags",
+          "updatedAt": "2026-10-22T22:39:47Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "A library entry's parameters are supplied by the `Use` / `UseAction` that uses it (Shape B, spec `docs/superpowers/specs/2026-10-18-admin-ui-step-two-round-two-design.md` §3.2). An argument is evaluated as a parameter value: in the instance's context, with no object acted on (Check C3/C6). So an argument can read the behavior's parameters but never the object an action acts on (`{.Level}`).\n\nDeferred deliberately (store-bc review of the round-two spec, 2026-10-18): an argument evaluated PER TARGET, so a library action can be given \"this target's level\" rather than one value for the whole run.\n\nWhat it needs to decide first:\n- which arguments may be per-target (only those of a `UseAction` whose action has Targets? a declared `Kind=PerTarget` on the entry's parameter?);\n- how Publish carries a per-target value: a generated parameter cannot, since parameters evaluate without an object — it would be spliced into the copied fields instead, or the generated parameter marked per-target and evaluated in the action's per-target context;\n- how Check reports a per-target argument used where no target exists.\n\nNot started. Recorded so the limitation stated in `docs/guides/behaviors.md` (arguments never read the object acted on) is a known later item, not a quiet gap.\n",
+          "closedAt": null,
+          "comments": {
+            "nodes": [],
+            "totalCount": 0
+          },
+          "createdAt": "2026-10-18T22:55:28Z",
+          "id": "I_kwDONszNXs8AAAABYJAxPA",
+          "labels": {
+            "nodes": [
+              {
+                "name": "todo"
+              },
+              {
+                "name": "p3"
+              },
+              {
+                "name": "behaviors"
+              }
+            ],
+            "totalCount": 3
+          },
+          "milestone": null,
+          "number": 397,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "OPEN",
+          "stateReason": null,
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABYJAxPM8AAAAH6pI_CA"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABYJAxPM8AAAAH6pI_kA"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABYJAxPM8AAAAH6pI_zw"
+              }
+            ]
+          },
+          "title": "Behaviors: a library Use argument per target (reading the object acted on)",
+          "updatedAt": "2026-10-22T22:39:49Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "Follow-ups to the declared-child rename `[Singleton=\"New\", Was=\"Old\"]` (dd3261158, `store_server/src/command/create.rs` backfill + `precommit_store.rs::rename_attempted`), found in its pre-merge reviews and deliberately left. Moved here from #396, whose subject has changed. None is a regression.\n\n- `PrecommitStore::rename_attempted` checks only that the attempted child still exists, not that it is still under the parent and of the declared class. A same-transaction companion that moves or casts it suppresses the create, and the bound refuses with a cardinality message. Cheap tightening: add the parent and `is_of_type_id(child, child_class)` checks, as `child_satisfies_want` does.\n- The WARN `a declared child was not renamed` reads wrong when a companion re-renamed the child after the rename landed; consider \"is not under its declared name\". The comment above the report block in `command/mod.rs` says \"after every step that can still fail\" — true inside `execute_body` only.\n- Two `contains` clauses on one class naming the same `Was` are not refused at codegen.\n- A `Was` written in display spelling (`\"Old Name\"` for a stored `Old_Name`) matches nothing silently; a runtime hint naming the normalized spelling would help.\n- The create-time drain ignores `Was` (a NEW parent created with an `Old` child in its layout).\n- A bundle exported before a rename carries the old child name and is refused on import (two children against `Max=1`), with or without `Was`. Hand recovery: rename the path segments in the bundle.\n",
+          "closedAt": null,
+          "comments": {
+            "nodes": [],
+            "totalCount": 0
+          },
+          "createdAt": "2026-10-19T03:09:34Z",
+          "id": "I_kwDONszNXs8AAAABYK-0uw",
+          "labels": {
+            "nodes": [
+              {
+                "name": "todo"
+              },
+              {
+                "name": "p3"
+              },
+              {
+                "name": "kernel"
+              }
+            ],
+            "totalCount": 3
+          },
+          "milestone": null,
+          "number": 400,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "OPEN",
+          "stateReason": null,
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABYK-0u88AAAAH6pJmRQ"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABYK-0u88AAAAH6pJmeg"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABYK-0u88AAAAH6pJmtQ"
+              }
+            ]
+          },
+          "title": "Declared-child rename (Was) follow-ups",
+          "updatedAt": "2026-10-22T22:39:58Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "## Symptom\n\n`tests/mqtt_bridge_kit/adoption.tests:540` (\"adoption: candidates follow the wire\") failed once in a full 20-way pre-merge run (git HEAD d1eb415, lane t3, trace `5d296a5f6c3741f49819efcf2faaa396`). It passes when the file runs alone. The fourth `ka_candidates` poll after `ka_create` (the \"C2 gone\" wait) threw:\n\n```\nStore has no object with ID ObjectId(Id(16780067))\nat store_server/src/store_layer/imp.rs:43:55 (line 3, position 31)\n```\n\nAbout 50 ms earlier the log has `kind=bridge_config_taken_over /Services/BridgeConfigs: published TKAF1792377471244/Config/C2 over a Config with no origin`. That is the keeper pass that follows C2 being made by hand.\n\n## Mechanism (a test bug)\n\nLine 3, position 31 of `ka_candidates` (`tests/mqtt_bridge_kit/adoption.tests:301-302`) is the `get_value` in `folder.get_value(\"Name\")`. The object that vanished is the **`_y_Discovered` folder itself**, not a candidate:\n\n```rhai\nlet folder = store.root.find_object(\"KaMgr/_y_Discovered\");                     // line 2\nif folder == () || folder.get_value(\"Name\") != \"_y_Discovered\" { return []; }  // line 3, col 31\n```\n\nThe product deletes that folder on purpose. `keeper_sync_candidates` (`data/globals/schemas/Std/mqtt_bridge.sdl:1786-1820`) deletes each candidate that is no longer wanted. When `wanted` is empty it then deletes the folder: `if wanted.len() == 0 && folder != () && folder.exists() { folder.delete() }` (`:1818`), as documented: \"the folder goes with its last candidate\". In this test, C2 is the only candidate. When the hand-made instance C2 appears, the keeper pass (the one that logs the `bridge_config_taken_over` for C2) empties `wanted` and deletes the folder. That pass runs on the MQTT dispatch path, concurrently with the harness's polling `RunScript`. Each Rhai statement reads committed state on its own, so a delete can commit between line 2's `find_object` and line 3's `get_value`. The script already tolerates a candidate vanishing (the `try` around each `c.get_value`). It does not tolerate the folder vanishing, and the `for ... children_of_type` on line 6 is also unguarded.\n\nAlone, the window is microseconds wide. Under 20-way load, the poll and the keeper pass interleave often enough to hit it.\n\n## Proposed fix\n\nMake `ka_candidates` treat a folder deleted mid-read as \"no candidates\". Wrap everything after `find_object` in a `try`, rethrowing anything except \"has no object with ID\" and returning `[]` for that. This is the same pattern `ka_class` uses a few lines above. No product change: deleting the folder with its last candidate is specified behaviour.\n",
+          "closedAt": null,
+          "comments": {
+            "nodes": [],
+            "totalCount": 0
+          },
+          "createdAt": "2026-10-19T03:05:14Z",
+          "id": "I_kwDONszNXs8AAAABYK8hgw",
+          "labels": {
+            "nodes": [
+              {
+                "name": "bug"
+              },
+              {
+                "name": "p2"
+              },
+              {
+                "name": "harness"
+              }
+            ],
+            "totalCount": 3
+          },
+          "milestone": null,
+          "number": 398,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "OPEN",
+          "stateReason": null,
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABYK8hg88AAAAH0x1ODg"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABYK8hg88AAAAH0x1OjQ"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABYK8hg88AAAAH0x1PGQ"
+              }
+            ]
+          },
+          "title": "Flaky: adoption 'candidates follow the wire' — ka_candidates reads the Discovered folder the keeper deletes mid-poll",
+          "updatedAt": "2026-10-19T03:05:14Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "## Symptom\n\n`tests/uibuilder/pending_changes.tests:813` (\"pending.b4c.automatic_restarts_are_staggered\") failed once in a full 20-way pre-merge run (HEAD d1eb415, lane t3, trace `24b578b96e0b429780dc41c0e130baba`). It passes alone. The restart timestamps were `[1792378431177, 1792378433732, 1792378434895, 1792378436094, 1792378437208]`, so the gaps were **2555, 1163, 1199, 1114 ms**. The assertion requires each gap to be at least `1500 * 3/4 = 1125` (`:843`).\n\n## Mechanism (a product bug: a timer's `after N` is measured from when the timer manager applies the create, not from the `timer` statement)\n\n1. A room rename marks every panel. Their `ui-rebuild-@` timers (`data/frameworks/hometouch/modules/ui_builder/base/extensions.sdl:307`) come due together. The timer manager fires due timers **one at a time, synchronously, inside its `sleep_until` select arm** (`store_server/src/timer.rs:828-866`, \"timers run one at a time\"). The five auto-rebuilds therefore run back to back. The log shows `kind=ui_auto_rebuild` at +11.157, +11.529, +11.868, +12.177, +12.576 s (≈340 ms each under load).\n2. Each rebuild calls `schedule_restart` (`extensions.sdl:366-387`). It takes `now = real_now_millis()` and claims the slot `max(now, NextRestartAt)`, so the slots are absolute: `t0, t0+1500, t0+3000, ...`. It then arms `timer \"ui-restart-@\" after (slot - now)`.\n3. The `timer` statement only queues a `PendingOp::Create` with the delay and no timestamp (`timer.rs:127-135`, `:292-295`). The deadline is computed in `apply_pending` as `next_fire: Instant::now() + delay` (`timer.rs:708`). `apply_pending` cannot run until the manager loop gets back to its `select!`, which is **after the whole batch of rebuild bodies finishes**. All four restart timers therefore start counting at the same moment `T_arm` (≈ when the last rebuild ends), instead of at their own `now`.\n4. So `fire_k = T_arm + slot_k - now_k`, and the gap between restarts k-1 and k is `1500 - (now_k - now_{k-1})`, i.e. PanelRestartDelay minus one rebuild body's duration. Predicted from the log's rebuild spacing (339, 309, 399 ms): 1161, 1191, 1101 ms. Observed: 1163, 1199, 1114 ms. The first gap is long (2555 ms) because restart 2 also waits for `T_arm`. Alone, the bodies are fast and the gaps stay near 1500. Once a body takes more than ~375 ms the assertion fails.\n\n`LastRestartAt` is stamped at the actual fire (`extensions.sdl:479`), so the test is measuring the real spacing. Panels really are restarted closer together than PanelRestartDelay. The same skew hits every timer that is armed from inside a timer body, or while the manager is busy firing one, with an `after N` computed from a clock read: its deadline slides late by however long the manager was busy.\n\n## Proposed fix\n\nIn the kernel, capture `Instant::now()` when the `timer` statement registers (the `TimerRegistry` create/update paths, `timer.rs:~280` / `~300`), carry it in `PendingOp::Create` / `Update`, and set `next_fire = requested_at + delay` in `apply_pending` (`:708`, `:719`). `after N` then means N from the statement, whatever the manager was doing. Add a Rust test in `timer.rs`: arm a timer from inside a firing body that runs for D ms, and assert it fires at statement + N, not at statement + D + N. The test's `3/4` tolerance can stay. Once the kernel is fixed, the remaining lateness is only one body's run time after each slot.\n",
+          "closedAt": null,
+          "comments": {
+            "nodes": [],
+            "totalCount": 0
+          },
+          "createdAt": "2026-10-19T03:05:16Z",
+          "id": "I_kwDONszNXs8AAAABYK8iZw",
+          "labels": {
+            "nodes": [
+              {
+                "name": "bug"
+              },
+              {
+                "name": "p2"
+              },
+              {
+                "name": "kernel"
+              }
+            ],
+            "totalCount": 3
+          },
+          "milestone": null,
+          "number": 399,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "OPEN",
+          "stateReason": null,
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABYK8iZ88AAAAH0x1R3Q"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABYK8iZ88AAAAH0x1STQ"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABYK8iZ88AAAAH0x1Syg"
+              }
+            ]
+          },
+          "title": "Flaky: automatic panel restarts land closer than PanelRestartDelay — a timer's delay counts from apply_pending, not from the timer statement",
+          "updatedAt": "2026-10-19T03:05:16Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "## Observed\n\nA parent's `contains` restriction is enforced or not depending on HOW the child was created, not on what was created.\n\n```sdl\nclass CdStranger { is RootObject }\nclass CdBox { is RootObject  contains CdKind }\n```\n\n```rhai\nlet box = store.root.create(#{ Class: \"/Schema/User/CdBox\", Name: \"D1Box\" });\nbox.create(#{ Class: \"/Schema/User/CdStranger\", Name: \"Kid\" });   // ACCEPTED\n```\n\nThe same pair created nested, through a reconcile, is refused with `InvalidChildContainment`:\n\n```sdl\nmerge \"/\" { object D2Box: #CdBox { object Kid: #CdStranger { } } }\n```\n\nBoth are cases in `tests/transaction/schema_change/containment_doors_adversarial.tests` (`door_direct_create`, `door_reconcile_nested`). The first is listed `KNOWN_OPEN`, so that file currently asserts the hole stays open.\n\n**Owner ruling (2026-10-19): this is a bug, not an accepted asymmetry.** A store must never be able to hold a state its own schema says is impossible.\n\n## Where\n\n`store_server/src/command/precommit_store.rs::set_current_object`: with no `parent_stack` entry (a standalone `CreateObject`, i.e. a script's `parent.create(...)` or any single create command), the pair is queued with `queue_containment(parent_id, current_object, false)`. `check_child_class = false` skips the whole `ChildClass` block in `check_child_containment`. Only the child's `contained_in` is checked.\n\nPath coverage today:\n\n| Route | parent `contains` | child `contained_in` |\n|---|---|---|\n| nested create / reconcile | checked | checked |\n| direct create | **not checked** | checked |\n| cast, reparent | checked (gh #233) | checked |\n\n## Why it is still open\n\nFlipping the flag to `true` was tried and measured on 2026-08-26: **326 of 1,912 corpus tests fail with 1,026 violations**, dominated by 348 creates under `/Home` (which declares `contains Location`) and 266 at the store root. Record: `docs/superpowers/notes/2026-08-26-containment-invariant-findings.md` §\"The create path: TRIED, MEASURED, REVERTED\". So the corpus creates wrong-kind children constantly, and the flag cannot flip until those containers declare what they actually hold (or the tests stop using them as scratch space; the `test_world` module already provides a container fixture for that).\n\n## What done looks like\n\n1. **Declare what `/` and `/Home` hold**, or move the tests that use them as scratch space onto `test_world` / `Std/Container`. Decide per site; do not widen `/Home` to `contains Object` just to make the count drop.\n2. **Flip the direct-create path to `check_child_class = true`.** `door_direct_create` moves from `KNOWN_OPEN` into the shut assertion.\n3. **Existing stores.** A store created before the fix may already hold violating pairs. Add a whole-store containment census, reported at load (report-only, never an auto-repair, the same posture as `store.orphan_values`), plus a repair path, and run it against home TLV and the templates before the flip lands.\n4. **Docs.** `CLAUDE.md` (the containment paragraph and the TouchPanel catalog row) describe the gap as still open; update them to the fixed state.\n\n## Who depends on it\n\nThe behaviors design (master spec D44, and the node-context scheme being recorded as D52) enforces which node may sit where through `contains`. Until this is fixed it must declare `contained_in` on the child side as well and keep a Check backstop, because the parent's half can be bypassed by any script.\n\nRelated, separate: gh #394 (relation-change checks skip classes outside `/Schema`).",
+          "closedAt": null,
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-10-19T14:28:23Z"
+              },
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-10-19T16:52:50Z"
+              }
+            ],
+            "totalCount": 2
+          },
+          "createdAt": "2026-10-19T14:23:47Z",
+          "id": "I_kwDONszNXs8AAAABYTLWtA",
+          "labels": {
+            "nodes": [
+              {
+                "name": "bug"
+              },
+              {
+                "name": "p1"
+              },
+              {
+                "name": "kernel"
+              },
+              {
+                "name": "InProgress"
+              }
+            ],
+            "totalCount": 4
+          },
+          "milestone": null,
+          "number": 401,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "OPEN",
+          "stateReason": null,
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABYTLWtM8AAAAH1ePuuA"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABYTLWtM8AAAAH1ePv2Q"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABYTLWtM8AAAAH1ePxJA"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABYTLWtM8AAAAH1eqDzQ"
+              }
+            ]
+          },
+          "title": "A direct create ignores the parent's `contains`, so the store accepts a child its schema forbids",
+          "updatedAt": "2026-10-19T16:52:51Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "## Observed\n\nOn lane t1, two full `store-test tests` runs on a tree at `main` = `9a653bdf2` left 21 git-tracked template `server.toml` files modified. Each diff is the same single added line under `[store_server]`:\n\n```diff\n [store_server]\n data = \"data\"\n port = 10000\n+web_port = 8080\n```\n\nThe files touched include `data/stores/_templates/design_rules_e2e/server.toml`, `climate_scaling_e2e/server.toml`, `all_public_content/server.toml` and `inspect_panel_static_e2e/server.toml`. The runs had no explicit `rebake-templates` or `save-store-as-template` step. The only template writer they ran is store-test's automatic rebake, which runs before every invocation. The new binary invalidated every template, so that rebake ran on all of them.\n\n## Expected\n\nAn implicit auto-rebake refreshes only the local cache and stamps. The tracked bundle (`template.artifact`, `metadata.toml`, `server.toml`) is rewritten only at a bless. CLAUDE.md's Store Templates row says: \"The tracked artifact is rewritten only at a bless … the implicit auto-rebake refreshes only the local cache + stamps.\" A test run should leave `git status` clean.\n\n## Confirmed\n\n- `normalise_server_toml` (`store_server/src/template.rs:307`) keeps `web_port` on purpose (`template.rs:1984`: `kept_on_purpose = [\"port\", \"web_port\", \"admin_ui_dir\"]`), so the key survives normalisation.\n- `web_port` arrived with `0b698164a` (\"home serves the UI on 8080\").\n\n## Hypotheses (UNVERIFIED)\n\n- Possibly the rebake path writes the scratch store's `server.toml` back into the template directory. One candidate is the `normalise_server_toml` call near `store_server/src/manager.rs:5419`. That would explain the defaulted `web_port` appearing, but it is not checked.\n- If so, every later test run on any lane rewrites tracked files until they are committed once. A lane that `git add`s broadly would commit them, and the composite hash input may churn.\n\nFound in passing during gh #401 (lane t1); restored with `git checkout` there.\n",
+          "closedAt": null,
+          "comments": {
+            "nodes": [],
+            "totalCount": 0
+          },
+          "createdAt": "2026-10-19T18:11:18Z",
+          "id": "I_kwDONszNXs8AAAABYWZSzQ",
+          "labels": {
+            "nodes": [
+              {
+                "name": "bug"
+              },
+              {
+                "name": "p2"
+              },
+              {
+                "name": "harness"
+              }
+            ],
+            "totalCount": 3
+          },
+          "milestone": null,
+          "number": 402,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "OPEN",
+          "stateReason": null,
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABYWZSzc8AAAAH1wFtWA"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABYWZSzc8AAAAH1wFumw"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABYWZSzc8AAAAH6pJvgw"
+              }
+            ]
+          },
+          "title": "A test run rewrites 21 tracked template server.toml files (adds web_port = 8080)",
+          "updatedAt": "2026-10-22T22:40:00Z"
+        },
+        {
+          "__typename": "Issue",
+          "assignees": {
+            "nodes": []
+          },
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "OWNER",
+          "blockedBy": {
+            "nodes": []
+          },
+          "blocking": {
+            "nodes": []
+          },
+          "body": "## Observed\n\nOn lane t1 (branch `fix/containment-direct-create`, server up 2 days 10 h), `store-cli delete-store --store-name _rb_climate_e2e_panel` never returned. That store was a scratch store, reset from a template and not loaded at the time. From the moment the server logged `DeleteStore: destructive operation on a store` (05:33:22Z), it **stopped answering every request**:\n\n- `ht_server` logged `Store-Server stream error, reconnecting` at 05:33:55Z.\n- From then on it logged `Failed to connect to Store-Server` roughly every 40 s.\n- The gRPC port stayed bound (`lsof` showed it listening) while nothing was served.\n\nThe process sat at 0.0 % CPU. A `sample` of it (kept in the session scratchpad) shows the request thread parked in a syscall that does not return:\n\n```\nStoreManagerService::delete_store\n  store_server::manager::destroy_store_dir\n    std::fs::remove_dir_all\n      std::sys::fs::unix::remove_dir_impl::remove_dir_all_recursive\n        openat            <- parked\n```\n\nEvery other tokio worker in the sample is idle (`Context::park` → `pthread_cond_wait`), including a blocking-pool thread that last ran `command::processor::flush_now`.\n\n## Expected\n\nA delete either completes or fails with an error. No single request may stop the server from serving others (owner rule: no scenario may hang the system).\n\n## Confirmed\n\n- The store directory and everything under it is readable while the delete is parked. A bounded `ls -laO` of `_rb_climate_e2e_panel` and its `db/` returned at once, and showed `.instance`, `.materialized`, `.reconciled` and `store.redb`, none with a dataless flag.\n- The server process holds none of those files open (`lsof -p` shows 0 entries under `_rb_`).\n- `DeleteStore` calls `StoreManager::force_unload_store_deleting` and then `destroy_store_dir`, synchronously, on the async request task (`services/management.rs:311-321`).\n\n## Hypotheses — UNVERIFIED, do not trust\n\n- **Which path `openat` is parked on is unknown.** It is not visible without a root-level trace such as `fs_usage`. `destroy_store_dir` may also remove a `db_root` or artifacts half outside the store directory; one of those could be the slow path.\n- **Why the whole server stops is unknown.** A synchronous `remove_dir_all` on a tokio worker blocks only that worker. That every request stalls suggests something else waits on this request, perhaps a lock taken by the unload or a shutdown handshake, but nothing in the sample shows a second thread waiting on it.\n- Either way, a filesystem call on the request path has no bound. One direction is `spawn_blocking` with a timeout that reports and leaves the directory for a later sweep.\n\nFound in passing during gh #401, which does not touch this path. The lane was recovered by killing the server.\n",
+          "closedAt": null,
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-10-22T05:38:31Z"
+              },
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-10-22T07:45:54Z"
+              }
+            ],
+            "totalCount": 2
+          },
+          "createdAt": "2026-10-22T05:38:10Z",
+          "id": "I_kwDONszNXs8AAAABZBARHA",
+          "labels": {
+            "nodes": [
+              {
+                "name": "bug"
+              },
+              {
+                "name": "p0"
+              },
+              {
+                "name": "kernel"
+              }
+            ],
+            "totalCount": 3
+          },
+          "milestone": null,
+          "number": 403,
+          "parent": null,
+          "reactionGroups": [
+            {
+              "content": "THUMBS_UP",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "THUMBS_DOWN",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "LAUGH",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HOORAY",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "CONFUSED",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "HEART",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "ROCKET",
+              "reactors": {
+                "totalCount": 0
+              }
+            },
+            {
+              "content": "EYES",
+              "reactors": {
+                "totalCount": 0
+              }
+            }
+          ],
+          "repository": {
+            "nameWithOwner": "yuvalrakavy/Store"
+          },
+          "state": "OPEN",
+          "stateReason": null,
+          "subIssues": {
+            "nodes": []
+          },
+          "timelineItems": {
+            "nodes": [
+              {
+                "id": "LE_lADONszNXs8AAAABZBARHM8AAAAH5akjSw"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABZBARHM8AAAAH5akj8g"
+              },
+              {
+                "id": "UNLE_lADONszNXs8AAAABZBARHM8AAAAH6pJ3Bg"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABZBARHM8AAAAH6pJ3Hg"
+              },
+              {
+                "id": "LE_lADONszNXs8AAAABZBARHM8AAAAH6pJ3Tw"
+              }
+            ]
+          },
+          "title": "DeleteStore parks in remove_dir_all openat and the whole server stops answering",
+          "updatedAt": "2026-10-22T22:40:02Z"
+        }
+      ]
+    }
+  },
+  "variables": {
+    "ids": [
+      "I_kwDONszNXs8AAAABW8pB5w",
+      "I_kwDONszNXs8AAAABW_CBQA",
+      "I_kwDONszNXs8AAAABX1hVZA",
+      "I_kwDONszNXs8AAAABX86cBA",
+      "I_kwDONszNXs8AAAABX9nHTg",
+      "I_kwDONszNXs8AAAABXAOIMA",
+      "I_kwDONszNXs8AAAABXCt3BQ",
+      "I_kwDONszNXs8AAAABXP4kPA",
+      "I_kwDONszNXs8AAAABXUiefg",
+      "I_kwDONszNXs8AAAABXi9UBA",
+      "I_kwDONszNXs8AAAABXlOs_A",
+      "I_kwDONszNXs8AAAABXnlj2A",
+      "I_kwDONszNXs8AAAABXxdd6w",
+      "I_kwDONszNXs8AAAABXyxO2A",
+      "I_kwDONszNXs8AAAABXz2BcA",
+      "I_kwDONszNXs8AAAABXz6K5w",
+      "I_kwDONszNXs8AAAABXzNZOA",
+      "I_kwDONszNXs8AAAABYHeTpA",
+      "I_kwDONszNXs8AAAABYJAxPA",
+      "I_kwDONszNXs8AAAABYK-0uw",
+      "I_kwDONszNXs8AAAABYK8hgw",
+      "I_kwDONszNXs8AAAABYK8iZw",
+      "I_kwDONszNXs8AAAABYTLWtA",
+      "I_kwDONszNXs8AAAABYWZSzQ",
+      "I_kwDONszNXs8AAAABZBARHA"
+    ]
+  }
+}

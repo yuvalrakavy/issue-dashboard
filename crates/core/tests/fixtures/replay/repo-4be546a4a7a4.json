@@ -1,0 +1,58 @@
+{
+  "name": "repo",
+  "response": {
+    "data": {
+      "repository": {
+        "defaultBranchRef": {
+          "name": "main"
+        },
+        "id": "R_kgDOAyYOjQ",
+        "labels": {
+          "nodes": [
+            {
+              "name": "bug"
+            },
+            {
+              "name": "duplicate"
+            },
+            {
+              "name": "enhancement"
+            },
+            {
+              "name": "help wanted"
+            },
+            {
+              "name": "question"
+            },
+            {
+              "name": "wontfix"
+            },
+            {
+              "name": "new feature"
+            },
+            {
+              "name": "priority"
+            },
+            {
+              "name": "regression"
+            },
+            {
+              "name": "docs"
+            },
+            {
+              "name": "vm"
+            }
+          ],
+          "totalCount": 11
+        },
+        "nameWithOwner": "rhaiscript/rhai",
+        "viewerPermission": "READ",
+        "visibility": "PUBLIC"
+      }
+    }
+  },
+  "variables": {
+    "name": "rhai",
+    "owner": "rhaiscript"
+  }
+}

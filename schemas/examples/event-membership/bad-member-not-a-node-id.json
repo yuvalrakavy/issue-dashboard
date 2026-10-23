@@ -1,0 +1,23 @@
+{
+  "seq": 5,
+  "time": "2026-10-23T08:00:00Z",
+  "kind": "membership",
+  "subject": "R_kgDOAbCdEf",
+  "pred": 0,
+  "distinct": {
+    "project": "home",
+    "repo": "example-org/server",
+    "members_hash": "f194a4b3349ca12531c48e99aac2c37f3f0a60dc39ed93f731b6e6868f9c04e7"
+  },
+  "identity": "0e124fac5782dc934d7f9365d7d5577045e67ce769fdd059678ee77e112edb1a",
+  "data": {
+    "project": "home",
+    "repo": "example-org/server",
+    "read_id": "read-home-1",
+    "members_hash": "f194a4b3349ca12531c48e99aac2c37f3f0a60dc39ed93f731b6e6868f9c04e7",
+    "issues": [
+      "not a node id"
+    ],
+    "pull_requests": []
+  }
+}

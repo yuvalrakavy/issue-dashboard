@@ -12,9 +12,13 @@ use chrono::{DateTime, Utc};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use issue_dashboard_core::backup::Failpoint;
 use issue_dashboard_core::config::ConfigSet;
+use issue_dashboard_core::cycle;
 use issue_dashboard_core::docs::LaunchRequest;
+use issue_dashboard_core::github::{GhCli, GitHub, Recorder, Replay};
+use issue_dashboard_core::ingest::{self, Pages};
 use issue_dashboard_core::launch::{self, EndState, Via};
 use issue_dashboard_core::outcome::{self, GateRuns, Outcome, RecordedBy};
+use issue_dashboard_core::read;
 use issue_dashboard_core::root::{Options, parse_time};
 use issue_dashboard_core::{Error, Root};
 use serde_json::{Value, json};
@@ -24,6 +28,11 @@ use serde_json::{Value, json};
 const ENV_NOW: &str = "ISSUE_DASHBOARD_NOW";
 const ENV_FAILPOINT: &str = "ISSUE_DASHBOARD_FAILPOINT";
 const ENV_LOCK_WAIT_MS: &str = "ISSUE_DASHBOARD_LOCK_WAIT_MS";
+/// GitHub seams (2.7): serve recorded responses from a directory instead of calling `gh`, or
+/// call `gh` and record every exchange into one; and the page size of every paginated read.
+const ENV_REPLAY: &str = "ISSUE_DASHBOARD_REPLAY";
+const ENV_RECORD: &str = "ISSUE_DASHBOARD_RECORD";
+const ENV_PAGE_SIZE: &str = "ISSUE_DASHBOARD_PAGE_SIZE";
 
 #[derive(Parser)]
 #[command(
@@ -86,6 +95,21 @@ enum Command {
     },
     /// Record a launched session's outcome (7.7).
     RecordOutcome(OutcomeArgs),
+    /// One cycle of a project (10.4): ingest the page documents, read GitHub, and write the
+    /// project's outbox.
+    Cycle {
+        #[arg(long)]
+        project: String,
+        /// The page documents the sync job fetched, as JSON
+        /// {"decisions": [], "launches": [], "views": [], "requests": []}.
+        #[arg(long)]
+        pages: Option<PathBuf>,
+    },
+    /// Only the read of GitHub (chapter 2): record what changed; no ingest, no outbox.
+    Snapshot {
+        #[arg(long)]
+        project: String,
+    },
 }
 
 #[derive(Args)]
@@ -167,6 +191,25 @@ fn options(command: &str) -> anyhow::Result<Options> {
     Ok(o)
 }
 
+/// GitHub as the environment chooses it: a replay, a recording of the real one, or the real one.
+fn github() -> anyhow::Result<Box<dyn GitHub>> {
+    if let Ok(dir) = std::env::var(ENV_REPLAY) {
+        let replay = Replay::load(std::path::Path::new(&dir)).with_context(|| format!("{ENV_REPLAY}={dir}"))?;
+        return Ok(Box::new(replay));
+    }
+    if let Ok(dir) = std::env::var(ENV_RECORD) {
+        return Ok(Box::new(Recorder::new(GhCli, dir)));
+    }
+    Ok(Box::new(GhCli))
+}
+
+fn page_size() -> anyhow::Result<u32> {
+    match std::env::var(ENV_PAGE_SIZE) {
+        Ok(n) => Ok(n.parse().with_context(|| format!("{ENV_PAGE_SIZE}={n}"))?),
+        Err(_) => Ok(read::DEFAULT_PAGE),
+    }
+}
+
 fn parse_gate(s: &str) -> Result<GateRuns, Error> {
     let (level, runs) = s
         .split_once('=')
@@ -230,6 +273,8 @@ fn run(cli: Cli) -> anyhow::Result<Value> {
         Command::Release { .. } => "release",
         Command::Unconfirm { .. } => "unconfirm",
         Command::RecordOutcome(_) => "record-outcome",
+        Command::Cycle { .. } => "cycle",
+        Command::Snapshot { .. } => "snapshot",
     };
     let root = Root::new(&dir, options(name)?);
 
@@ -277,6 +322,12 @@ fn run(cli: Cli) -> anyhow::Result<Value> {
                 let id = match &request {
                     Some(doc) => {
                         launch::request(tx, doc, Via::Reserve)?;
+                        // A cancel ingested before this launch was requested takes effect now,
+                        // or did on an earlier try of this command: either way it is withdrawn.
+                        ingest::apply_cancels(tx, &doc.project)?;
+                        if launch::load(tx.conn(), &doc.id)?.is_some_and(|l| l.state == launch::State::Withdrawn) {
+                            return Ok(json!({"result": "withdrawn", "launch": doc.id}));
+                        }
                         doc.id.clone()
                     }
                     None => a.launch.clone().expect("clap requires --launch without --request"),
@@ -324,6 +375,22 @@ fn run(cli: Cli) -> anyhow::Result<Value> {
             let o = outcome_of(&a)?;
             let r = root.mutate_with_clock(now, |tx| outcome::record(tx, &o))?;
             json!({"launch": o.launch, "seq": r.event().seq, "repeat": !r.is_new(), "missing": o.missing})
+        }
+        Command::Cycle { project, pages } => {
+            let pages: Pages = match &pages {
+                Some(path) => {
+                    let text = std::fs::read_to_string(path).with_context(|| path.display().to_string())?;
+                    serde_json::from_str(&text)
+                        .map_err(|e| Error::refused(format!("{}: not a pages document: {e}", path.display())))?
+                }
+                None => Pages::default(),
+            };
+            let gh = github()?;
+            serde_json::to_value(cycle::cycle(&root, gh.as_ref(), &project, &pages, &now, page_size()?)?)?
+        }
+        Command::Snapshot { project } => {
+            let gh = github()?;
+            json!({"repos": cycle::snapshot(&root, gh.as_ref(), &project, &now, page_size()?)?})
         }
     })
 }
