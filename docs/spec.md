@@ -158,9 +158,36 @@ also      = [912, 1047]              # plus these issues, by number
 read_only = true
 ```
 
+**Repo groups.** A group is a named list of repos, such as `bridges` or `pd-libraries`.
+Groups that describe repos whatever the project (the bridges are bridges everywhere) live
+in the registry; a project may add its own in its config. A repo may be in several groups.
+A group name used by both the registry and a project is refused by the config check.
+
+```toml
+# <root>/repos.toml
+[groups]
+bridges = ["yuvalrakavy/mqtt_ac", "yuvalrakavy/mqtt_dali", "yuvalrakavy/mqtt_dmx",
+           "yuvalrakavy/mqtt-hdl", "yuvalrakavy/mqtt_lutron", "yuvalrakavy/mqtt_mdns",
+           "yuvalrakavy/mqtt_ynca"]
+```
+
+A member may name a group instead of a repo, which adds every repo in it, and may exclude
+repos from it; the member's other keys then apply to each repo it adds:
+
+```toml
+[[member]]
+group   = "bridges"
+exclude = ["yuvalrakavy/mqtt_dali"]      # not tracked in this project at all
+```
+
+When a repo arrives through two members (a group and its own entry), its own entry wins.
+**Excluding a repo here removes it from the project**: it is not read, counted or shown. To
+keep tracking a repo but not see it, use a dashboard view (5.6).
+
 | Key | Default | Meaning |
 |---|---|---|
-| `repo` | required | must have a registry entry |
+| `repo` or `group` | one required | a repo with a registry entry, or a group |
+| `exclude` | `[]` | with `group`: repos of the group to leave out |
 | `filter` | none (all issues) | GitHub issue-search qualifiers, passed to `gh` unchanged, so a filter can be tested in GitHub's search box. It may not contain `repo:`, `is:open`, `is:closed`, `is:pr` or `state:`, which the tracker sets itself |
 | `also` | `[]` | issue numbers included whatever the filter says; an issue is included if it matches the filter **or** is listed here |
 | `read_only` | `false` | the tracker writes nothing to this repo |
@@ -582,7 +609,7 @@ on a phone. The page code is generic and lives in this repo; only its data is pe
 | **Triage queue** | the triage session's suggestions, each with its confidence and reason | accept, reject (with an optional reason), or edit |
 | **Pull requests** | open pull requests by status (4.4) | launch a review session |
 | **Forks** | each fork's state and how far behind it is (chapter 3) | launch "go back" or "send upstream" |
-| **Metrics** | flow, aging against the time limits, outside response times, session outcomes, decision accuracy (5.6) | change the time window |
+| **Metrics** | flow, aging against the time limits, outside response times, session outcomes, decision accuracy (5.7) | change the time window |
 
 At phone width the panels stack in that order, so the first screen is the header and what is
 waiting on you.
@@ -601,6 +628,7 @@ segment).
 | `plans` | tracker | one per GitHub write plan awaiting approval |
 | `forks`, `metrics` | tracker | chapter 3 and the metrics panel |
 | `decisions` | **page** | one per thing you did: accept, reject, edit, set priority, override, approve a plan |
+| `views` | **page** | saved views (5.6) |
 | `launches` | **page**, then dispatcher | one per launch request, moving through `requested`, `queued`, `started`, then `landed`, `stopped` or `failed`, or `not_sent` (7.3, 7.8, 5.4) |
 
 **The page never edits a tracker document, and the tracker never edits a `decisions`
@@ -638,7 +666,25 @@ artifact's editors only, so a person the page is shared with read-only cannot la
 Each panel shows the snapshot time it was built from. A repo whose last good read is older
 than twice the run interval is marked stale in the header and on its rows.
 
-### 5.6 Learning from your corrections (proposed)
+### 5.6 Views: include and exclude by repo and group
+
+A **view** decides which tracked repos the dashboard shows. It has an include list and an
+exclude list, each holding repos and groups; an empty include list means every repo, and
+**exclude wins** over include. "Without bridges" is `exclude = [group bridges]`; "hide
+mqtt_dali" is `exclude = [repo yuvalrakavy/mqtt_dali]`; "only the PD libraries" is
+`include = [group pd-libraries]`.
+
+- Views can be saved by name and switched in the header. The project config names the
+  default view; saved views are page-owned documents (`views`, 5.3).
+- A view filters every panel, the summary tiles and the metrics, and the header names the
+  view in force, so a number is never read without knowing what it covers.
+- **Hidden is not gone.** When a view hides a repo that has something urgent (an open p0,
+  a private security report, an item waiting on you), the header shows one line such as
+  "Hidden by this view: 1 p0 in mqtt_dali", with a link that shows it.
+- A view changes only what you see. Tracking, ordering, triage and write-back keep working
+  for every tracked repo; to stop tracking a repo, exclude it from the project (1.4).
+
+### 5.7 Learning from your corrections
 
 Every accept, reject, edit and override is recorded as a `decisions` document, with an
 optional one-tap reason ("wrong area", "already fixed", "not a bug"). Those records do
@@ -679,7 +725,7 @@ The sum of three terms, each on the relative scale 1, 2, 3, 5, 8, 13:
 | **Risk reduction and opportunity** | the cost of delay of what it unblocks; membership of a defect class fixed in the same session; a silent failure becoming visible (detectability) |
 
 Severity, reach and detectability come from the decision seam (7.1), with your corrections
-(5.6) taking precedence.
+(5.7) taking precedence.
 
 ### 6.3 Job size
 
@@ -831,7 +877,7 @@ routing:
 
 The tier comes from the triage session's estimate for the issue. The dashboard shows the
 routing with a one-line reason before launch, and you can change it; a change is recorded
-(5.6) so the routing can be tuned from evidence.
+(5.7) so the routing can be tuned from evidence.
 
 ### 7.5 Briefs
 
