@@ -676,13 +676,21 @@ mqtt_dali" is `exclude = [repo yuvalrakavy/mqtt_dali]`; "only the PD libraries" 
 
 - Views can be saved by name and switched in the header. The project config names the
   default view; saved views are page-owned documents (`views`, 5.3).
+- **Isolate** is a one-step view: every repo name and group name on the page has an
+  "isolate" action that shows only that repo or group, with every panel, tile and metric
+  aggregated over it alone ("Bridges: 2 open, 0 over time limit, first response 2.1 days").
+  The header shows "Isolated: Bridges", and one tap returns to the view you came from.
+  An isolated scope can be saved as a view like any other.
+- The metrics panel can also break any metric down by group, so groups can be compared side
+  by side without isolating each in turn.
 - A view filters every panel, the summary tiles and the metrics, and the header names the
   view in force, so a number is never read without knowing what it covers.
 - **Hidden is not gone.** When a view hides a repo that has something urgent (an open p0,
   a private security report, an item waiting on you), the header shows one line such as
   "Hidden by this view: 1 p0 in mqtt_dali", with a link that shows it.
 - A view changes only what you see. Tracking, ordering, triage and write-back keep working
-  for every tracked repo; to stop tracking a repo, exclude it from the project (1.4).
+  for every tracked repo. To stop tracking a repo, remove it from the project config, or,
+  when it arrives through a group, list it in that member's `exclude` (1.4).
 
 ### 5.7 Learning from your corrections
 
