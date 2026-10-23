@@ -59,14 +59,23 @@ impl Tracker {
 
     fn ok(&self, args: &[&str]) -> Value {
         let out = self.cmd(args);
-        assert!(out.status.success(), "{args:?} failed: {}", String::from_utf8_lossy(&out.stderr));
+        assert!(
+            out.status.success(),
+            "{args:?} failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
         serde_json::from_slice(&out.stdout).unwrap()
     }
 
     /// Runs a command that must be refused (exit 1) and returns its message.
     fn refused(&self, args: &[&str]) -> String {
         let out = self.cmd(args);
-        assert_eq!(out.status.code(), Some(1), "{args:?}: {}", String::from_utf8_lossy(&out.stderr));
+        assert_eq!(
+            out.status.code(),
+            Some(1),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
         String::from_utf8_lossy(&out.stderr).into_owned()
     }
 
@@ -87,8 +96,17 @@ fn open_store_issues(d: &Value) -> Vec<(String, String)> {
         .as_array()
         .unwrap()
         .iter()
-        .filter(|i| i["alias"].as_str().unwrap().starts_with("yuvalrakavy/Store#") && i["state"] == "open" && i["kind"] == "issue")
-        .map(|i| (i["id"].as_str().unwrap().to_string(), i["alias"].as_str().unwrap().to_string()))
+        .filter(|i| {
+            i["alias"].as_str().unwrap().starts_with("yuvalrakavy/Store#")
+                && i["state"] == "open"
+                && i["kind"] == "issue"
+        })
+        .map(|i| {
+            (
+                i["id"].as_str().unwrap().to_string(),
+                i["alias"].as_str().unwrap().to_string(),
+            )
+        })
         .collect()
 }
 
@@ -121,14 +139,21 @@ fn a_recommend_launch_from_reserve_to_inbox() {
     let title = b["title"].as_str().unwrap();
     assert!(title.ends_with(&token) && title.chars().count() <= 60, "{title}");
     let text = b["text"].as_str().unwrap();
-    assert!(text.contains(&format!("--root {}", t.dir.path().display())), "the brief names the root");
+    assert!(
+        text.contains(&format!("--root {}", t.dir.path().display())),
+        "the brief names the root"
+    );
     assert!(text.contains("record-suggestions --launch L1"), "{text}");
     assert!(b["pieces"].as_array().unwrap().iter().all(|p| p["source"].is_string()));
 
     t.ok(&["launch-started", "--token", &token, "--session", "local_recommender"]);
     let live = t.ok(&["launches", "--live"]);
     let row = &live["launches"][0];
-    assert_eq!((row["id"].as_str(), row["state"].as_str()), (Some("L1"), Some("started")), "{live}");
+    assert_eq!(
+        (row["id"].as_str(), row["state"].as_str()),
+        (Some("L1"), Some("started")),
+        "{live}"
+    );
     assert_eq!(row["kind"], "recommend_closures");
     assert_eq!(row["outcome"], false);
 
@@ -141,11 +166,21 @@ fn a_recommend_launch_from_reserve_to_inbox() {
     assert_eq!(rec["recorded"], 2, "{rec}");
 
     let d = t.outbox();
-    let kinds: Vec<&str> = d["suggestions"].as_array().unwrap().iter().map(|s| s["kind"].as_str().unwrap()).collect();
+    let kinds: Vec<&str> = d["suggestions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["kind"].as_str().unwrap())
+        .collect();
     assert_eq!(kinds.len(), 2, "{kinds:?}");
     assert!(kinds.contains(&"obsolete") && kinds.contains(&"left_out"), "{kinds:?}");
     let meta_repos = d["meta"]["repos"].as_array().unwrap();
-    assert!(meta_repos.iter().all(|r| r["campaign_skill"] == false && r.get("recipe").is_some()), "{meta_repos:?}");
+    assert!(
+        meta_repos
+            .iter()
+            .all(|r| r["campaign_skill"] == false && r.get("recipe").is_some()),
+        "{meta_repos:?}"
+    );
 }
 
 #[test]
@@ -154,7 +189,10 @@ fn a_launch_document_not_written_by_the_owner_is_refused() {
     let open = open_store_issues(&t.outbox());
     let doc = t.write("L1.json", &launch_doc("L1", "user_someone_else", &[open[0].clone()]));
     let m = t.refused(&["reserve", "--request", &doc, "--dispatcher", D]);
-    assert!(m.contains("author user_someone_else is not project home's owner_id"), "{m}");
+    assert!(
+        m.contains("author user_someone_else is not project home's owner_id"),
+        "{m}"
+    );
     assert_eq!(t.ok(&["launches"])["launches"], json!([]), "nothing was recorded");
 }
 

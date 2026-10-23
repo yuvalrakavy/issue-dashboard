@@ -402,7 +402,9 @@ fn held_item<'a>(l: &'a Launch, all: &'a [Launch]) -> Option<(&'a str, &'a Launc
     if !l.request.kind.holds_items() {
         return None;
     }
-    let mut holders = all.iter().filter(|o| o.id != l.id && o.state.holds() && o.request.kind.holds_items());
+    let mut holders = all
+        .iter()
+        .filter(|o| o.id != l.id && o.state.holds() && o.request.kind.holds_items());
     holders.find_map(|o| {
         l.request
             .items

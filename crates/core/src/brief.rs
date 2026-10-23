@@ -183,7 +183,11 @@ fn issue(conn: &Connection, config: &ConfigSet, maintainers: &[String], id: &str
         .rsplit_once('#')
         .and_then(|(r, n)| Some((r.to_string(), n.parse::<u64>().ok()?)))
         .ok_or_else(|| Error::refused(format!("{id}: its observation has no owner/repo#N alias")))?;
-    let association = o.content.get("author_association").and_then(Value::as_str).unwrap_or("NONE");
+    let association = o
+        .content
+        .get("author_association")
+        .and_then(Value::as_str)
+        .unwrap_or("NONE");
     let author = o.content.get("author").and_then(Value::as_str).unwrap_or("ghost");
     Ok(Issue {
         id: id.to_string(),
@@ -258,7 +262,12 @@ pub fn brief_with(conn: &Connection, config: &ConfigSet, launch_id: &str, cli: &
         LaunchKind::RecommendClosures => recommend(&mut b, config, &l, &issues, cli)?,
         _ => fix(&mut b, conn, config, &l, &issues, cli)?,
     }
-    let text = b.pieces.iter().map(|p| p.text.as_str()).collect::<Vec<_>>().join("\n\n");
+    let text = b
+        .pieces
+        .iter()
+        .map(|p| p.text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n\n");
     Ok(Brief {
         launch: l.id.clone(),
         kind: l.request.kind,
@@ -305,7 +314,11 @@ fn fix(b: &mut Builder, conn: &Connection, config: &ConfigSet, l: &Launch, issue
         let labels = i.labels();
         facts.push_str(&format!(
             " Labels: {}.",
-            if labels.is_empty() { "none".to_string() } else { labels.join(", ") }
+            if labels.is_empty() {
+                "none".to_string()
+            } else {
+                labels.join(", ")
+            }
         ));
         for (field, name) in [("blocked_by", "Blocked by"), ("blocking", "Blocks")] {
             let ls = links(conn, i, field)?;
@@ -362,7 +375,9 @@ fn fix(b: &mut Builder, conn: &Connection, config: &ConfigSet, l: &Launch, issue
         fill(&recipe.release),
     );
     if let Some(process) = &recipe.process {
-        let at = config.local_path(&first.repo).map_or(process.clone(), |p| p.join(process).display().to_string());
+        let at = config
+            .local_path(&first.repo)
+            .map_or(process.clone(), |p| p.join(process).display().to_string());
         how.push_str(&format!("\n- Follow the repo's own process: {at}"));
     }
     b.tracker(how);
@@ -440,18 +455,23 @@ fn recommend(b: &mut Builder, config: &ConfigSet, l: &Launch, issues: &[Issue], 
     if generic {
         b.tracker(GENERIC_PROCEDURE.trim_end().to_string());
     }
-    b.tracker(format!("## How to judge each repo's issues\n\n{}", methods.join("\n\n")));
+    b.tracker(format!(
+        "## How to judge each repo's issues\n\n{}",
+        methods.join("\n\n")
+    ));
 
     // The issues: tracker facts, then each title quoted under its author.
-    b.tracker(
-        "## The issues\n\nEach is named by number; read its body and comments with `gh issue view`.",
-    );
+    b.tracker("## The issues\n\nEach is named by number; read its body and comments with `gh issue view`.");
     for i in issues {
         let labels = i.labels();
         b.tracker(format!(
             "- {} (labels: {})",
             i.alias,
-            if labels.is_empty() { "none".to_string() } else { labels.join(", ") }
+            if labels.is_empty() {
+                "none".to_string()
+            } else {
+                labels.join(", ")
+            }
         ));
         b.quote(i, false);
     }

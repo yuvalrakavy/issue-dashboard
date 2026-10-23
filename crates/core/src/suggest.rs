@@ -404,7 +404,10 @@ pub fn documents(conn: &Connection, project: &str) -> Result<Vec<Value>> {
     for e in &events {
         let decision = e.distinct["decision"].as_str().unwrap_or_default().to_string();
         let run = e.distinct["run_id"].as_str().unwrap_or_default();
-        about.insert(doc_id(run, &decision, &e.subject), (e.subject.clone(), decision.clone()));
+        about.insert(
+            doc_id(run, &decision, &e.subject),
+            (e.subject.clone(), decision.clone()),
+        );
         latest.insert((e.subject.clone(), decision), e);
     }
     // The latest applied dismissal of each (item, kind), by the seq it was decided at.
@@ -421,8 +424,13 @@ pub fn documents(conn: &Connection, project: &str) -> Result<Vec<Value>> {
 
     let mut out = Vec::new();
     for ((subject, decision), e) in latest {
-        let Some((seen_at, open, _)) = observed(conn, &subject)? else { continue };
-        if dismissed.get(&(subject.clone(), decision.clone())).is_some_and(|d| seen_at < *d) {
+        let Some((seen_at, open, _)) = observed(conn, &subject)? else {
+            continue;
+        };
+        if dismissed
+            .get(&(subject.clone(), decision.clone()))
+            .is_some_and(|d| seen_at < *d)
+        {
             continue;
         }
         let mut s = e.data["suggestion"].clone();
