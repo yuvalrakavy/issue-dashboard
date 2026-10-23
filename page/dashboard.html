@@ -617,7 +617,10 @@ footer .wrap { padding-block: 0 32px; font-size: .82rem; color: var(--muted); di
     if (S.inboxFilter === "untriaged") cards = cards.filter((c) => c.why === "untriaged");
     const pill = (k, label) => h("button", { class: "chip" + (S.inboxFilter === k ? " on" : ""), onclick: () => { S.inboxFilter = k; S.sel = 0; render(); } }, label);
     const head = h("div", { class: "pills" }, pill("all", "All"), pill("waiting", "Waiting on you"), pill("untriaged", "Untriaged"));
-    if (!cards.length) return h("div", { class: "list" }, head, h("div", { class: "note" }, S.inboxFilter === "untriaged" ? "Nothing untriaged." : "Nothing waiting on you."), recentlyClosedSection());
+    // Recently closed belongs to the whole Inbox only: a filter ("Untriaged", "Waiting on you")
+    // shows just the cards it names.
+    const closedPart = () => (S.inboxFilter === "all" ? recentlyClosedSection() : null);
+    if (!cards.length) return h("div", { class: "list" }, head, h("div", { class: "note" }, S.inboxFilter === "untriaged" ? "Nothing untriaged." : "Nothing waiting on you."), closedPart());
     return h("div", { class: "list" }, head, cards.map((c) => {
       const i = c.issue;
       const line = decisionLine(i);
@@ -633,7 +636,7 @@ footer .wrap { padding-block: 0 32px; font-size: .82rem; color: var(--muted); di
         line,
         pending ? null : picker(i),
         pending || (S.openCard && S.openCard.id === i.id) ? null : h("div", { class: "actions" }, main, moreMenu(i, ownerExtras(i))));
-    }), recentlyClosedSection());
+    }), closedPart());
   }
 
   // Every issue closed in the last N days (5.8): a close from this page keeps its Reopen (5.2a);
