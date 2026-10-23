@@ -1536,8 +1536,14 @@ them rather than refusing.
   copied or checkpointed: the main file and any `-wal` / `-shm` beside the target are renamed
   aside together (main file first), then the new file is renamed in. A crash in between leaves
   no `ledger.sqlite`, which the next command refuses, naming `rebuild`; a stray WAL is never
-  left beside the new file. (Two earlier shapes, copy-aside with a checkpoint, kept drawing
-  findings in the gate: an incomplete checkpoint, a WAL removed before the rename.)
+  left beside the new file. `rebuild.pending` names the aside set while the old files move, so
+  a move interrupted by a crash resumes into the same set. (Two earlier shapes, copy-aside with
+  a checkpoint, kept drawing findings in the gate: an incomplete checkpoint, a WAL removed before
+  the rename.) An existing ledger is opened without SQLite's create flag. **Open:** `rebuild`
+  takes the root lock, but a lock-free reader holding the old file open across the renames is not
+  excluded; before the cycle's lock-free derive step (10.4 step 3) is built, readers need a shared
+  lease that `rebuild` takes exclusively. Until then `rebuild` is for when no other tracker
+  command runs.
   `rebuild` tolerates a torn tail by the same rule as the tail repair (the trailing run of bad
   lines of the latest non-empty file) and reports how many lines it dropped; a corrupt line
   anywhere else, that is one followed by a good line, refuses with its file and line number. A

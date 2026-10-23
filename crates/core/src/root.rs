@@ -1,6 +1,7 @@
 //! A tracker root, and the shape of every mutating command (10.1, 10.4).
 
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -197,31 +198,67 @@ impl Root {
             .chain(companions(&target))
             .filter(|p| p.exists())
             .collect();
-        if !old.is_empty() {
-            let safe: String = stamp
-                .chars()
-                .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
-                .collect();
-            let free = |a: &Path| {
-                std::iter::once(a.to_path_buf())
-                    .chain(companions(a))
-                    .all(|p| !p.exists())
-            };
-            let mut aside = self.dir.join(format!("ledger.sqlite.before-rebuild-{safe}"));
-            let mut n = 1;
-            while !free(&aside) {
-                n += 1;
-                aside = self.dir.join(format!("ledger.sqlite.before-rebuild-{safe}-{n}"));
+        // `rebuild.pending` names the aside set while the old files are being moved, so a move
+        // interrupted by a crash resumes into the SAME set and a main file is never separated
+        // from its WAL by name. It is removed once the old set is complete, before the new file
+        // goes in, so a pending marker always means "the target's main file is already aside".
+        let pending = self.dir.join("rebuild.pending");
+        let resumed = if pending.exists() {
+            let name = fs::read_to_string(&pending)?.trim().to_string();
+            if target.exists() || name.is_empty() || name.contains('/') {
+                return Err(Error::refused(format!(
+                    "{} names {name:?} as an interrupted rebuild's aside set, but it does not match what is on disk; \
+                     inspect it and remove it before rebuilding",
+                    pending.display()
+                )));
             }
-            // The main file first: once it is gone, a crash leaves "no ledger", never a main
-            // file separated from its WAL.
+            Some(self.dir.join(name))
+        } else {
+            None
+        };
+        if !old.is_empty() || resumed.is_some() {
+            let aside = match resumed.clone() {
+                Some(a) => a,
+                None => {
+                    let safe: String = stamp
+                        .chars()
+                        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+                        .collect();
+                    let free = |a: &Path| {
+                        std::iter::once(a.to_path_buf())
+                            .chain(companions(a))
+                            .all(|p| !p.exists())
+                    };
+                    let mut aside = self.dir.join(format!("ledger.sqlite.before-rebuild-{safe}"));
+                    let mut n = 1;
+                    while !free(&aside) {
+                        n += 1;
+                        aside = self.dir.join(format!("ledger.sqlite.before-rebuild-{safe}-{n}"));
+                    }
+                    let mut f = fs::File::create(&pending)?;
+                    writeln!(f, "{}", aside.file_name().unwrap().to_string_lossy())?;
+                    f.sync_all()?;
+                    sync_dir(&self.dir)?;
+                    aside
+                }
+            };
+            // The main file first: once it is gone, a crash leaves "no ledger" and the marker.
             let pairs = std::iter::once((target.clone(), aside.clone()))
                 .chain(companions(&target).into_iter().zip(companions(&aside)));
             for (from, to) in pairs {
                 if from.exists() {
+                    if to.exists() {
+                        return Err(Error::refused(format!(
+                            "{} would overwrite {}; inspect both before rebuilding",
+                            from.display(),
+                            to.display()
+                        )));
+                    }
                     fs::rename(&from, &to)?;
                 }
             }
+            sync_dir(&self.dir)?;
+            fs::remove_file(&pending)?;
             sync_dir(&self.dir)?;
             moved_aside = Some(aside);
         }

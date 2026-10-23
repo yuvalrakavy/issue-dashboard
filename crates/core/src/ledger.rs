@@ -98,7 +98,10 @@ pub struct Ledger {
 impl Ledger {
     /// Opens (creating if needed) the ledger at `path`, in WAL mode.
     pub fn open(path: &Path) -> Result<Ledger> {
-        let conn = Connection::open(path)?;
+        Ledger::setup(Connection::open(path)?, path)
+    }
+
+    fn setup(conn: Connection, path: &Path) -> Result<Ledger> {
         conn.busy_timeout(Duration::from_secs(5))?;
         let mode: String = conn.query_row("PRAGMA journal_mode = WAL", [], |r| r.get(0))?;
         if !mode.eq_ignore_ascii_case("wal") {
@@ -126,13 +129,19 @@ impl Ledger {
 
     /// Opens an existing ledger; refuses, naming `rebuild`, when there is none.
     pub fn open_existing(path: &Path) -> Result<Ledger> {
-        if !path.exists() {
-            return Err(Error::refused(format!(
+        // Opened without SQLITE_OPEN_CREATE: a file that vanishes after any check (a rebuild
+        // moving it aside) is refused by SQLite rather than recreated empty.
+        let flags = rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE
+            | rusqlite::OpenFlags::SQLITE_OPEN_URI
+            | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX;
+        match Connection::open_with_flags(path, flags) {
+            Ok(conn) => Ledger::setup(conn, path),
+            Err(_) if !path.exists() => Err(Error::refused(format!(
                 "there is no ledger at {}; `issue-dashboard rebuild` recreates it from the backup",
                 path.display()
-            )));
+            ))),
+            Err(e) => Err(e.into()),
         }
-        Ledger::open(path)
     }
 
     /// Starts a write transaction; events recorded through it carry `now` as their time.

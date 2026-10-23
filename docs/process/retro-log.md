@@ -20,7 +20,7 @@ Template:
   missing withdrawn transition; a missing-ledger wipe suspected before the gate; two fix defects
   before round 2) gate=~35 user=0 post-merge=0. Biggest: a lost ledger made the next command move
   the healthy backup aside; a refused event committed through reserve_next's error swallowing.
-- DG=n/a IG=181 + round 3 post-merge=0
+- DG=n/a IG=220 post-merge=0 (5 gate rounds; the last three all on rebuild's replace step)
 - friction: the shell hook refuses heredocs containing `!` (Rust negations): ~10 min of rerouted
   edits, GUARDED by the hook itself. The Codex rescue agent backgrounded its task and returned at
   once; reading it needed the companion's `status`/`result` (~5 min, UNGUARDED: brief it to wait).

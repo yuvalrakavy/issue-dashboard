@@ -223,6 +223,29 @@ fn a_rebuild_interrupted_between_its_renames_is_finished_by_the_next_rebuild() {
     );
 }
 
+#[test]
+fn a_rebuild_interrupted_mid_move_resumes_into_the_same_aside_set() {
+    let r = temp_root();
+    history(&r.root);
+    // The state a crash leaves mid-move: the marker names the aside set, the main file is
+    // there, its WAL is still beside the (now missing) target.
+    let aside = r.path().join("ledger.sqlite.before-rebuild-interrupted");
+    fs::write(
+        r.path().join("rebuild.pending"),
+        "ledger.sqlite.before-rebuild-interrupted\n",
+    )
+    .unwrap();
+    fs::rename(r.root.ledger_path(), &aside).unwrap();
+    let wal = format!("{}-wal", r.root.ledger_path().display());
+    fs::write(&wal, b"the old database's WAL").unwrap();
+    r.root.rebuild(t(11), false).unwrap();
+    assert!(
+        std::path::Path::new(&format!("{}-wal", aside.display())).exists(),
+        "the WAL was not reunited with its main file"
+    );
+    assert!(!r.path().join("rebuild.pending").exists());
+}
+
 #[cfg(unix)]
 #[test]
 fn a_missing_ledger_beside_an_unreadable_backup_is_an_io_error_not_a_rebuild_hint() {
