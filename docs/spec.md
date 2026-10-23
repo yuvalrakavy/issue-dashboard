@@ -1,6 +1,6 @@
 # issue-dashboard — design spec
 
-Status: **chapters 1-4 and §7.1 approved; chapters 5-6 drafts for review.** Tier T2: a generic tool whose
+Status: **chapters 1-6 and §7.1 approved; the rest of chapter 7 a draft for review.** Tier T2: a generic tool whose
 config format is a contract that several repos and projects depend on.
 
 ## Intent
@@ -42,9 +42,9 @@ Some or all of a project's repos may be open source with the owner as maintainer
 2. The snapshot: what is read, what is derived, the JSON it writes — approved 2026-10-23
 3. Upstream forks — approved 2026-10-23
 4. Open source: outside authors and pull requests — approved 2026-10-23
-5. **The dashboard page and its database** ← draft
-6. **Ordering: WSJF within the priority level, and the priority suggestion** ← draft
-7. Launching sessions: the dispatcher, routing, briefs, launch recipes
+5. The dashboard page and its database — approved 2026-10-23 (with the mockup)
+6. Ordering: WSJF within the priority level, and the priority suggestion — approved 2026-10-23
+7. **Launching sessions: decisions, the dispatcher, routing, briefs, launch recipes** ← draft (§7.1 approved)
 8. The CLI: label sync, config check, `explain`, plan/apply
 9. Documentation and skills
 
@@ -601,7 +601,7 @@ segment).
 | `plans` | tracker | one per GitHub write plan awaiting approval |
 | `forks`, `metrics` | tracker | chapter 3 and the metrics panel |
 | `decisions` | **page** | one per thing you did: accept, reject, edit, set priority, override, approve a plan |
-| `launches` | **page**, then dispatcher | one per launch request: `requested`, then `started` and `linked` (7) |
+| `launches` | **page**, then dispatcher | one per launch request, moving through `requested`, `queued`, `started`, then `landed`, `stopped` or `failed`, or `not_sent` (7.3, 7.8, 5.4) |
 
 **The page never edits a tracker document, and the tracker never edits a `decisions`
 document.** Your actions are written as new `decisions`; each tracker run reads the ones it
@@ -618,7 +618,9 @@ A launch button:
    the reason ("the dispatcher is not running" for `no_session`);
 2. writes a `launches` document with the issue or batch and the routing the tracker
    suggested, which you may change;
-3. calls `comments.sendToClaude` with a comment holding only the launch id.
+3. calls `comments.sendToClaude` with a comment holding only the launch id. If the send is
+   refused, the page marks the launch `not_sent` with the error code, so a request no
+   dispatcher ever heard is never left looking `requested`.
 
 The comment carries nothing but the id: the dispatcher reads the request from the database,
 so nothing typed into the thread can change what is launched.
@@ -728,8 +730,6 @@ three choices: fix it, lower it, or close it as not planned.
 
 ## 7. Launching sessions, routing and decisions
 
-Only §7.1 is written so far; the dispatcher, routing, briefs and launch recipes follow.
-
 ### 7.1 The decision seam
 
 Much of triage is a small typed decision made over many items: an issue's type, its area,
@@ -770,6 +770,138 @@ Where a decision feeds the priority score, its probability is the score's **conf
 term directly (chapter 6). Work that needs to read code, use tools or write prose (duty-0
 checks, briefs, root-cause work, drafted replies and reviews) stays with Claude sessions and
 does not go through this seam.
+
+### 7.2 What runs, and when
+
+| Job | What it is | When |
+|---|---|---|
+| **Snapshot** | the CLI (`issue-dashboard snapshot`), no model involved: chapter 2, then the database write | every few minutes (`run_interval`, default 5 min), from a scheduled job on the machine with the checkouts |
+| **Triage** | a Claude session: reads the snapshot, makes suggestions through the decision seam, checks claims against the code, groups defect classes and batches, applies accepted decisions and approved plans | daily, and on demand from the dashboard |
+| **Dispatcher** | a long-lived Claude session watching each project's dashboard | always on while you want launches to work |
+
+The snapshot never waits on a model, so the dashboard stays current even when no session
+is running; only suggestions go stale, and their age is shown.
+
+### 7.3 The dispatcher
+
+A Claude Code session that watches the project's dashboard artifact and is woken by a
+launch comment (5.4). It does no work of its own between launches, so it costs nothing while
+idle.
+
+**Its model sets the ceiling.** A session can start other sessions only at or below its own
+model and effort (probed: `start_session` ignores a higher model and caps effort). So the
+dispatcher runs on the strongest model at the highest effort, checks its own model and effort
+when it starts (`get_session self`), and refuses, with the reason in the launch thread, any
+launch whose routing it cannot honour, rather than starting it silently downgraded.
+
+On each launch comment, in order:
+
+1. Read `launches/<id>`. Proceed only if it is `requested` and was written by the owner.
+2. Re-read the issue on GitHub. Refuse if it is closed, or if it carries the in-progress
+   label (set by any project's dispatcher, or by a person). For a read-only repo, where no
+   label is ever written, check instead the launch records of **every** project in the
+   tracker root, which is one directory (1.1), so two projects cannot both launch on one
+   upstream issue.
+3. Check the launch recipe's capacity (7.6), such as Store's three lanes. If none is free,
+   mark the launch `queued` and say so in the thread; it starts when a slot frees.
+4. Build the brief (7.5) and start the session with the routed model and effort.
+5. Write `started` with the session's id to the launch document, add the in-progress label
+   with a "work started" comment (unless the repo is read-only, or `writes = "none"`), and
+   reply in the thread with a link to the session.
+6. When the session ends its turn for good (landed, stopped, or failed), write the launch's
+   final state, remove the in-progress label with a comment saying why the work ended, and
+   record the outcome (7.7).
+
+### 7.4 Routing
+
+The project config holds a routing table; the defaults follow the `ways-of-working` model
+routing:
+
+| Launch | Model | Effort |
+|---|---|---|
+| fix, tier T0 or T1, or a self-contained issue | Opus | medium |
+| mechanical sweep, docs sync, "go back" from a fork when the release is a patch | Sonnet | medium |
+| fix, tier T2 | strongest | high |
+| fix, tier T3, or a bug whose cause is unknown | strongest | high |
+| batch | the highest row any member needs | |
+| triage session | Sonnet | medium, handing judgement calls to a stronger subagent |
+| review of an outside pull request | strongest | high |
+| `decision` type (design question) | the best design model | high, design only, no code |
+| "send upstream" | Opus | medium |
+
+The tier comes from the triage session's estimate for the issue. The dashboard shows the
+routing with a one-line reason before launch, and you can change it; a change is recorded
+(5.6) so the routing can be tuned from evidence.
+
+### 7.5 Briefs
+
+A brief is built by the dispatcher from the issue, the snapshot and the repo's recipe, and is
+shown on the dashboard before launch. Its sections:
+
+1. **The task** in one sentence, and what done looks like for this issue.
+2. **The issue**: title, labels, links to what it blocks and is blocked by. Text by inside
+   authors is quoted as is; **text by outside authors is fenced and headed with its author
+   and association**, with the rule from 4.2 stated in the brief.
+3. **Claims to re-verify**: the triage session's findings (commits that mention the issue,
+   whether the sites the issue cites still exist, the suggested tier and blast radius),
+   explicitly labelled as hypotheses.
+4. **Where to look**: the repo's docs list (registry or repo file).
+5. **How to work in this repo**: the recipe's workspace, gate and landing steps, and the
+   repo's own process rules if it has them (Store's `ways-of-working`).
+6. **Out of scope**: side problems get filed, not fixed.
+7. **Reporting back**: the outcome record to write when it lands (7.7).
+
+### 7.6 Launch recipes
+
+A recipe is the repo's own way to work on a change. It lives in the repo file when the repo
+has one, otherwise in the registry, and the tracker never runs its commands itself: they are
+handed to the session in the brief.
+
+```toml
+[launch.store-dev-track]
+capacity  = 3                                   # Store's lanes
+workspace = "store-cli dev-track claim {branch}"
+release   = "store-cli dev-track release --full"
+gate.quick = { run = "scripts/pre-merge-check.sh --quick", minutes = 6 }
+gate.full  = { run = "scripts/pre-merge-check.sh --full",  minutes = 17 }
+land      = "store-cli dev-track land"
+process   = ".claude/skills/ways-of-working/SKILL.md"
+
+[launch.worktree-pr]                            # this project's default for its Rust repos
+capacity  = 2
+workspace = "git worktree add ../{repo}-{branch} -b {branch}"
+release   = "git worktree remove ../{repo}-{branch}"
+gate.quick = { run = "cargo nextest run", minutes = 2 }
+land      = "gh pr create --fill"
+```
+
+`{branch}` is `fix/<repo>-<number>` (or `batch/<first number>` for a batch). Gate `minutes`
+are the job-size input of 6.3, and are corrected from measured outcomes (6.8). The Store
+figures come from Store's own measured cost table (quick gate 290-330 s, full gate
+810-1020 s, in its `issue-closing-campaign` skill); the generic recipe's figure is a guess
+until outcomes are recorded. The tracker itself names no tool: `cargo nextest` appears only
+because this project's repos are Rust.
+
+### 7.7 Outcomes
+
+The brief tells the session to run, just before it ends, `issue-dashboard record-outcome
+--launch <id>` with: landed or not, the commit or pull request, wall-clock time, gate runs
+and their levels, findings fixed, and its context size from `get_usage self`. Token cost per
+session is not available to a session (probed: `get_usage` reports only the live context
+window), so it is not recorded. A session that ends without recording one gets a record from
+the dispatcher with what the dispatcher saw (end time, final state) and the rest marked
+missing.
+
+### 7.8 When something goes wrong
+
+| What happens | What you see |
+|---|---|
+| no dispatcher is listening | the launch button is disabled with "the dispatcher is not running" (5.4) |
+| the routing is above the dispatcher's own model | the launch is refused in the thread, naming both |
+| the recipe has no free slot | the launch is `queued`, and starts when a slot frees |
+| the session cannot be started | the launch is `failed` with the reason in the thread; the in-progress label is not added |
+| the session stops without landing | the launch is `stopped`; the label comes off with "work ended: stopped, not landed" |
+| the dispatcher session itself ended | launches stay `requested`; the button is disabled until a dispatcher is watching again, and the requests are offered again then |
 
 ## Claims checked
 
