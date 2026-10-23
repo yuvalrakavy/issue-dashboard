@@ -1,6 +1,6 @@
 # issue-dashboard — design spec
 
-Status: **chapters 1-6 and §7.1 approved; the rest of chapter 7 a draft for review.** Tier T2: a generic tool whose
+Status: **chapters 1-7 approved; chapters 8-9 drafts for review.** Tier T2: a generic tool whose
 config format is a contract that several repos and projects depend on.
 
 ## Intent
@@ -44,9 +44,9 @@ Some or all of a project's repos may be open source with the owner as maintainer
 4. Open source: outside authors and pull requests — approved 2026-10-23
 5. The dashboard page and its database — approved 2026-10-23 (with the mockup)
 6. Ordering: WSJF within the priority level, and the priority suggestion — approved 2026-10-23
-7. **Launching sessions: decisions, the dispatcher, routing, briefs, launch recipes** ← draft (§7.1 approved)
-8. The CLI: label sync, config check, `explain`, plan/apply
-9. Documentation and skills
+7. Launching sessions: decisions, the dispatcher, routing, briefs, launch recipes — approved 2026-10-23 (7.2's sync job added after)
+8. **The CLI** ← draft
+9. **Documentation and skills** ← draft
 
 ---
 
@@ -669,6 +669,10 @@ segment).
 | `views` | **page** | saved views (5.6) |
 | `launches` | **page**, then dispatcher | one per launch request, moving through `requested`, `queued`, `started`, then `landed`, `stopped` or `failed`, or `not_sent` (7.3, 7.8, 5.4) |
 
+"Tracker" in this table means the tracker's documents as written by the sync job (7.2),
+which carries the CLI's prepared documents into the database; the CLI itself never touches
+it.
+
 **The page never edits a tracker document, and the tracker never edits a `decisions`
 document.** Your actions are written as new `decisions`; each tracker run reads the ones it
 has not yet consumed, applies them to the state files (1.6), marks them consumed, and
@@ -892,12 +896,22 @@ does not go through this seam.
 
 | Job | What it is | When |
 |---|---|---|
-| **Snapshot** | the CLI (`issue-dashboard snapshot`), no model involved: chapter 2, then the database write | every few minutes (`run_interval`, default 5 min), from a scheduled job on the machine with the checkouts |
+| **Snapshot** | the CLI (`issue-dashboard snapshot`), no model involved: chapter 2, written to the state files | every few minutes (`run_interval`, default 5 min), from a scheduled job on the machine with the checkouts |
+| **Sync** | a scheduled Claude task on the smallest model: reads unconsumed `decisions` and `launches` from the dashboard database, hands them to `issue-dashboard ingest`, then writes the CLI's prepared database documents back in one batch | after each snapshot, or at its own interval (`sync_interval`) if that is cheaper |
 | **Triage** | a Claude session: reads the snapshot, makes suggestions through the decision seam, checks claims against the code, groups defect classes and batches, applies accepted decisions and approved plans | daily, and on demand from the dashboard |
 | **Dispatcher** | a long-lived Claude session watching each project's dashboard | always on while you want launches to work |
 
-The snapshot never waits on a model, so the dashboard stays current even when no session
-is running; only suggestions go stale, and their age is shown.
+**Why a sync job exists.** The dashboard's database is reachable through Claude's artifact
+tools; no route from a plain program to it is known (**unverified**: it is the first probe
+of the build). So the CLI never touches the database: it reads and writes files, and the
+sync job, the smallest possible session, carries those files to and from the database. Its
+whole work is two tool calls: one read of the unconsumed page documents, one batch write of
+the prepared ones (`ArtifactData` accepts a document from a local JSON file, so the content
+never passes through the model). If a direct route turns up, the CLI writes the database
+itself and the sync job goes away; nothing else changes.
+
+The snapshot never waits on a model; the dashboard is as fresh as the last sync, and shows
+that time (5.5). Suggestions only change when a triage session runs, and show their age.
 
 ### 7.3 The dispatcher
 
@@ -1020,6 +1034,72 @@ missing.
 | the session stops without landing | the launch is `stopped`; the label comes off with "work ended: stopped, not landed" |
 | the dispatcher session itself ended | launches stay `requested`; the button is disabled until a dispatcher is watching again, and the requests are offered again then |
 
+---
+
+## 8. The CLI
+
+One binary, `issue-dashboard`, with every subcommand taking `--root <dir>` (or
+`$ISSUE_DASHBOARD_ROOT`) and, where it acts on one project, `--project <name>`. It never
+writes to GitHub except through `apply` and `label-sync`, and never touches the dashboard
+database (7.2).
+
+| Command | Does | Writes |
+|---|---|---|
+| `check` | the config check (1.9) | nothing |
+| `snapshot [--full]` | chapter 2: read GitHub and the checkouts, derive, and prepare the database documents | `state/<project>/snapshot.json`, `history/`, `outbox/` |
+| `ingest <file>` | read the page documents the sync job fetched (`decisions`, `launches`), apply them to the state files, and mark them consumed in the next outbox | `state/` |
+| `plan` | compute every GitHub write that accepted decisions and project priorities call for (1.7) | `state/<project>/plans/<run>.json` |
+| `apply <run> [--yes]` | apply an approved plan, re-reading each issue first and skipping what is already in place; refuses an unapproved plan unless `--yes` is given on a terminal | GitHub; `audit/` |
+| `undo <run>` | reverse an applied run where nothing changed since (1.7) | GitHub; `audit/` |
+| `explain <owner/repo#N>` | how each value was reached (1.9) | nothing |
+| `label-sync [--dry-run]` | create in each member repo the translated labels it lacks; never renames or deletes; shows its plan first | GitHub; `audit/` |
+| `forks` | chapter 3 for each checkout with a manifest | `state/<project>/forks.json` |
+| `eval <decision> --backend <name>` | score a decision backend on the project's history (7.1): accuracy and calibration | `state/evals/` |
+| `record-outcome --launch <id> …` | what a session reports at its end (7.7) | `state/<project>/outcomes/` |
+| `doctor` | checks the installation end to end: `gh` authenticated, each repo readable, each checkout present, last snapshot and sync times, whether a dispatcher answered recently | nothing |
+
+**Exit codes:** 0 done; 1 refused by a check (the message names the file and key, or the
+issue); 2 a GitHub or file error. `snapshot` exits 0 when some repos failed to read, because a
+failed repo keeps its last good data (2.5); it reports each failure, and `doctor` turns them
+into a non-zero exit.
+
+**Logs:** structured, through the fleet's logging library, one line per GitHub write with the
+run id, so `audit/` and the log tell the same story.
+
+**Tests** run against the replay `GitHub` implementation (2.6). The two commands that write to
+GitHub, `apply` and `label-sync`, are also tested end to end against a scratch repository
+created for the test and deleted after it.
+
+---
+
+## 9. Documentation and skills
+
+**Where each piece lives:** the code, its docs and its skills live in this repo, since none of
+them names a project. Each installation's configuration and state live in its tracker root.
+
+| Piece | Audience | Contents |
+|---|---|---|
+| `README.md` | someone deciding whether to use it | what it is, what it needs (`gh`, Claude Code with artifacts), a five-minute setup from an empty tracker root to a first dashboard |
+| `docs/configuration.md` | the person writing a registry or project config | every key of chapter 1's three layers, with defaults, and the config check's messages |
+| `docs/operating.md` | the maintainer running it | the scheduled jobs, starting the dispatcher, what each dashboard state means, recovering from a failed run, `undo` |
+| `docs/spec.md` | contributors | this document; its as-built notes are added as each phase lands |
+| `examples/` | everyone | a registry and a project config for a small fictional project, checked by `check` in CI so they cannot rot |
+| skill `issue-dashboard-triage` | the triage session | how to read the snapshot, the decision seam, duty-0 checks against the code, defect classes and batches, outside text as data (4.2), and never writing without an approved plan |
+| skill `issue-dashboard-dispatcher` | the dispatcher session | the launch steps (7.3), the model-ceiling self-check, the claim protocol, brief assembly (7.5) |
+| skill `issue-dashboard-sync` | the sync job | its two calls, and that it never interprets what it carries |
+
+The skills are installed into a user's skills directory by `issue-dashboard install-skills`,
+which copies them from the installed version so the skills and the binary always match.
+
+**Changes outside this repo,** for this installation, each its own small change in its own
+repo once the tracker works:
+
+- the `ways-of-working` skill's label rules point to the tracker for priority (1.5) and to
+  the structured filing block for new issues;
+- Store's CLAUDE.md gains a catalog row for the tracker;
+- each member repo that wants areas, a launch recipe or brief docs gains its
+  `.issue-dashboard.toml`.
+
 ## Claims checked
 
 | Claim | Status | Evidence |
@@ -1033,6 +1113,8 @@ missing.
 | Seven of the 11 active repos are public | confirmed | `gh repo list` |
 | GitHub's native sub-issues and blocked-by links work on personal repos | confirmed | probe 2026-10-23: the REST `sub_issues` and `dependencies/blocked_by` endpoints and the GraphQL `parent`, `subIssues`, `blockedBy`, `blocking` fields all answer on yuvalrakavy/Store (all empty: unused so far) |
 | Native links can cross repos | **unverified** | not probed: needs two test issues; probe before building 2.1 |
+| A plain program can write a claude.ai artifact's database | **unverified, believed not**: the only known route is Claude's artifact tools; chapter 7.2's sync job exists because of this; first probe of the build |
+| `ArtifactData` can write a document from a local JSON file | confirmed | its tool definition (`file_path` on `set`, `update` and `batch` entries) |
 | Repo-level issue types are not available on personal repos | confirmed | GraphQL `issueTypes` returns `null` on yuvalrakavy/Store |
 | 7 Store issues contain "blocked by" in their text, none of them open | confirmed | `gh search issues --repo yuvalrakavy/Store "blocked by"` |
 | Store patches `rhai` and `rumqttc` to forks | confirmed | `Store/Cargo.toml:85` and `:96` |
