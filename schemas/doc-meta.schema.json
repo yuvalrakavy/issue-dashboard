@@ -198,6 +198,13 @@
       "description": "How often the sync job runs: a decision is applied within this.",
       "type": "integer",
       "minimum": 1
+    },
+    "owner_id": {
+      "description": "The project's configured owner_id: only that page user's documents are accepted (10.5). Null while none is set, or while it is the placeholder u_pending.",
+      "type": [
+        "string",
+        "null"
+      ]
     }
   }
 }

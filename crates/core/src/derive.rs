@@ -36,6 +36,9 @@ pub const DEFAULT_SYNC_MINUTES: u32 = 5;
 /// Acks are carried for this long after the cycle that consumed the decision (10.6).
 pub const ACK_DAYS: i64 = 30;
 
+/// The `owner_id` a project config holds until the owner's page user id is known.
+pub const PENDING_OWNER: &str = "u_pending";
+
 /// Inside authors by association (4.1).
 const INSIDE: [&str; 3] = ["OWNER", "MEMBER", "COLLABORATOR"];
 
@@ -583,6 +586,8 @@ pub fn derive(
         "default_view": p.default_view,
         "groups": groups(config, project)?,
         "sync_interval_minutes": sync_minutes,
+        // The page tells a viewer whose actions would all be refused (10.5): none is set yet.
+        "owner_id": Some(p.owner_id.as_str()).filter(|o| !o.is_empty() && *o != PENDING_OWNER),
     });
     let out = Outbox {
         project: project.to_string(),

@@ -463,12 +463,22 @@
     return (issue.sessions || []).length > 0 || issue.status === "in-progress";
   }
 
+  // What to tell the artifact's owner when the tracker would refuse their documents (10.5): the
+  // config's owner_id is still pending (null in meta), or is another page user's. A generation
+  // from before meta carried owner_id (the key absent) says nothing.
+  function ownerNotice(meta, viewer, isOwner) {
+    if (!meta || !isOwner || !viewer || !("owner_id" in meta) || meta.owner_id === viewer) return null;
+    const out = { id: viewer, line: 'owner_id = "' + viewer + '"', file: "projects/" + meta.project + ".toml" };
+    if (meta.owner_id == null) return Object.assign({ kind: "pending" }, out);
+    return Object.assign({ kind: "mismatch", configured: meta.owner_id }, out);
+  }
+
   const api = {
     PRIORITIES, COLLECTIONS, LIST_LIMIT, CLOSE_REASONS, ACK_DAYS,
     loadGeneration, follower, ackHorizon, threadDoc, repoOf, inScope, tiles, inbox, queue, decisionStates, nextRunMinutes,
     trends, launchStates, newId, decisionDoc, launchDoc, notSentDoc, viewDoc, requestDoc, launch,
     closable, closeComment, closeFields, describeClose, pendingClose, recentCloses,
-    sessionLines, inProgress,
+    sessionLines, inProgress, ownerNotice,
   };
   root.IssueDashboard = api;
   if (typeof module === "object" && module.exports) module.exports = api;

@@ -359,6 +359,15 @@ footer .wrap { padding-block: 0 32px; font-size: .82rem; color: var(--muted); di
     const view = $("view");
     const kids = [];
     if (S.error) kids.push(h("div", { class: "err" }, S.error));
+    const owner = D.ownerNotice(S.meta, S.viewer, S.owner);
+    if (owner) {
+      const line = h("span", { class: "mono", style: "user-select:all" }, owner.line);
+      kids.push(h("div", { class: "err", role: "status" },
+        owner.kind === "pending"
+          ? "The tracker does not know your page user id yet, so none of your actions here is accepted: each is refused at the next sync. "
+          : "The tracker's owner id is " + owner.configured + ", not yours, so none of your actions here is accepted. ",
+        "Set it in the tracker root's " + owner.file + ": ", line, " ", copyButton(owner.line, line)));
+    }
     if (toastMsg) kids.push(h("div", { class: "pending", role: "status" }, toastMsg, h("button", { class: "btn quiet", onclick: () => { toastMsg = null; render(); } }, "Dismiss")));
     if (S.load && S.load.status === "partial") kids.push(h("div", { class: "err" }, "Partial snapshot: " + (S.load.why || "a collection came back short") + ". Reload the page in a minute."));
     if (!S.load && !S.error) kids.push(h("div", { class: "note" }, "Loading the latest snapshot…"));
