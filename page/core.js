@@ -441,11 +441,34 @@
     return out.sort((a, b) => cmp(b.close.at, a.close.at));
   }
 
+  // The app's sessions on an item as the page says them (10.10): running or idle, how long since
+  // it was last active, and whether the match is only probable. Newest first, as derived.
+  function sessionLines(issue, now) {
+    return (issue.sessions || []).map((s) => {
+      const mins = Math.max(0, Math.floor((now.getTime() - Date.parse(s.last_active_at)) / 60000));
+      const ago = mins < 1 ? "just now" : mins < 60 ? mins + " min ago" : mins < 1440 ? Math.floor(mins / 60) + " h ago" : Math.floor(mins / 1440) + " d ago";
+      return {
+        id: s.id,
+        title: s.title || "Untitled session",
+        state: s.running ? "running" : "idle",
+        ago,
+        probable: Boolean(s.match && s.match.kind === "probable"),
+        link: s.link || null,
+      };
+    });
+  }
+
+  // The Queue's "In progress" filter: a session is working on it, or its status says so.
+  function inProgress(issue) {
+    return (issue.sessions || []).length > 0 || issue.status === "in-progress";
+  }
+
   const api = {
     PRIORITIES, COLLECTIONS, LIST_LIMIT, CLOSE_REASONS, ACK_DAYS,
     loadGeneration, follower, ackHorizon, threadDoc, repoOf, inScope, tiles, inbox, queue, decisionStates, nextRunMinutes,
     trends, launchStates, newId, decisionDoc, launchDoc, notSentDoc, viewDoc, requestDoc, launch,
     closable, closeComment, closeFields, describeClose, pendingClose, recentCloses,
+    sessionLines, inProgress,
   };
   root.IssueDashboard = api;
   if (typeof module === "object" && module.exports) module.exports = api;

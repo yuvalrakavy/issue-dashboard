@@ -89,6 +89,15 @@ main .wrap { padding-block: 16px 48px; display: grid; gap: 14px; }
 .tag.outside { background: var(--outside-soft); border-color: transparent; color: var(--outside); }
 .tag.launch { background: var(--ok-soft); border-color: transparent; color: var(--ok); }
 .tag.launch.not_sent { background: var(--bad-soft); color: var(--bad); }
+.sessions { display: grid; gap: 4px; font-size: .88rem; min-width: 0; }
+.session { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; padding: 4px 10px; border-left: 3px solid var(--ok); background: var(--panel-2); border-radius: 0 6px 6px 0; min-width: 0; }
+.session.probable { border-left-style: dashed; border-left-color: var(--muted); }
+.session .lead { font-size: .74rem; text-transform: uppercase; letter-spacing: .05em; font-weight: 600; color: var(--ok); }
+.session .stitle { font-weight: 600; min-width: 0; overflow-wrap: anywhere; }
+.session .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--muted); margin-right: 4px; vertical-align: 1px; }
+.session .dot.running { background: var(--ok); }
+.session .link { font-family: var(--mono); font-size: .78rem; color: var(--muted); min-width: 0; overflow-wrap: anywhere; user-select: all; }
+.session .copy { min-height: 28px; padding: 2px 8px; font-size: .8rem; }
 .actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; position: relative; }
 .btn { min-height: 40px; padding: 6px 14px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); cursor: pointer; font-weight: 600; text-decoration: none; display: inline-flex; align-items: center; gap: 6px; color: var(--ink); }
 .btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
@@ -487,6 +496,37 @@ footer .wrap { padding-block: 0 32px; font-size: .82rem; color: var(--muted); di
     );
   }
 
+  // The app's sessions on the item (10.10): in a card or row the newest, with a count of the
+  // rest; in Details every one with its link as text, since a claude:// link may not open here.
+  // Copies `text`; where the clipboard is refused, selects `shown` (the link's text) instead.
+  function copyButton(text, shown) {
+    const b = h("button", { class: "btn quiet copy", "aria-label": "Copy the session link", onclick: (e) => {
+      e.stopPropagation();
+      const select = () => { const r = document.createRange(); r.selectNodeContents(shown); const sel = getSelection(); sel.removeAllRanges(); sel.addRange(r); };
+      const done = () => { b.textContent = "Copied"; setTimeout(() => { b.textContent = "Copy link"; }, 1500); };
+      try { navigator.clipboard.writeText(text).then(done, select); } catch (_) { select(); }
+    } }, "Copy link");
+    return b;
+  }
+
+  function sessionsBlock(i, full) {
+    const lines = D.sessionLines(i, new Date());
+    if (!lines.length) return null;
+    const shown = full ? lines : lines.slice(0, 1);
+    return h("div", { class: "sessions" }, shown.map((s, k) => {
+      const linkText = s.link ? h("span", { class: "link" }, s.link) : null;
+      const copy = s.link ? copyButton(s.link, linkText) : null;
+      return h("div", { class: "session" + (s.probable ? " probable" : "") },
+        k === 0 ? h("span", { class: "lead" }, "In progress") : null,
+        s.link ? h("a", { class: "stitle", href: s.link, title: "Open the session in the Claude app" }, s.title) : h("span", { class: "stitle" }, s.title),
+        h("span", { class: "muted" }, h("span", { class: "dot " + s.state }), s.state + " · active " + s.ago),
+        s.probable ? h("span", { class: "tag", title: "Matched by a reference in the session's title or branch" }, "probably") : null,
+        full ? linkText : null,
+        full ? copy : null,
+        !full && k === 0 && lines.length > 1 ? h("span", { class: "muted" }, "+ " + (lines.length - 1) + " more in Details") : null);
+    }));
+  }
+
   function moreMenu(i, extra) {
     const open = S.menu === i.id;
     const items = [
@@ -553,6 +593,7 @@ footer .wrap { padding-block: 0 32px; font-size: .82rem; color: var(--muted); di
         h("div", { class: "why " + c.why }, WHY[c.why] + " · " + ageDays(i.created_at) + " d old"),
         h("div", { class: "head" }, h("a", { class: "alias", href: ghUrl(i), target: "_blank", rel: "noopener" }, i.alias), h("span", { class: "title" }, i.title)),
         itemMeta(i, states),
+        sessionsBlock(i, false),
         line,
         pending ? null : picker(i),
         pending || (S.openCard && S.openCard.id === i.id) ? null : h("div", { class: "actions" }, main, moreMenu(i, ownerExtras(i))));
@@ -583,11 +624,11 @@ footer .wrap { padding-block: 0 32px; font-size: .82rem; color: var(--muted); di
     const f = S.queueFilter;
     const text = S.text.toLowerCase();
     const keep = (i) =>
-      (f === "all" || (f === "p0" && i.priority && i.priority.value === "p0") || (f === "over" && i.limit_breached) || (f === "pr" && i.kind === "pull_request") || i.type === f) &&
+      (f === "all" || (f === "p0" && i.priority && i.priority.value === "p0") || (f === "over" && i.limit_breached) || (f === "pr" && i.kind === "pull_request") || (f === "progress" && D.inProgress(i)) || i.type === f) &&
       (!text || (i.title + " " + i.alias).toLowerCase().includes(text));
     const pill = (k, label) => h("button", { class: "chip" + (f === k ? " on" : ""), onclick: () => { S.queueFilter = k; S.sel = 0; render(); } }, label);
     const search = h("input", { id: "filter", type: "search", placeholder: "Filter by title or number  ( / )", value: S.text, "aria-label": "Filter", oninput: (e) => { S.text = e.target.value; renderKeepFocus(); } });
-    const head = h("div", { class: "pills" }, pill("all", "All"), pill("p0", "p0"), pill("over", "Over time limit"), pill("bug", "Bugs"), pill("todo", "Todo"), pill("decision", "Decisions"), pill("docs", "Docs"), pill("pr", "Pull requests"), search);
+    const head = h("div", { class: "pills" }, pill("all", "All"), pill("p0", "p0"), pill("over", "Over time limit"), pill("progress", "In progress"), pill("bug", "Bugs"), pill("todo", "Todo"), pill("decision", "Decisions"), pill("docs", "Docs"), pill("pr", "Pull requests"), search);
     const row = (i) => {
       const line = decisionLine(i);
       const st = states[i.id];
@@ -595,7 +636,7 @@ footer .wrap { padding-block: 0 32px; font-size: .82rem; color: var(--muted); di
       return h("div", { class: "row", tabindex: "0", "data-nav": "1", "data-gh": ghUrl(i), "data-id": i.id },
         h("div", { class: "main" },
           h("div", { class: "head" }, h("a", { class: "alias", href: ghUrl(i), target: "_blank", rel: "noopener" }, i.alias), h("span", { class: "title" }, i.title)),
-          itemMeta(i, states), line, picker(i)),
+          itemMeta(i, states), sessionsBlock(i, false), line, picker(i)),
         h("div", { class: "actions" },
           launchable ? h("button", { class: "btn primary", "data-main": "1", onclick: () => openLaunch(i) }, "Launch…") : h("a", { class: "btn", "data-main": "1", href: ghUrl(i), target: "_blank", rel: "noopener" }, "Open ↗"),
           moreMenu(i, ownerExtras(i))));
@@ -718,6 +759,7 @@ footer .wrap { padding-block: 0 32px; font-size: .82rem; color: var(--muted); di
         (i.untranslated_labels || []).length ? h("dt", {}, "Untranslated") : null,
         (i.untranslated_labels || []).length ? h("dd", {}, i.untranslated_labels.join(", ")) : null,
       ),
+      sessionsBlock(i, true),
       h("div", { class: "body" }, i.body || "No description."),
       i.body_truncated ? h("div", { class: "sub muted" }, "The description is cut at 8000 characters; the rest is on GitHub.") : null,
       mine.length ? h("div", {}, h("div", { class: "muted" }, "Recent decisions"), h("ul", {}, mine.map((d) => h("li", {}, fmtDay(d.created_at) + " " + fmtTime(d.created_at) + ": " + describe(d))))) : null,
