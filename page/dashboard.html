@@ -80,7 +80,9 @@ main .wrap { padding-block: 16px 48px; display: grid; gap: 14px; }
 .title { font-weight: 600; min-width: 0; overflow-wrap: anywhere; }
 .meta { display: flex; flex-wrap: wrap; gap: 4px 10px; font-size: .85rem; color: var(--muted); align-items: center; }
 .why { font-size: .78rem; text-transform: uppercase; letter-spacing: .05em; font-weight: 600; }
-.why.decision { color: var(--warn); } .why.outside_pr { color: var(--outside); } .why.untriaged { color: var(--accent); }
+.why.decision { color: var(--warn); } .why.outside_pr { color: var(--outside); } .why.untriaged { color: var(--accent); } .why.recommend { color: var(--accent); }
+.leftout summary { cursor: pointer; color: var(--muted); font-size: .9rem; }
+.leftout .meta { margin-top: 6px; }
 .badge { display: inline-block; min-width: 2.2em; text-align: center; padding: 1px 6px; border-radius: 5px; font: 600 .78rem/1.5 var(--mono); color: var(--badge-ink); }
 .badge.p0 { background: var(--p0); } .badge.p1 { background: var(--p1); } .badge.p2 { background: var(--p2); } .badge.p3 { background: var(--p3); }
 .badge.none { background: transparent; color: var(--muted); border: 1px dashed var(--line); }
@@ -170,7 +172,7 @@ footer .wrap { padding-block: 0 32px; font-size: .82rem; color: var(--muted); di
     <div class="repotimes" id="repotimes" hidden></div>
     <div id="hidden"></div>
     <div class="tiles" id="tiles"></div>
-    <div class="phase">Phase 1: what you do here is recorded for the tracker's next run. The one GitHub write is your Close of an issue (and its Reopen), made by the next sync; a launch only records the request.</div>
+    <div class="phase">Phase 1: what you do here is recorded for the tracker's next run. The one GitHub write is your Close of an issue (and its Reopen), made by the next sync. A launch goes to the dispatcher session, which starts it or offers it there as a card.</div>
   </div>
 </header>
 <nav class="tabs" aria-label="Sections">
@@ -208,7 +210,7 @@ footer .wrap { padding-block: 0 32px; font-size: .82rem; color: var(--muted); di
   const S = {
     db: null, comments: null, user: null,
     owner: false, viewer: null,
-    load: null, meta: null, issues: [], acks: [], statuses: [],
+    load: null, meta: null, issues: [], acks: [], statuses: [], suggestions: [],
     decisions: [], launches: [], views: [],
     tab: "inbox", inboxFilter: "all", queueFilter: "all", text: "",
     scope: null, scopeName: null, savedScope: null,
@@ -264,6 +266,7 @@ footer .wrap { padding-block: 0 32px; font-size: .82rem; color: var(--muted); di
         S.issues = r.data.issues;
         S.acks = r.data.acks;
         S.statuses = r.data.launch_status;
+        S.suggestions = r.data.suggestions || [];
       }
       S.error = null;
       if (S.meta && S.meta.name) document.title = S.meta.name + " · Issue Board";
@@ -319,6 +322,14 @@ footer .wrap { padding-block: 0 32px; font-size: .82rem; color: var(--muted); di
     const doc = await writeDecision(D.dismissFields(i));
     if (!doc) return;
     toast(i.alias + " dismissed.", { label: "Undo", run: () => writeDecision({ action: "undo", target: { decision: doc.id, item: i.id } }) });
+    render();
+  }
+
+  // Dismiss hides the recommendation at once; the tracker keeps it hidden until the issue changes.
+  async function dismissSuggestion(s) {
+    const doc = await writeDecision(D.dismissSuggestionFields(s));
+    if (!doc) return;
+    toast("Recommendation on " + s.alias + " dismissed.", { label: "Undo", run: () => writeDecision({ action: "undo", target: { decision: doc.id, item: s.item } }) });
     render();
   }
 
@@ -448,7 +459,8 @@ footer .wrap { padding-block: 0 32px; font-size: .82rem; color: var(--muted); di
       tile(t.open, "open", () => go("queue", "all")),
     );
     const cards = D.inbox(scoped());
-    $("c-inbox").textContent = cards.length ? String(cards.length) : "";
+    const recs = D.suggestionCards(S.suggestions, shown(), S.decisions, S.acks).cards.length;
+    $("c-inbox").textContent = cards.length + recs ? String(cards.length + recs) : "";
     $("c-queue").textContent = String(D.tiles(scoped()).open - cards.length);
   }
 
@@ -620,8 +632,9 @@ footer .wrap { padding-block: 0 32px; font-size: .82rem; color: var(--muted); di
     // Recently closed belongs to the whole Inbox only: a filter ("Untriaged", "Waiting on you")
     // shows just the cards it names.
     const closedPart = () => (S.inboxFilter === "all" ? recentlyClosedSection() : null);
-    if (!cards.length) return h("div", { class: "list" }, head, h("div", { class: "note" }, S.inboxFilter === "untriaged" ? "Nothing untriaged." : "Nothing waiting on you."), closedPart());
-    return h("div", { class: "list" }, head, cards.map((c) => {
+    const recsPart = S.inboxFilter === "all" ? recommendationsSection() : null;
+    if (!cards.length) return h("div", { class: "list" }, head, recsPart, recsPart ? null : h("div", { class: "note" }, S.inboxFilter === "untriaged" ? "Nothing untriaged." : "Nothing waiting on you."), closedPart());
+    return h("div", { class: "list" }, head, recsPart, cards.map((c) => {
       const i = c.issue;
       const line = decisionLine(i);
       const pending = line && line.classList.contains("pending") && !line.classList.contains("refused");
@@ -637,6 +650,45 @@ footer .wrap { padding-block: 0 32px; font-size: .82rem; color: var(--muted); di
         pending ? null : picker(i),
         pending || (S.openCard && S.openCard.id === i.id) ? null : h("div", { class: "actions" }, main, moreMenu(i, ownerExtras(i))));
     }), closedPart());
+  }
+
+  // Closing recommendations (5.8): what a Recommend closures run found, each with its main
+  // action and Dismiss. A close goes through the close sheet, where the owner's Close is the
+  // approval; a batch goes through the launch sheet. What the run left open is listed below.
+  const SUGGESTED = { likely_fixed: "Likely fixed", duplicate: "Duplicate", obsolete: "No longer relevant", batch: "Close together" };
+  const LEFT_OUT = { needs_design: "needs design", blocked: "blocked", keep_open: "keep open" };
+  function recommendationsSection() {
+    const r = D.suggestionCards(S.suggestions, shown(), S.decisions, S.acks);
+    if (!r.cards.length && !r.leftOut.length) return null;
+    const pct = (s) => Math.round(s.confidence * 100) + "%";
+    const card = ({ s, issue: i, members }) => {
+      let main = null;
+      if (s.kind === "batch") {
+        if (S.owner) main = h("button", { class: "btn primary", "data-main": "1", onclick: () => openLaunch(members) }, s.action_label || "Launch batch…");
+      } else if (canClose(i)) {
+        main = h("button", { class: "btn primary", "data-main": "1", onclick: () => openClose(i, D.closePrefill(s)) }, s.action_label || "Close…");
+      }
+      const about = s.kind === "batch"
+        ? (s.member_aliases || []).length + " issues" + (s.surface ? " · " + s.surface : "")
+        : s.kind === "likely_fixed" ? "fixed by " + s.commit
+        : s.kind === "duplicate" ? "duplicate of " + (s.related_alias || "?") : null;
+      return h("article", { class: "card", tabindex: "0", "data-nav": "1", "data-gh": ghUrl(i), "data-id": i.id },
+        h("div", { class: "why recommend" }, "Recommended · " + SUGGESTED[s.kind] + " · " + pct(s) + (about ? " · " + about : "")),
+        s.kind === "batch"
+          ? members.map((m) => h("div", { class: "head" }, h("a", { class: "alias", href: ghUrl(m), target: "_blank", rel: "noopener" }, m.alias), h("span", { class: "title" }, m.title)))
+          : h("div", { class: "head" }, h("a", { class: "alias", href: ghUrl(i), target: "_blank", rel: "noopener" }, i.alias), h("span", { class: "title" }, i.title)),
+        s.reason ? h("div", { class: "sub" }, s.reason) : null,
+        S.owner ? h("div", { class: "actions" }, main, h("button", { class: "btn quiet", onclick: () => dismissSuggestion(s) }, "Dismiss")) : null);
+    };
+    const left = r.leftOut.length
+      ? h("details", { class: "leftout" }, h("summary", {}, "Left open by the run · " + r.leftOut.length),
+        r.leftOut.map(({ s, issue: i }) => h("div", { class: "meta" },
+          h("a", { class: "alias", href: ghUrl(i), target: "_blank", rel: "noopener" }, i.alias),
+          h("span", { class: "tag" }, LEFT_OUT[s.why] || s.why || "left open"),
+          s.reason ? h("span", {}, s.reason) : null,
+          S.owner ? h("button", { class: "btn quiet", onclick: () => dismissSuggestion(s) }, "Dismiss") : null)))
+      : null;
+    return h("section", { class: "closes" }, h("h2", {}, "Closing recommendations · " + r.cards.length), r.cards.map(card), left);
   }
 
   // Every issue closed in the last N days (5.8): a close from this page keeps its Reopen (5.2a);
@@ -679,13 +731,14 @@ footer .wrap { padding-block: 0 32px; font-size: .82rem; color: var(--muted); di
     const row = (i) => {
       const line = decisionLine(i);
       const st = states[i.id];
-      const launchable = S.owner && (!st || st.state === "not_sent");
+      const launchable = S.owner && i.kind === "issue" && (!st || st.state === "not_sent");
+      const noRecipe = launchable ? D.fixLaunchFields([i], repoInfo(D.repoOf(i.alias)), null).error : null;
       return h("div", { class: "row", tabindex: "0", "data-nav": "1", "data-gh": ghUrl(i), "data-id": i.id },
         h("div", { class: "main" },
           h("div", { class: "head" }, h("a", { class: "alias", href: ghUrl(i), target: "_blank", rel: "noopener" }, i.alias), h("span", { class: "title" }, i.title)),
           itemMeta(i, states), sessionsBlock(i, false), line, picker(i)),
         h("div", { class: "actions" },
-          launchable ? h("button", { class: "btn primary", "data-main": "1", onclick: () => openLaunch(i) }, "Launch…") : h("a", { class: "btn", "data-main": "1", href: ghUrl(i), target: "_blank", rel: "noopener" }, "Open ↗"),
+          launchable ? h("button", { class: "btn primary", "data-main": "1", disabled: !!noRecipe, title: noRecipe || null, onclick: () => openLaunch([i]) }, "Launch…") : h("a", { class: "btn", "data-main": "1", href: ghUrl(i), target: "_blank", rel: "noopener" }, "Open ↗"),
           moreMenu(i, ownerExtras(i))));
     };
     const sections = [];
@@ -696,7 +749,9 @@ footer .wrap { padding-block: 0 32px; font-size: .82rem; color: var(--muted); di
     }
     const pulls = q.pulls.filter(keep);
     if (pulls.length) sections.push(h("section", { class: "level" }, h("h2", {}, "Pull requests", h("span", { class: "muted" }, "· " + pulls.length)), pulls.map(row)));
-    return h("div", { class: "list" }, head, h("div", { class: "note", style: "text-align:left" }, "The next batch and its launch sheet arrive with ordering (phase 2). Until then each level is longest idle first."),
+    const recommend = S.owner ? h("button", { class: "btn", onclick: openRecommend }, "Recommend closures…") : null;
+    return h("div", { class: "list" }, head,
+      h("div", { class: "note", style: "text-align:left" }, "Each level is longest idle first. Recommend closures asks a read-only session which issues in view can close, and which together. ", recommend),
       sections.length ? sections : h("div", { class: "note" }, "Nothing matches."));
   }
 
@@ -818,13 +873,17 @@ footer .wrap { padding-block: 0 32px; font-size: .82rem; color: var(--muted); di
 
   // The close sheet (5.2a): reason, the duplicated issue's number, a comment prefilled per
   // reason until the owner edits it, and on a public repo who the comment is published as.
-  function openClose(i) {
+  // `prefill` ({reason, duplicateOf, comment}) opens it as a recommendation says (5.8).
+  function openClose(i, prefill) {
     const repo = repoInfo(D.repoOf(i.alias)) || {};
-    let edited = false;
-    const reason = h("select", { "aria-label": "Reason" }, Object.entries(D.CLOSE_REASONS).map(([k, label]) => h("option", { value: k, selected: k === "completed" }, label.replace(/^a /, ""))));
-    const dup = h("input", { inputmode: "numeric", placeholder: "e.g. 12", "aria-label": "Duplicate of issue number" });
+    const p = prefill || {};
+    let edited = !!p.comment;
+    const first = p.reason || "completed";
+    const reason = h("select", { "aria-label": "Reason" }, Object.entries(D.CLOSE_REASONS).map(([k, label]) => h("option", { value: k, selected: k === first }, label.replace(/^a /, ""))));
+    const dup = h("input", { inputmode: "numeric", placeholder: "e.g. 12", "aria-label": "Duplicate of issue number", value: p.duplicateOf || "" });
     const dupField = h("label", { class: "field", hidden: true }, "Duplicate of #", dup);
     const comment = h("textarea", { "aria-label": "Comment", maxlength: "65536", oninput: () => { edited = true; } });
+    if (p.comment) comment.value = p.comment;
     const err = h("div", { class: "err", hidden: true, role: "alert" });
     const refill = () => {
       dupField.hidden = reason.value !== "duplicate";
@@ -870,18 +929,45 @@ footer .wrap { padding-block: 0 32px; font-size: .82rem; color: var(--muted); di
     off: "Sending to Claude is switched off for this page.",
   };
 
-  async function openLaunch(i) {
+  // A fix (one issue) or a batch (several of one repo), through the repo's recipe (7.6).
+  function openLaunch(issues) {
+    const i = issues[0];
+    const batch = issues.length > 1;
+    launchSheet({
+      alias: batch ? issues.map((x) => x.alias).join(", ") : i.alias,
+      title: batch ? "Launch a batch: " + issues.length + " issues, one gate" : "Launch a fix: " + i.title,
+      model: MODELS[0], effort: "medium",
+      fields: (routing) => D.fixLaunchFields(issues, repoInfo(D.repoOf(i.alias)), routing),
+    });
+  }
+
+  // Recommend closures (5.8): a read-only session over every open issue in view.
+  function openRecommend() {
+    const scope = S.scope ? scopeSentence(S.scope) : "all repos";
+    launchSheet({
+      alias: scope,
+      title: "Recommend closures",
+      model: "claude-opus-5-5", effort: "medium",
+      fields: (routing) => D.recommendFields(shown(), repoInfo, routing),
+      about: (f) => "Covers the " + f.items.length + " open issue" + (f.items.length === 1 ? "" : "s") + " in view. The session reads and recommends only: it never closes, labels or comments. Its recommendations arrive in the Inbox after the next sync.",
+    });
+  }
+
+  async function launchSheet(o) {
     const status = h("div", { class: "muted" }, "Checking whether a Claude session can hear the launch…");
-    const model = h("select", { "aria-label": "Model" }, MODELS.map((m) => h("option", { value: m }, m)));
-    const effort = h("select", { "aria-label": "Effort" }, EFFORTS.map((e) => h("option", { value: e, selected: e === "medium" }, e)));
+    const model = h("select", { "aria-label": "Model" }, MODELS.map((m) => h("option", { value: m, selected: m === o.model }, m)));
+    const effort = h("select", { "aria-label": "Effort" }, EFFORTS.map((e) => h("option", { value: e, selected: e === o.effort }, e)));
     const go = h("button", { class: "btn primary", disabled: true, "data-anchor": "launch" }, "Launch");
+    const routing = () => ({ model: model.value, effort: effort.value, reason: "chosen on the launch sheet" });
+    const first = o.fields(routing());
     showDialog(
-      h("header", {}, h("div", {}, h("div", { class: "alias" }, i.alias), h("h2", {}, "Launch a fix: " + i.title)), closeBtn()),
+      h("header", {}, h("div", {}, h("div", { class: "alias" }, o.alias), h("h2", {}, o.title)), closeBtn()),
       h("div", { class: "grid2" }, h("label", { class: "field" }, "Model", model), h("label", { class: "field" }, "Effort", effort)),
-      h("div", { class: "sub muted" }, "Suggested: the default routing. The tracker suggests a model and effort per issue from phase 2."),
-      h("div", { class: "phase" }, "Phase 1: Launch records the request and posts its id to the launch thread. No dispatcher acts on it yet."),
+      first.fields && o.about ? h("div", { class: "sub muted" }, o.about(first.fields)) : null,
+      h("div", { class: "phase" }, "The dispatcher session hears the launch, reserves a slot and starts the session, or offers it as a card in the dispatcher session for you to start."),
       status,
-      h("div", { class: "actions" }, go, h("button", { class: "btn", disabled: true, title: "Brief previews arrive in phase 2" }, "Preview brief"), h("button", { class: "btn quiet", onclick: () => dlg.close() }, "Cancel")));
+      h("div", { class: "actions" }, go, h("button", { class: "btn quiet", onclick: () => dlg.close() }, "Cancel")));
+    if (first.error) { status.textContent = first.error; return; }
     const gate = S.comments ? await S.comments.canSendToClaude().catch(() => "unavailable") : "unavailable";
     if (gate === "available") {
       status.textContent = "A Claude session is listening.";
@@ -893,10 +979,12 @@ footer .wrap { padding-block: 0 32px; font-size: .82rem; color: var(--muted); di
       go.disabled = true;
       // The anchor is taken now, inside the gesture (comments.d.ts).
       const anchor = S.comments.anchorFor(go);
+      const f = o.fields(routing());
+      if (f.error) { status.textContent = f.error; return; }
       status.textContent = "Recording the launch…";
       const r = await D.launch({
         db: S.db, comments: S.comments, who: who(), now: () => new Date(), rand: Math.random, anchor: () => anchor,
-      }, { kind: "fix", items: [i.id], aliases: [i.alias], recipe: "default", routing: { model: model.value, effort: effort.value, reason: "chosen on the launch sheet" } })
+      }, f.fields)
         .catch((e) => ({ ok: false, error: (e && e.code) || "error" }));
       if (r.ok) { dlg.close(); toast("Launch " + r.launch.id + " recorded and posted to the launch thread." + (r.threadNotRecorded ? " The new thread could not be recorded (" + r.threadNotRecorded + "), so the next launch starts another." : "")); }
       else if (r.gate) status.textContent = "Launch is off: " + (GATE[r.gate] || r.gate);
