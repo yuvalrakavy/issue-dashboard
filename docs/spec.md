@@ -626,10 +626,15 @@ repeated in the level lists.
   (5.3), so an acted-on card collapses to "Decided · applied on the next run (in N min)" with
   **Undo**, until the run consumes it.
 - **Buttons say what they do.** A suggestion's buttons name the outcome ("Set bug · p1",
-  "Label as todo", "Check and close…", "Close as duplicate…") and "Not this"; never a bare
+  "Label as todo", "Check and close…", "Close as duplicate…") and "Dismiss"; never a bare
   Accept / Reject. A trailing `…` means the button leads to a further step instead of acting
   at once. What each kind of suggestion does is fixed in 5.8.
-- **"Not this" asks why**, with one-tap reasons fitting the suggestion (5.7) and "Other…".
+- **"Dismiss" offers a reason afterwards**, optional, with one-tap reasons fitting the
+  suggestion (5.7) and "Other…". Dismissing never waits on the reason.
+- **Every issue and pull request can always be opened.** Its number is a link to it on
+  GitHub (a new tab), wherever it appears: a card, a row, a batch, a brief preview. Every
+  card's and row's `⋯` menu also holds **Open on GitHub** and **Details**, an in-page view
+  of the issue's body, labels, links, priority sources (`explain`) and recent decisions.
 - **Launch opens a sheet**, not an immediate action: the suggested model, effort and
   workspace (editable, with the reason they were suggested), "Preview brief", and Launch.
   After launch the row shows the launch state (`requested`, `queued`, `started`, `landed`).
@@ -638,7 +643,8 @@ repeated in the level lists.
   within a level (6.1), so they are not shown as a column beside the level.
 - **Phone width:** queue rows become cards with one action; nothing scrolls sideways;
   touch targets are at least 40 px high.
-- **Keyboard:** `j`/`k` move, `a` main action, `n` not this, `u` undo, `/` filter.
+- **Keyboard:** `j`/`k` move, `a` main action, `d` dismiss, `o` open on GitHub, `u` undo,
+  `/` filter.
 - **States:** an empty inbox says "Nothing waiting on you"; a stale repo's rows carry
   "read HH:MM, stale"; a panel whose data is loading says so.
 - **Contrast:** every text colour meets WCAG 4.5:1 in both themes; priority levels are
@@ -745,7 +751,7 @@ three jobs:
 
 ### 5.8 What a suggestion's main action does
 
-A suggestion changes nothing until the owner acts. **"Not this"** never writes to GitHub: it
+A suggestion changes nothing until the owner acts. **"Dismiss"** never writes to GitHub: it
 records the reason (5.7), and the triage session does not repeat that suggestion for that
 issue unless its facts change (a new commit, comment or label). The main action depends on
 the kind:
