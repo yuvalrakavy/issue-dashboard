@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yuvalrakavy/issue-dashboard/schemas/event-membership.schema.json",
+  "title": "Ledger event: membership",
+  "description": "A project's issue and pull-request set in one repo, as its membership read returned it (2.2 read 1); recorded when the set or the repo's name changes. The subject is the repo's node id.",
+  "allOf": [
+    {
+      "$ref": "common.schema.json#/$defs/eventEnvelope"
+    }
+  ],
+  "properties": {
+    "kind": {
+      "const": "membership"
+    },
+    "subject": {
+      "$ref": "common.schema.json#/$defs/nodeId"
+    },
+    "distinct": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "project",
+        "repo",
+        "members_hash"
+      ],
+      "properties": {
+        "project": {
+          "$ref": "common.schema.json#/$defs/projectName"
+        },
+        "repo": {
+          "$ref": "common.schema.json#/$defs/repoName"
+        },
+        "members_hash": {
+          "$ref": "common.schema.json#/$defs/sha256"
+        }
+      }
+    },
+    "data": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "project",
+        "repo",
+        "read_id",
+        "members_hash",
+        "issues",
+        "pull_requests"
+      ],
+      "properties": {
+        "project": {
+          "$ref": "common.schema.json#/$defs/projectName"
+        },
+        "repo": {
+          "$ref": "common.schema.json#/$defs/repoName"
+        },
+        "read_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "members_hash": {
+          "$ref": "common.schema.json#/$defs/sha256"
+        },
+        "issues": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "common.schema.json#/$defs/nodeId"
+          }
+        },
+        "pull_requests": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "common.schema.json#/$defs/nodeId"
+          }
+        }
+      }
+    }
+  }
+}

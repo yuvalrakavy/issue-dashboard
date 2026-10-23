@@ -90,6 +90,49 @@ impl Root {
         self.dir.join("lock")
     }
 
+    /// The reader lease: shared by every reader of the ledger, exclusive for `rebuild`, so a
+    /// rebuild never moves the ledger out from under a read (10.6).
+    pub fn readers_path(&self) -> PathBuf {
+        self.dir.join("readers")
+    }
+
+    fn lease_file(&self) -> Result<fs::File> {
+        fs::create_dir_all(&self.dir)?;
+        Ok(fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(self.readers_path())?)
+    }
+
+    /// Takes a shared reader lease, waiting while a rebuild holds it.
+    fn reader_lease(&self) -> Result<fs::File> {
+        let f = self.lease_file()?;
+        f.lock_shared()?;
+        Ok(f)
+    }
+
+    fn exclusive_lease(&self) -> Result<fs::File> {
+        let f = self.lease_file()?;
+        let start = std::time::Instant::now();
+        loop {
+            match f.try_lock() {
+                Ok(()) => return Ok(f),
+                Err(fs::TryLockError::WouldBlock) if start.elapsed() < self.options.lock_wait => {
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                Err(fs::TryLockError::WouldBlock) => {
+                    return Err(Error::ReadersActive {
+                        path: self.readers_path(),
+                        waited: self.options.lock_wait,
+                    });
+                }
+                Err(fs::TryLockError::Error(e)) => return Err(e.into()),
+            }
+        }
+    }
+
     fn lock(&self) -> Result<RootLock> {
         fs::create_dir_all(&self.dir)?;
         RootLock::acquire(&self.lock_path(), &self.options.command, self.options.lock_wait)
@@ -121,6 +164,16 @@ impl Root {
         clock: impl FnOnce() -> DateTime<Utc>,
         f: impl FnOnce(&mut Tx<'_>) -> Result<T>,
     ) -> Result<T> {
+        self.locked(clock, f, |_| Ok(())).map(|(_, out)| out)
+    }
+
+    /// The body of every mutating command; `then` runs last, still under the lock.
+    fn locked<T, R>(
+        &self,
+        clock: impl FnOnce() -> DateTime<Utc>,
+        f: impl FnOnce(&mut Tx<'_>) -> Result<T>,
+        then: impl FnOnce(&Root) -> Result<R>,
+    ) -> Result<(R, T)> {
         let _lock = self.lock()?;
         let now = format_time(clock());
         let backup = self.backup();
@@ -147,20 +200,46 @@ impl Root {
         };
         self.failpoint(Failpoint::AfterCommit)?;
         backup.catch_up(&mut ledger, &now, &mut |at| self.failpoint(at))?;
-        Ok(out)
+        Ok((then(self)?, out))
     }
 
     /// Opens the ledger for reading, without the lock. Refuses when there is no ledger yet,
     /// rather than creating one.
     pub fn read<T>(&self, f: impl FnOnce(&Ledger) -> Result<T>) -> Result<T> {
+        let _lease = self.reader_lease()?;
         let ledger = Ledger::open_existing(&self.ledger_path())?;
         f(&ledger)
+    }
+
+    /// [`Root::mutate_with_clock`], then `g` over a read of the ledger as it stood at that
+    /// commit: the read transaction is begun while the root lock is still held, and `g` runs
+    /// after the lock is released, so a slow derive never blocks other commands and never
+    /// sees a later command's events (10.4 step 3).
+    pub fn mutate_then_read<T, U>(
+        &self,
+        clock: impl FnOnce() -> DateTime<Utc>,
+        f: impl FnOnce(&mut Tx<'_>) -> Result<T>,
+        g: impl FnOnce(&Ledger, T) -> Result<U>,
+    ) -> Result<U> {
+        let ((_lease, ledger), out) = self.locked(clock, f, |root| {
+            let lease = root.reader_lease()?;
+            let ledger = Ledger::open_existing(&root.ledger_path())?;
+            ledger.pin()?;
+            Ok((lease, ledger))
+        })?;
+        let result = g(&ledger, out);
+        ledger.unpin()?;
+        result
     }
 
     /// Recreates `ledger.sqlite` from the backup (10.2), verifying every line. Refuses when
     /// `ledger.sqlite` exists unless `force`, which keeps the old file (and its WAL) beside it, renamed.
     pub fn rebuild(&self, now: DateTime<Utc>, force: bool) -> Result<RebuildReport> {
         let _lock = self.lock()?;
+        // Readers do not take the lock, so the lock alone cannot keep one from opening the
+        // ledger this moves aside; the exclusive lease waits for the running ones and keeps new
+        // ones out until the new ledger is in place.
+        let _lease = self.exclusive_lease()?;
         let stamp = format_time(now);
         let target = self.ledger_path();
         if target.exists() && !force {

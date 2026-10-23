@@ -19,6 +19,10 @@ pub enum Kind {
     Launch,
     Outcome,
     Exported,
+    /// A project's issue and pull-request set in one repo changed (2.2 read 1).
+    Membership,
+    /// A cycle took its outbox sequence number (10.4 step 3); the event's seq is the number.
+    Outbox,
 }
 
 impl Kind {
@@ -34,6 +38,8 @@ impl Kind {
             Kind::Launch => "launch",
             Kind::Outcome => "outcome",
             Kind::Exported => "exported",
+            Kind::Membership => "membership",
+            Kind::Outbox => "outbox",
         }
     }
 

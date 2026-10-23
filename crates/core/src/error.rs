@@ -28,6 +28,15 @@ pub enum Error {
     #[error("config {}: {reason}", .file.display())]
     Config { file: PathBuf, reason: String },
 
+    /// A GitHub read failed: `gh` could not run, or the response was not the expected shape.
+    #[error("github: {0}")]
+    GitHub(String),
+
+    /// `rebuild` found readers (a `read` command or a cycle's derive) still holding the
+    /// reader lease after the lock wait (10.6).
+    #[error("readers still hold {}; gave up after {}s", .path.display(), .waited.as_secs())]
+    ReadersActive { path: PathBuf, waited: Duration },
+
     /// A test failpoint fired (only in-process; the CLI aborts instead).
     #[error("failpoint {0} fired")]
     Failpoint(&'static str),

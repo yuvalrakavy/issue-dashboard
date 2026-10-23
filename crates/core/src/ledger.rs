@@ -88,6 +88,29 @@ CREATE TABLE IF NOT EXISTS freshness (
 );
 ";
 
+/// Not event tables: the read bookkeeping of the snapshot (2.2, 2.5). `watermarks` is the start
+/// of the last complete read of each repo (by node id), shared by every project; `reads` is each
+/// project's last read of each configured repo. Derived and not in the backup: losing them costs
+/// one full read, never a missed change.
+const READS: &str = "
+CREATE TABLE IF NOT EXISTS watermarks (
+    repo       TEXT PRIMARY KEY,
+    started_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS reads (
+    project    TEXT NOT NULL,
+    repo       TEXT NOT NULL,
+    repo_node  TEXT,
+    view_hash  TEXT,
+    mode       TEXT,
+    attempt_at TEXT NOT NULL,
+    good_at    TEXT,
+    full_at    TEXT,
+    error      TEXT,
+    PRIMARY KEY (project, repo)
+);
+";
+
 const COLUMNS: &str = "seq, time, kind, subject, pred, distinct_json, identity, data";
 
 /// An open ledger file.
@@ -124,6 +147,7 @@ impl Ledger {
             }
         }
         conn.execute_batch(FRESHNESS)?;
+        conn.execute_batch(READS)?;
         Ok(Ledger { conn })
     }
 
@@ -155,6 +179,22 @@ impl Ledger {
 
     pub fn conn(&self) -> &Connection {
         &self.conn
+    }
+
+    /// Begins a read transaction and reads from it, so every later query on this connection
+    /// sees the ledger as it is now until [`Ledger::unpin`] (SQLite's WAL snapshot isolation).
+    pub fn pin(&self) -> Result<()> {
+        self.conn.execute_batch("BEGIN DEFERRED")?;
+        self.conn
+            .query_row("SELECT COUNT(*) FROM events", [], |r| r.get::<_, i64>(0))?;
+        Ok(())
+    }
+
+    pub fn unpin(&self) -> Result<()> {
+        if !self.conn.is_autocommit() {
+            self.conn.execute_batch("COMMIT")?;
+        }
+        Ok(())
     }
 }
 

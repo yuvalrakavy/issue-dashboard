@@ -1539,11 +1539,11 @@ them rather than refusing.
   left beside the new file. `rebuild.pending` names the aside set while the old files move, so
   a move interrupted by a crash resumes into the same set. (Two earlier shapes, copy-aside with
   a checkpoint, kept drawing findings in the gate: an incomplete checkpoint, a WAL removed before
-  the rename.) An existing ledger is opened without SQLite's create flag. **Open:** `rebuild`
-  takes the root lock, but a lock-free reader holding the old file open across the renames is not
-  excluded; before the cycle's lock-free derive step (10.4 step 3) is built, readers need a shared
-  lease that `rebuild` takes exclusively. Until then `rebuild` is for when no other tracker
-  command runs.
+  the rename.) An existing ledger is opened without SQLite's create flag. *Readers:* every
+  lock-free read (`Root::read`, and the cycle's derive) holds a shared lock on `<root>/readers`
+  while its connection is open; `rebuild` takes it exclusively after the root lock, waiting up to
+  the lock wait and then refusing with `ReadersActive`, so no reader holds the old file across
+  the renames. (This closes the open item slice 1 left here.)
   `rebuild` tolerates a torn tail by the same rule as the tail repair (the trailing run of bad
   lines of the latest non-empty file) and reports how many lines it dropped; a corrupt line
   anywhere else, that is one followed by a good line, refuses with its file and line number. A
@@ -1567,8 +1567,9 @@ them rather than refusing.
   Closing it would take an event per unchanged read.
 - *Launches:* 10.3's transition list lacked `withdrawn`, which 10.7's table has; it is added,
   with `orphan_settled`, which frees the slot an orphan holds ("until you settle it", 10.7). A
-  recipe's pool is keyed by the recipe's name, across every project and repo using it (for the
-  owner to confirm: a recipe shared by several repos then shares one pool). The queue is first
+  recipe's pool is keyed by the recipe's name, across every project and repo using it, so a
+  recipe shared by several repos shares one pool (**owner, 2026-10-23**: capacity is about how
+  many sessions run on this machine, not per repo). The queue is first
   in, first out: a new request queues behind an earlier queued launch of the same recipe that
   could take the slot. `reserve` retried returns the recorded token; another dispatcher is
   refused. A held issue refuses the reservation without changing the launch. `launch-ended`
@@ -1588,6 +1589,64 @@ them rather than refusing.
   decision; status is derived from every ingested undo whenever decisions are read, which is
   what makes arrival order irrelevant.
 - *Outcomes:* one per launch; the same record again is a no-op, a different one is refused.
+
+**The cycle (`cycle`, `snapshot`; slice 2).** Phase 1 reads GitHub and never writes to it.
+
+- *GitHub access* is one trait, `GitHub::graphql`, with three implementations: `gh api graphql`
+  (the real one), `Recorder` (the real one, saving each response) and `Replay` (recorded
+  responses, keyed by the query name and its variables with `since` dropped and `closed:>=`
+  dates blanked, so a recording answers a later clock). `nodes` requests are keyed by their
+  exact ids; the tests answer them from any node found in the recordings. The CLI picks one by
+  `ISSUE_DASHBOARD_REPLAY` / `ISSUE_DASHBOARD_RECORD`; `ISSUE_DASHBOARD_PAGE_SIZE` sets the page
+  size (default 100). Every request sends `X-Github-Next-Global-ID: 1`: without it GitHub still
+  returns legacy node ids for older repos (rhaiscript/rhai's is `MDEw…` without it, `R_kgDOAyYOjQ`
+  with it), and the ledger keys everything by node id. A `NOT_FOUND` comes back as `null` with an
+  error and `gh` exits 1 with the JSON on stdout; the reader accepts it only where `null` is a
+  valid answer (`nodes`, an `also` number). GitHub refuses a query that defines a fragment it
+  does not use, so fragments are appended per query.
+- *Membership* is a new event kind, `membership`: subject the repo's node id, one per project
+  and set, recorded only when the set or the repo's name changes. The details of an item are
+  kept when any project's latest set holds it, since the per-repo watermark is shared.
+- *The read state* lives in derived side tables beside the events (not in the backup, like
+  `freshness`): `watermarks` (per repo node: the start of the last complete read) and `reads`
+  (per project and configured repo: node id, view hash, mode, attempt, last good and last full
+  read, error). After `rebuild` they are empty, so the next read of each repo is full.
+- *Full reads:* the first read, a changed view or translation (hashed), a missing watermark,
+  and once every 24 hours. A full read reads the whole set by node id and checks every item that
+  was in the set at any time since the last full read and is not now (including items that left
+  at an incremental read), recording `item_gone` for those GitHub no longer resolves. An item
+  that resolves elsewhere (transferred) is observed under its new alias, not gone.
+- *Renames:* searches, `also` numbers and the since-lists use the repo's current
+  `nameWithOwner` from the repo query, not the configured name, so a renamed repo keeps its
+  items. Config keeps naming the repo by its old name until the owner edits it.
+- *Stale fetches:* a fetch whose start is older than the project's last good read of the repo
+  (`superseded`) offers only its observations, each checked for staleness, and records neither
+  its set nor its read times. The watermark only moves forward.
+- *Ingest* (page documents, passed to `cycle --pages <file>` as `{decisions, launches, views,
+  requests}`; an unknown collection is refused): launches first, then decisions, then the
+  cancels, then views and requests. A document that fails its schema or the owner check is
+  skipped and reported; one bad document never stops the rest. `not_sent` launch records and
+  the `_thread` document are not ingested in phase 1. Views and requests become `view_saved` and
+  `request` events, one per document id.
+- *Cancels* are applied by `apply_cancels`, run on every ingest and after `reserve --request`,
+  which withdraws each requested or queued launch an effective `cancel_launch` names, whichever
+  arrived first. A launch already reserved is past cancelling: the decision's ack says refused.
+  *Undo too late:* an undo of a `cancel_launch` recorded after the withdrawal it caused is
+  refused ("too late"), since a withdrawal is final.
+- *The outbox:* the cycle's sequence number is the seq of a new `outbox` event (subject the
+  project), so it rises and survives `rebuild`. Each cycle writes
+  `outbox/<project>/<seq>.json` (temp file, fsync, rename) with the meta, issue, acks and
+  launch-status documents, each validated against its schema. Acks are cumulative: every
+  decision consumed in the last 30 days, with the cycle that consumed it (the first outbox after
+  it). Derive runs after the root lock is released, over a read transaction begun while the lock
+  was held, so it sees exactly its own commit.
+- *Derived status* follows 4.4 for pull requests and then: umbrella, new, untriaged,
+  needs-decision, in-progress, blocked, ready. Priority is override, then the project's
+  priority, then the label. Closed items older than the history window are left out.
+- **Open (for the owner):** "new" is approximated as open, with no comment by an inside author
+  and no labels; a closed or merged pull request still gets a pull-request status (e.g.
+  `needs-review`); `commits`, `rank` and `score` are empty; the `flow` and history snapshot files
+  are not written yet; suggestions, plans, forks and metrics documents are empty until triage.
 
 ## Claims checked
 
@@ -1614,3 +1673,8 @@ them rather than refusing.
 | Renaming a label in a repo's settings does not change its issues' update time | believed | not probed; the daily full read covers it either way |
 | The forks' upstreams are bytebeamio/rumqtt and rhaiscript/rhai | confirmed | `gh repo view … --json parent` on both forks |
 | `sendToClaude` wakes a watching session | confirmed | probe artifact, 2026-10-22 |
+| GraphQL returns legacy node ids for older repos unless the request sends `X-Github-Next-Global-ID: 1` | confirmed | probe on rhaiscript/rhai, 2026-10-23: `R_kgDOAyYOjQ` with the header |
+| A `NOT_FOUND` node comes back as `null` plus an error, and `gh api graphql` exits 1 with the JSON on stdout | confirmed | probe 2026-10-23, `nodes` with an unknown id |
+| GitHub refuses a GraphQL query that defines a fragment it does not use | confirmed | the first recording run, 2026-10-23 ("Fragment PrFields was defined, but not used") |
+| GitHub's issue search does not follow a repo rename (`repo:old/name`) | **believed** | not probed (no rename to probe on); the reader uses the current `nameWithOwner` either way |
+| One home cycle reads Store (132 items), airzoned (14) and rhai (6) in full, then incrementally with nothing to read | confirmed | the fixture recording, 2026-10-23 (`crates/core/tests/fixtures/replay-meta.json`) |
