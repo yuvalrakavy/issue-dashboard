@@ -68,6 +68,7 @@ test("the age changes unit exactly at an hour and at a day, and rounds down", ()
   assert.equal(ago(1439), "23 h ago");
   assert.equal(ago(1440), "1 d ago");
   assert.equal(ago(2159), "1 d ago");
+  assert.equal(ago(2160), "1 d ago");
 });
 
 test("a session whose row has no link at all shows a null link", () => {
