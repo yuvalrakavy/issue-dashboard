@@ -5,6 +5,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
+use chrono::{DateTime, Utc};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -114,10 +115,15 @@ fn gone(tx: &mut Tx<'_>, seen: &Event, why: &str, listed_at: &str) -> Result<()>
 pub fn ingest(tx: &mut Tx<'_>, list: &SessionList) -> Result<Report> {
     schema::validate("session-list", "session list", &serde_json::to_value(list)?)?;
     let mut report = Report::default();
+    // Every id the list shows, valid row or not: a session whose row is skipped is still listed.
     let mut listed = BTreeSet::new();
-    let mut oldest: Option<i64> = None;
+    let mut done = BTreeSet::new();
+    let mut oldest: Option<DateTime<Utc>> = None;
     for v in &list.sessions {
         let id = v.get("sessionId").and_then(Value::as_str).map(str::to_string);
+        if let Some(id) = &id {
+            listed.insert(id.clone());
+        }
         let r = match row(v, &list.listed_at) {
             Ok(r) => r,
             Err(Error::Refused(reason)) => {
@@ -130,9 +136,9 @@ pub fn ingest(tx: &mut Tx<'_>, list: &SessionList) -> Result<Report> {
             }
             Err(e) => return Err(e),
         };
-        let at = parse_time(&r.last_active_at)?.timestamp();
+        let at = parse_time(&r.last_active_at)?;
         oldest = Some(oldest.map_or(at, |o| o.min(at)));
-        if !listed.insert(r.id.clone()) {
+        if !done.insert(r.id.clone()) {
             continue;
         }
         let last = latest(tx.conn(), &r.id)?;
@@ -169,7 +175,7 @@ pub fn ingest(tx: &mut Tx<'_>, list: &SessionList) -> Result<Report> {
         let Some(e) = latest(tx.conn(), id)?.filter(|e| e.kind == Kind::SessionSeen) else {
             continue;
         };
-        let at = parse_time(e.data["last_active_at"].as_str().unwrap_or(""))?.timestamp();
+        let at = parse_time(e.data["last_active_at"].as_str().unwrap_or(""))?;
         if complete || oldest.is_some_and(|o| at >= o) {
             gone(tx, &e, "absent", &list.listed_at)?;
             report.gone += 1;
@@ -319,11 +325,18 @@ fn repo_of(cwd: &str, checkouts: &[(String, PathBuf)]) -> Option<String> {
         .map(|(repo, _)| repo.clone())
 }
 
-/// The one item `refs` name, if they name exactly one the project tracks.
-fn resolve<'a>(refs: &[Ref], repo: Option<&str>, tracked: &'a BTreeMap<String, Tracked>) -> Option<&'a Tracked> {
+/// The one item `refs` name, if they name exactly one the project tracks. A repo a reference
+/// names under its configured name is taken to its current one.
+fn resolve<'a>(
+    refs: &[Ref],
+    repo: Option<&str>,
+    current: &BTreeMap<String, String>,
+    tracked: &'a BTreeMap<String, Tracked>,
+) -> Option<&'a Tracked> {
     let mut names = BTreeSet::new();
     for r in refs {
-        let repo = r.repo.as_deref().or(repo)?;
+        let named = r.repo.as_deref().map(|n| current.get(n).map_or(n, String::as_str));
+        let repo = named.or(repo)?;
         names.insert(format!("{repo}#{}", r.number));
     }
     if names.len() != 1 {
@@ -333,16 +346,20 @@ fn resolve<'a>(refs: &[Ref], repo: Option<&str>, tracked: &'a BTreeMap<String, T
 }
 
 /// Each item's matched live sessions, as its document shows them (10.10), newest first.
+/// `current` takes each member repo's configured name to its name now, which `tracked`'s
+/// aliases use: they differ after a rename.
 pub fn matches(
     conn: &Connection,
     config: &ConfigSet,
     project: &str,
+    current: &BTreeMap<String, String>,
     tracked: &BTreeMap<String, Tracked>,
 ) -> Result<BTreeMap<String, Vec<Value>>> {
     let mut checkouts = Vec::new();
     for repo in config.views(project)?.into_keys() {
         if let Some(local) = config.registry.repo.get(&repo).and_then(|e| e.local_path.as_deref()) {
-            checkouts.push((repo, expand_home(local)));
+            let name = current.get(&repo).cloned().unwrap_or(repo);
+            checkouts.push((name, expand_home(local)));
         }
     }
     let launches: Vec<launch::Launch> = launch::all(conn)?
@@ -380,7 +397,7 @@ pub fn matches(
             let from_branch = d["branch"].as_str().map(branch_refs).unwrap_or_default();
             let mut all = from_title.clone();
             all.extend(from_branch.iter().cloned());
-            if let Some(t) = resolve(&all, repo.as_deref(), tracked) {
+            if let Some(t) = resolve(&all, repo.as_deref(), current, tracked) {
                 let via = if from_title.is_empty() { "branch" } else { "title" };
                 found.push((t.id.clone(), "probable", via));
             }

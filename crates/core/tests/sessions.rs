@@ -8,6 +8,7 @@ use std::fs;
 use common::TempRoot;
 use common::fixture::*;
 use issue_dashboard_core::cycle::{self, CycleReport};
+use issue_dashboard_core::github::GitHub;
 use issue_dashboard_core::ingest::Pages;
 use issue_dashboard_core::launch::{self, Reservation, Via};
 use issue_dashboard_core::sessions::SessionList;
@@ -574,4 +575,125 @@ fn the_recorded_fix_403_session_is_matched_when_store_403_is_tracked() {
     // The other recorded titles name no issue.
     let m = matched(&d);
     assert!(m.iter().all(|a| a == "yuvalrakavy/Store#403"), "{m:?}");
+}
+
+fn run_with(
+    t: &TempRoot,
+    gh: &issue_dashboard_core::github::Replay,
+    sessions: Option<&SessionList>,
+    minutes: i64,
+) -> Value {
+    let r = cycle::cycle_full(
+        &t.root,
+        gh,
+        None,
+        "home",
+        &Pages::default(),
+        sessions,
+        &move || at(minutes),
+        PAGE,
+    )
+    .unwrap();
+    serde_json::from_str(&fs::read_to_string(&r.outbox).unwrap()).unwrap()
+}
+
+#[test]
+fn a_row_that_is_not_an_object_is_skipped_and_the_rest_are_recorded() {
+    let t = root();
+    let (_, base) = run(&t, None, 0);
+    let (alias, n) = ready_store_issue(&base);
+    let l = list(
+        20,
+        vec![json!(null), json!(7), row("a", &format!("Fix #{n}"), STORE_CHECKOUT)],
+    );
+    let (r, d) = run(&t, Some(&l), 5);
+    assert_eq!(r.sessions.seen, 1, "{:?}", r.sessions);
+    assert_eq!(r.sessions.skipped.len(), 2, "{:?}", r.sessions);
+    assert_eq!(shown(&d, &alias).len(), 1);
+}
+
+#[test]
+fn a_session_whose_row_is_invalid_is_still_listed_and_not_gone() {
+    let t = root();
+    let (_, base) = run(&t, None, 0);
+    let (alias, n) = ready_store_issue(&base);
+    run(
+        &t,
+        Some(&list(20, vec![row("a", &format!("Fix #{n}"), STORE_CHECKOUT)])),
+        5,
+    );
+    let mut bad = row("a", &format!("Fix #{n}"), STORE_CHECKOUT);
+    bad["lastActivityAt"] = json!("not a time");
+    let (r, d) = run(&t, Some(&list(20, vec![bad])), 10);
+    assert_eq!(r.sessions.skipped.len(), 1, "{:?}", r.sessions);
+    assert_eq!(r.sessions.gone, 0, "{:?}", r.sessions);
+    assert_eq!(shown(&d, &alias).len(), 1);
+}
+
+#[test]
+fn a_missing_session_a_fraction_of_a_second_older_than_a_cut_list_is_not_gone() {
+    let t = root();
+    let mut old = row("old", "Untracked work", STORE_CHECKOUT);
+    old["lastActivityAt"] = json!("2026-10-23T16:46:02.100Z");
+    run(&t, Some(&list(20, vec![old])), 0);
+    // A list cut at its limit of one, whose one row is 0.8 s newer: "old" may have been cut.
+    let mut new = row("new", "Other work", STORE_CHECKOUT);
+    new["lastActivityAt"] = json!("2026-10-23T16:46:02.900Z");
+    let (r, _) = run(&t, Some(&list(1, vec![new])), 5);
+    assert_eq!(r.sessions.gone, 0, "{:?}", r.sessions);
+}
+
+#[test]
+fn after_a_rename_sessions_match_by_the_repos_current_name() {
+    let t = root();
+    let renamed = "yuvalrakavy/StoreRenamed";
+    let lib = library();
+    let gh = gh_with(move |req, v| {
+        let v = match v {
+            Ok(v) => v,
+            // A request under the new name: serve the recording made under the old one.
+            Err(_) => {
+                let mut vars = req.variables.clone();
+                rename(&mut vars, renamed, STORE);
+                if let Some(q) = vars["q"].as_str() {
+                    vars["q"] = json!(q.replace(renamed, STORE));
+                }
+                lib.graphql(&issue_dashboard_core::github::Request {
+                    name: req.name,
+                    query: req.query,
+                    variables: vars,
+                })?
+            }
+        };
+        let mut v = v;
+        rename(&mut v, STORE, renamed);
+        Ok(v)
+    });
+    let base = run_with(&t, &gh, None, 0);
+    let (alias, n) = ready_issue_in(&base, renamed);
+    // One in the checkout the registry names under the old name; one naming the old name.
+    let by_cwd = row("cwd", &format!("Fix #{n}"), STORE_CHECKOUT);
+    let by_old_name = row("old", &format!("Look at {STORE}#{n}"), "/elsewhere");
+    let d = run_with(&t, &gh, Some(&list(20, vec![by_cwd, by_old_name])), 5);
+    let mut ids: Vec<String> = shown(&d, &alias).into_iter().map(|(id, _, _)| id).collect();
+    ids.sort();
+    assert_eq!(ids, vec!["cwd", "old"]);
+}
+
+fn ready_issue_in(d: &Value, repo: &str) -> (String, u64) {
+    let prefix = format!("{repo}#");
+    let i = d["issues"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| {
+            i["alias"].as_str().unwrap().starts_with(&prefix)
+                && i["kind"] == "issue"
+                && i["state"] == "open"
+                && i["status"] == "ready"
+        })
+        .unwrap_or_else(|| panic!("a ready {repo} issue"));
+    let alias = i["alias"].as_str().unwrap().to_string();
+    let n = alias.rsplit('#').next().unwrap().parse().unwrap();
+    (alias, n)
 }

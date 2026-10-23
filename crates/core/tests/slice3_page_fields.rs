@@ -83,15 +83,18 @@ fn meta_names_the_configured_owner_and_null_while_it_is_pending() {
     let d = outbox(&t, "home", &gh());
     assert_eq!(d["meta"]["owner_id"], json!("user_owner"));
     // The config refuses an empty owner_id, so the placeholder is the one pending value.
-    for pending in ["u_pending"] {
-        let path = t.path().join("projects/home.toml");
-        let text = fs::read_to_string(&path).unwrap();
-        let start = text.find("owner_id = ").unwrap();
-        let end = start + text[start..].find('\n').unwrap();
-        fs::write(&path, format!("{}owner_id = \"{pending}\"{}", &text[..start], &text[end..])).unwrap();
-        let d = outbox(&t, "home", &gh());
-        assert_eq!(d["meta"]["owner_id"], Value::Null, "{pending:?}");
-    }
+    let pending = issue_dashboard_core::derive::PENDING_OWNER;
+    let path = t.path().join("projects/home.toml");
+    let text = fs::read_to_string(&path).unwrap();
+    let start = text.find("owner_id = ").unwrap();
+    let end = start + text[start..].find('\n').unwrap();
+    fs::write(
+        &path,
+        format!("{}owner_id = \"{pending}\"{}", &text[..start], &text[end..]),
+    )
+    .unwrap();
+    let d = outbox(&t, "home", &gh());
+    assert_eq!(d["meta"]["owner_id"], Value::Null);
 }
 
 #[test]

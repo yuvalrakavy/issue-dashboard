@@ -20,9 +20,8 @@
     },
     "sessions": {
       "type": "array",
-      "items": {
-        "type": "object"
-      }
+      "items": {},
+      "description": "Any values: a row that is not a session row is skipped on its own, never the whole list."
     }
   }
 }

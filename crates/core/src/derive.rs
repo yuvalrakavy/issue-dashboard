@@ -496,7 +496,16 @@ fn attach_sessions(conn: &Connection, config: &ConfigSet, project: &str, issues:
             sessions::Tracked { id, kind, closes },
         );
     }
-    let mut matched = sessions::matches(conn, config, project, &tracked)?;
+    // Each member repo's name now, from its observation: its items' aliases use it.
+    let mut current = BTreeMap::new();
+    for repo in config.views(project)?.into_keys() {
+        if let Some(node) = repo_node(conn, project, &repo)?
+            && let Some(o) = observed(conn, &node)?
+        {
+            current.insert(repo, o.alias);
+        }
+    }
+    let mut matched = sessions::matches(conn, config, project, &current, &tracked)?;
     for i in issues.iter_mut() {
         let shown = matched.remove(i["id"].as_str().unwrap_or_default()).unwrap_or_default();
         if !shown.is_empty() && i["kind"] == "issue" && matches!(i["status"].as_str(), Some("ready" | "blocked")) {
