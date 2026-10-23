@@ -1847,7 +1847,9 @@ them rather than refusing.
   the maximum). So a request recorded while the read fetches, even in the same millisecond
   as its start, waits for the next read. `served` is derived and not in the backup: a rebuild
   costs one by-id read of each item ever requested, never a missed request. An item both read
-  in full and requested is read once. `sync-now --issue` resolves the alias against the
+  in full and requested is read once; a requested item no longer in the repo's set is not
+  read by the incremental read that serves the request, since the daily full read checks what
+  left the set. `sync-now --issue` resolves the alias against the
   current members of the project's sets, case-insensitively, by the number within the repo
   named either as the config has it or by its name at its latest read (an unchanged member
   keeps the alias it was read under, so a rename never strands it), finding the repo through
