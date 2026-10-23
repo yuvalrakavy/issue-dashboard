@@ -168,6 +168,21 @@
           "type": "null"
         }
       ]
+    },
+    "groups": {
+      "description": "Each group a member names, with the tracked repos it holds.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      }
+    },
+    "sync_interval_minutes": {
+      "description": "How often the sync job runs: a decision is applied within this.",
+      "type": "integer",
+      "minimum": 1
     }
   }
 }

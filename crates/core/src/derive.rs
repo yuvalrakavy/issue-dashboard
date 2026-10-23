@@ -235,6 +235,9 @@ impl Context<'_> {
             "rank": null,
             "score": null,
             "untranslated_labels": canon.untranslated,
+            "labels": labels,
+            "body": c.get("body").cloned().unwrap_or(Value::Null),
+            "body_truncated": c.get("body_truncated").and_then(Value::as_bool).unwrap_or(false),
             "stale": self.stale,
         }))
     }
@@ -414,6 +417,25 @@ fn launch_status(conn: &Connection, project: &str) -> Result<Vec<Value>> {
     Ok(out)
 }
 
+/// Each group a member of `project` names, with the tracked repos it holds (the page's scope
+/// pills and "by group" panel).
+fn groups(config: &ConfigSet, project: &str) -> Result<BTreeMap<String, Vec<String>>> {
+    let p = config.project(project)?;
+    let views = config.views(project)?;
+    let mut out = BTreeMap::new();
+    for group in p.member.iter().filter_map(|m| m.group.as_deref()) {
+        let repos = p.groups.get(group).or_else(|| config.registry.groups.get(group));
+        let tracked: Vec<String> = repos
+            .into_iter()
+            .flatten()
+            .filter(|r| views.contains_key(*r))
+            .cloned()
+            .collect();
+        out.insert(group.to_string(), tracked);
+    }
+    Ok(out)
+}
+
 /// Builds the outbox of `project` for the cycle whose `outbox` event has sequence `seq`.
 pub fn derive(
     conn: &Connection,
@@ -488,6 +510,8 @@ pub fn derive(
         "repos": repos,
         "dispatcher_seen_at": null,
         "default_view": p.default_view,
+        "groups": groups(config, project)?,
+        "sync_interval_minutes": sync_minutes,
     });
     let out = Outbox {
         project: project.to_string(),

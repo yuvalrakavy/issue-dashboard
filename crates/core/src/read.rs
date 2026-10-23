@@ -18,6 +18,9 @@ use crate::{Error, Result};
 /// GitHub's search returns at most this many results for one query.
 pub const SEARCH_CAP: u64 = 1000;
 
+/// An issue body is kept up to this many characters (the page's Details; a doc is 256 KiB).
+pub const BODY_CAP: usize = 8000;
+
 /// The default page size; tests use a smaller one so the recordings paginate.
 pub const DEFAULT_PAGE: u32 = 100;
 
@@ -348,6 +351,10 @@ pub fn item(v: &Value) -> Result<Item> {
         }
     }
     let body = v.get("body").and_then(Value::as_str).unwrap_or("");
+    // Kept for Details (5.x), cut at BODY_CAP characters; the hash is of the whole body.
+    let trimmed = body.trim();
+    let kept: String = trimmed.chars().take(BODY_CAP).collect();
+    let body_truncated = kept.len() < trimmed.len();
     let mut content = json!({
         "state": lower("state").unwrap_or_else(|| "open".into()),
         "title": v.get("title").and_then(Value::as_str).unwrap_or(""),
@@ -369,6 +376,8 @@ pub fn item(v: &Value) -> Result<Item> {
         })).collect::<Vec<_>>(),
         "reactions": reactions,
         "body_hash": if body.is_empty() { Value::Null } else { json!(sha256_hex(body)) },
+        "body": if kept.is_empty() { Value::Null } else { json!(kept) },
+        "body_truncated": body_truncated,
         "links": links,
         "timeline_ids": nodes(v, "timelineItems").filter_map(|t| t.get("id").and_then(Value::as_str)).collect::<Vec<_>>(),
     });

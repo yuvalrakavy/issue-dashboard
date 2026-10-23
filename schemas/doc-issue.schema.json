@@ -344,6 +344,30 @@
     },
     "stale": {
       "type": "boolean"
+    },
+    "labels": {
+      "description": "The item's GitHub labels as read, before translation.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "body": {
+      "description": "The body, trimmed and cut at 8000 characters; null when empty. Outside text is data (4.2): the page shows it as plain text.",
+      "anyOf": [
+        {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8000
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "body_truncated": {
+      "description": "Whether the body was cut.",
+      "type": "boolean"
     }
   }
 }

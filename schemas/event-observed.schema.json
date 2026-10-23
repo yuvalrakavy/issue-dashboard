@@ -394,6 +394,21 @@
                         }
                       }
                     }
+                  },
+                  "body": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 8000
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "body_truncated": {
+                    "type": "boolean"
                   }
                 }
               },

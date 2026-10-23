@@ -1673,6 +1673,14 @@ them rather than refusing.
   field `null`, keeps GitHub's aggregate `reviewDecision`. Only the latest 50 comments of an issue are read, so an issue with more is
   not "new" (an earlier inside comment may be unseen). Priority is override, then the project's
   priority, then the label. Closed items older than the history window are left out.
+- *Page fields (slice 3):* the observation keeps the body, trimmed and cut at 8000 characters
+  (`body_truncated` says so; `body_hash` stays the hash of the whole body), because Details
+  shows it (5.x). Adding it changed every item's content hash once, so the first read after the
+  upgrade records each item again. The issue document carries `body`, `body_truncated` and the
+  raw `labels`; meta carries `groups` (each group a member names, with the tracked repos it
+  holds) and the effective `sync_interval_minutes` (default 5), which the page uses for
+  "applied on the next run (in N min)". The page shows a body as plain text, never as HTML
+  (4.2).
 - **Open (for the owner):** "new" is approximated as open, with no comment by an inside author
   and no labels; a closed or merged pull request still gets a pull-request status (e.g.
   `needs-review`); `commits`, `rank` and `score` are empty; the `flow` and history snapshot files
