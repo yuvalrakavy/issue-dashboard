@@ -1,6 +1,6 @@
 # issue-dashboard — design spec
 
-Status: **chapter 1 approved; chapters 2-4 drafts for review.** Tier T2: a generic tool whose
+Status: **chapters 1-4 and §7.1 approved; chapters 5-6 drafts for review.** Tier T2: a generic tool whose
 config format is a contract that several repos and projects depend on.
 
 ## Intent
@@ -38,12 +38,12 @@ Some or all of a project's repos may be open source with the owner as maintainer
 
 ## Chapters
 
-1. Configuration, translation and priority — **approved 2026-10-23**
-2. **The snapshot: what is read, what is derived, the JSON it writes** ← draft
-3. **Upstream forks** ← draft
-4. **Open source: outside authors and pull requests** ← draft
-5. The dashboard page and its database
-6. Ordering: WSJF within the priority level, and the priority suggestion
+1. Configuration, translation and priority — approved 2026-10-23
+2. The snapshot: what is read, what is derived, the JSON it writes — approved 2026-10-23
+3. Upstream forks — approved 2026-10-23
+4. Open source: outside authors and pull requests — approved 2026-10-23
+5. **The dashboard page and its database** ← draft
+6. **Ordering: WSJF within the priority level, and the priority suggestion** ← draft
 7. Launching sessions: the dispatcher, routing, briefs, launch recipes
 8. The CLI: label sync, config check, `explain`, plan/apply
 9. Documentation and skills
@@ -226,10 +226,10 @@ work" needs no override when the link exists.
 The tracker's state lives in `<root>/state/<project>/` and is committed to git: project
 priorities, overrides with their reasons, accepted and rejected suggestions, and the
 override log the triage agent learns from. The dashboard's database is the working copy a
-person edits; each tracker run reads its changes into the state files first, then writes
-the state back to the database. Those writes are pinned to the version the run read, so an
-edit you make during a run is not overwritten: the pinned write fails and the next run
-picks the edit up. Keeping the state in files is what lets one project's run
+person edits: your actions are recorded there as new documents, which each tracker run
+consumes into the state files before rewriting its own collections. The page and the
+tracker write disjoint collections (5.3), so an edit made during a run is never overwritten
+by it. Keeping the state in files is what lets one project's run
 see another project's priorities for the shared-repo rule in 1.5.
 
 ### 1.7 Writing to GitHub safely
@@ -299,7 +299,8 @@ judgement on top.
 |---|---|
 | repo: visibility, the account's permission (`viewerPermission`), the label list | forced read-only (1.4), the public-comment warning, label sync |
 | issues matching the member's view: the tracker's own `repo:` and `is:issue` qualifiers + `filter`, plus each issue in `also` | the issue set |
-| per issue: number, title, state and close reason, author, assignees, labels, created / updated / closed times, comment count, body | translation, status, aging, the structured filing block |
+| per issue: number, title, state and close reason, author and association, assignees, labels, milestone and its due date, created / updated / closed times, comment count, reactions, body | translation, status, aging, time criticality and outside demand (chapter 6), the structured filing block |
+| per issue: the author association of each commenter (not the comment text) | "new" status and outside demand (4.3) |
 | per issue: the timeline's labelled / unlabelled events for priority labels | the "more recent change wins" rule (1.5) |
 | per issue: `parent`, `subIssues`, `blockedBy`, `blocking` | the link graph (1.8), across repos |
 | comments, only for issues whose body or comments may hold a text link or a filing block | the text-link fallback |
@@ -558,6 +559,170 @@ through plan-then-apply. Two settings in the project config:
 `good_first_issue` and `help_wanted` join the modifiers (1.2), translated per repo. The
 flow metrics gain: time to first response on outside issues, time to first review on
 outside pull requests, and outside items opened and closed per week.
+
+---
+
+## 5. The dashboard page and its database
+
+### 5.1 One page per project
+
+Each project's dashboard is a private claude.ai Artifact declaring three capabilities:
+`db` (the data), `comments` (for `sendToClaude`, the launch path) and `user` (to tell the
+owner from anyone the page is shared with). It renders without GitHub access, so it works
+on a phone. The page code is generic and lives in this repo; only its data is per project.
+
+### 5.2 What the page shows, summary first
+
+| Panel | Shows | You can |
+|---|---|---|
+| **Header** | project name; when each repo was last read, with stale repos flagged (2.5) | open `explain` for any row |
+| **Waiting on you** | everything blocked on you, oldest first (2.3), including plans awaiting approval (1.7) and outside pull requests needing review (4.4) | act on each in place |
+| **Next batch** | the top batch from chapter 6: its issues, why they are grouped, the estimated gate cost, what fixing them unblocks | launch one session for the batch |
+| **Queue** | every open issue in order, filterable by repo, area, type, status, inside/outside | set a priority, add an override, launch a fix session |
+| **Triage queue** | the triage session's suggestions, each with its confidence and reason | accept, reject (with an optional reason), or edit |
+| **Pull requests** | open pull requests by status (4.4) | launch a review session |
+| **Forks** | each fork's state and how far behind it is (chapter 3) | launch "go back" or "send upstream" |
+| **Metrics** | flow, aging against the time limits, outside response times, session outcomes, decision accuracy (5.6) | change the time window |
+
+At phone width the panels stack in that order, so the first screen is the header and what is
+waiting on you.
+
+### 5.3 The database
+
+Document ids replace `/` and `#` with `:`, so `yuvalrakavy/Store#403` is
+`yuvalrakavy:Store:403` (the database allows letters, digits and `_ - . ~ : @ +` in a
+segment).
+
+| Collection | Written by | Holds |
+|---|---|---|
+| `meta` | tracker | project summary, per-repo read times and errors |
+| `issues` | tracker | one document per issue or pull request: the snapshot row (2.4) plus its rank and score terms (chapter 6) |
+| `suggestions` | tracker | one per open suggestion |
+| `plans` | tracker | one per GitHub write plan awaiting approval |
+| `forks`, `metrics` | tracker | chapter 3 and the metrics panel |
+| `decisions` | **page** | one per thing you did: accept, reject, edit, set priority, override, approve a plan |
+| `launches` | **page**, then dispatcher | one per launch request: `requested`, then `started` and `linked` (7) |
+
+**The page never edits a tracker document, and the tracker never edits a `decisions`
+document.** Your actions are written as new `decisions`; each tracker run reads the ones it
+has not yet consumed, applies them to the state files (1.6), marks them consumed, and
+rewrites its own collections. Because the two writers own disjoint collections, an edit you
+make during a run cannot be overwritten by it. Access rules make the tracker collections
+read-only to viewers, and `decisions` and `launches` writable only by the owner.
+
+### 5.4 The launch path
+
+A launch button:
+
+1. checks `comments.canSendToClaude()`; anything but `available` disables the button with
+   the reason ("the dispatcher is not running" for `no_session`);
+2. writes a `launches` document with the issue or batch and the routing the tracker
+   suggested, which you may change;
+3. calls `comments.sendToClaude` with a comment holding only the launch id.
+
+The comment carries nothing but the id: the dispatcher reads the request from the database,
+so nothing typed into the thread can change what is launched.
+
+**One thread, not one per launch.** An artifact has a limit on its threads and replies, so
+launches reply into a single launch thread whose id the page keeps in `launches/_thread`
+(the page owns `launches`, see 5.3; the comments
+capability does not hand a thread id back on a later visit). When that thread is refused
+for being full, the page starts a new one and records its id. The dispatcher answers each
+launch in the thread with what it started. `sendToClaude` works for the
+artifact's editors only, so a person the page is shared with read-only cannot launch.
+
+### 5.5 Freshness
+
+Each panel shows the snapshot time it was built from. A repo whose last good read is older
+than twice the run interval is marked stale in the header and on its rows.
+
+### 5.6 Learning from your corrections (proposed)
+
+Every accept, reject, edit and override is recorded as a `decisions` document, with an
+optional one-tap reason ("wrong area", "already fixed", "not a bug"). Those records do
+three jobs:
+
+- **ground truth for the decision seam** (7.1): each one is a labelled example, so the
+  evaluation set grows by itself as you work;
+- **a live accuracy figure per decision and per backend** on the metrics panel ("type
+  suggestions: 41 of 44 accepted in the last 30 days"), so a backend whose accuracy drops is
+  visible without running an evaluation;
+- **examples for the triage session**: recent corrections are included in its brief, so it
+  stops repeating a mistake you have already corrected.
+
+---
+
+## 6. Ordering
+
+### 6.1 Two stages
+
+1. **The priority level is a floor.** Issues are grouped by their effective priority
+   (1.5), and every p0 comes before every p1, and so on. An issue that blocks another takes
+   the higher of its own level and the levels of the open issues it blocks (within the
+   project), so a p3 Rhai bug blocking a p1 Store issue is ordered as p1.
+2. **Within a level, WSJF orders the issues.** Weighted Shortest Job First: cost of delay
+   divided by job size, scaled by confidence.
+
+`umbrella` issues are not ordered. Blocked issues keep their place but are shown as blocked
+and never offered as "next".
+
+### 6.2 Cost of delay
+
+The sum of three terms, each on the relative scale 1, 2, 3, 5, 8, 13:
+
+| Term | From |
+|---|---|
+| **Value** | severity (data loss, a hang, a silent wrong answer score highest) × reach in this project; outside demand (reactions, distinct outside commenters, 4.3) raises reach |
+| **Time criticality** | how much of its time limit the issue has used; a GitHub milestone with a due date |
+| **Risk reduction and opportunity** | the cost of delay of what it unblocks; membership of a defect class fixed in the same session; a silent failure becoming visible (detectability) |
+
+Severity, reach and detectability come from the decision seam (7.1), with your corrections
+(5.6) taking precedence.
+
+### 6.3 Job size
+
+Effort (S = 1, M = 3, L = 8) plus **gate cost**, which comes from the repo's launch recipe:
+each recipe declares the cost of its gate levels (Store's quick gate and full gate cost very
+differently), and the issue's blast radius picks the level. In a batch the gate cost is
+paid once, so each member's share of it is divided by the batch size.
+
+### 6.4 Confidence
+
+A multiplier between 0.5 and 1.0: the probability the decision seam returned for the
+issue's severity and reach, lowered further while the issue's claims are unchecked against
+the code (duty 0 not yet done). An issue rises once its claims are confirmed.
+
+### 6.5 The score
+
+`score = cost of delay × confidence ÷ job size`. Ties go to the older issue. `explain`
+prints every term.
+
+### 6.6 Batches
+
+The tracker groups ready issues into candidate batches: same repo, same launch recipe, the
+same gate level, and no overlap in the files their fixes are expected to touch. Those
+expected files come from the triage session's estimate for each issue (the sites it found,
+recorded with the commit they were read at), so a batch is only as good as that estimate;
+an issue with no estimate is never batched. A batch's
+score is the sum of its members' cost of delay, times their lowest confidence, divided by
+the summed effort plus one gate cost. The highest-scoring batch is the **Next batch**
+(5.2). Batch size is capped by `max_batch` in the project config.
+
+### 6.7 The priority suggestion
+
+The suggested level for an untriaged issue is a decision through the seam (7.1), from
+severity, reach, likelihood and detectability, with a silent failure raised one level. It
+is shown beside the current label with its confidence, and becomes the project priority only
+when you accept it.
+
+### 6.8 Keeping the estimates honest
+
+When a fix session lands, its recorded wall clock and gate rounds (chapter 7) are compared
+with the job size it was given. The comparison is shown per repo on the metrics panel and
+used to scale that repo's future estimates.
+
+An issue that has stayed out of the top 20 for 60 days is added to **waiting on you** with
+three choices: fix it, lower it, or close it as not planned.
 
 ---
 
