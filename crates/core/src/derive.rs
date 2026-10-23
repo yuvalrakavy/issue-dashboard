@@ -221,6 +221,10 @@ impl Context<'_> {
             "status": status,
             "created_at": whole_seconds(created)?,
             "updated_at": whole_seconds(&o.updated_at)?,
+            "closed_at": match c.get("closed_at").and_then(Value::as_str) {
+                Some(at) => json!(whole_seconds(at)?),
+                None => Value::Null,
+            },
             "idle_days": idle_days,
             "limit_breached": limit_breached,
             "links": {

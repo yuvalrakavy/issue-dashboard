@@ -1680,7 +1680,8 @@ them rather than refusing.
   raw `labels`; meta carries `groups` (each group a member names, with the tracked repos it
   holds) and the effective `sync_interval_minutes` (default 5), which the page uses for
   "applied on the next run (in N min)". The page shows a body as plain text, never as HTML
-  (4.2).
+  (4.2). The issue document also carries `closed_at` (null while open), since Trends counts
+  closes per week and `updated_at` moves on later activity.
 - *The page database layout and publish (slice 3).* A program cannot write the artifact's
   database (claims table), so the sync job is a skill (`skills/issue-dashboard-sync`) that
   performs, with `ArtifactData`, what three CLI helpers plan, none of which needs a root:

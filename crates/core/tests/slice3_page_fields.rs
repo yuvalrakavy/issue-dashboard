@@ -113,3 +113,26 @@ read_only = true
         json!(issue_dashboard_core::derive::DEFAULT_SYNC_MINUTES)
     );
 }
+
+#[test]
+fn every_issue_carries_its_close_time_for_the_trends_tab() {
+    let t = fixture_root();
+    let lib = library();
+    let d = outbox(&t, "home", &gh());
+    let (mut closed, mut open) = (0, 0);
+    for i in issue(&d, "yuvalrakavy/Store#") {
+        let node = real_node(&lib, i["id"].as_str().unwrap()).expect("a recorded node");
+        match node["closedAt"].as_str() {
+            Some(at) => {
+                closed += 1;
+                let whole = format!("{}.000Z", &at[..19]);
+                assert_eq!(i["closed_at"], json!(whole), "{}", i["alias"]);
+            }
+            None => {
+                open += 1;
+                assert_eq!(i["closed_at"], Value::Null, "{}", i["alias"]);
+            }
+        }
+    }
+    assert!(closed > 0 && open > 0, "{closed} closed, {open} open");
+}
