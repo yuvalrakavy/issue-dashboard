@@ -75,6 +75,9 @@ pub enum Action {
     SettleOrphan,
     /// Close an issue on GitHub (10.0's exception, 10.10).
     Close,
+    /// Stop showing a closed item: it leaves every list of the page, while the ledger and the
+    /// metrics keep it (5.8). It holds for the close it names (`value.closed_at`) only.
+    DismissClosed,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -112,6 +115,9 @@ pub struct DecisionValue {
     pub routing: Option<Routing>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub close: Option<CloseValue>,
+    /// The close a `dismiss_closed` dismisses: the item's `closed_at` as the page showed it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub closed_at: Option<String>,
 }
 
 /// Why an issue is closed: GitHub's `state_reason`, as `gh issue close --reason` takes it.

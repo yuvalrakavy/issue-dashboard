@@ -45,7 +45,8 @@
         "cancel_launch",
         "release_reservation",
         "settle_orphan",
-        "close"
+        "close",
+        "dismiss_closed"
       ]
     },
     "target": {
@@ -100,6 +101,10 @@
         },
         "routing": {
           "$ref": "common.schema.json#/$defs/routing"
+        },
+        "closed_at": {
+          "description": "The close a dismiss_closed dismisses: the item's closed_at as the page showed it (5.8).",
+          "$ref": "common.schema.json#/$defs/timestamp"
         },
         "close": {
           "description": "A close (10.10): the reason, the issue a duplicate duplicates, and the comment posted with it (empty: none).",
@@ -326,6 +331,32 @@
           "value": {
             "required": [
               "close"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "dismiss_closed"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "value"
+        ],
+        "properties": {
+          "target": {
+            "required": [
+              "item"
+            ]
+          },
+          "value": {
+            "required": [
+              "closed_at"
             ]
           }
         }

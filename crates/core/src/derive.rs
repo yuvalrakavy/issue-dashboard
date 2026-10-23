@@ -33,6 +33,9 @@ use crate::{Error, Result};
 /// `sync_interval_minutes` when the project config does not set it (7.2).
 pub const DEFAULT_SYNC_MINUTES: u32 = 5;
 
+/// `recently_closed_days` when the project config does not set it (5.8).
+pub const DEFAULT_RECENTLY_CLOSED_DAYS: u32 = 7;
+
 /// Acks are carried for this long after the cycle that consumed the decision (10.6).
 pub const ACK_DAYS: i64 = 30;
 
@@ -118,6 +121,8 @@ struct Context<'a> {
     taken_at: DateTime<Utc>,
     stale: bool,
     closes: &'a BTreeMap<String, Value>,
+    /// Each dismissed item's dismissed close and when it was dismissed (decision::dismissals).
+    dismissals: &'a BTreeMap<String, (String, String)>,
 }
 
 impl Context<'_> {
@@ -179,11 +184,17 @@ impl Context<'_> {
         let modifiers = &canon.modifiers;
         let has = |m: &str| modifiers.iter().any(|x| x == m);
 
-        let status = if o.item == crate::observe::ItemKind::PullRequest {
+        // Not open comes first: a closed item is done, whatever its labels, blockers or
+        // sessions say.
+        let status = if state == "merged" {
+            "merged"
+        } else if state != "open" {
+            "closed"
+        } else if o.item == crate::observe::ItemKind::PullRequest {
             pr_status(c.get("pull_request").unwrap_or(&Value::Null))
         } else if has("umbrella") {
             "umbrella"
-        } else if outside && state == "open" && !self.answered_inside(c, &labels) {
+        } else if outside && !self.answered_inside(c, &labels) {
             "new"
         } else if type_.is_none() || value.is_none() || (self.translation.declares_areas() && areas.is_empty()) {
             "untriaged"
@@ -231,6 +242,7 @@ impl Context<'_> {
                 Some(at) => json!(whole_seconds(at)?),
                 None => Value::Null,
             },
+            "state_reason": c.get("state_reason").cloned().unwrap_or(Value::Null),
             "idle_days": idle_days,
             "limit_breached": limit_breached,
             "links": {
@@ -250,11 +262,25 @@ impl Context<'_> {
             "body_truncated": c.get("body_truncated").and_then(Value::as_bool).unwrap_or(false),
             "stale": self.stale,
             "dashboard_close": self.closes.get(id).cloned().unwrap_or(Value::Null),
+            "dismissed_at": self.dismissed_at(id, &state, c)?,
         }))
     }
 
     /// Whether an inside author has acted on an outside issue (4.3): commented, or (as far as
     /// the read shows) labelled it.
+    /// When the item was dismissed, while it is still closed by the close that was dismissed;
+    /// null otherwise, so a reopened item shows again and a later close is shown anew.
+    fn dismissed_at(&self, id: &str, state: &str, c: &Value) -> Result<Value> {
+        let Some((closed, at)) = self.dismissals.get(id) else {
+            return Ok(Value::Null);
+        };
+        let now = c.get("closed_at").and_then(Value::as_str);
+        if state == "open" || now.map(parse_time).transpose()? != Some(parse_time(closed)?) {
+            return Ok(Value::Null);
+        }
+        Ok(json!(whole_seconds(at)?))
+    }
+
     fn answered_inside(&self, c: &Value, labels: &[String]) -> bool {
         let commented = c
             .get("comments")
@@ -505,8 +531,22 @@ fn attach_sessions(conn: &Connection, config: &ConfigSet, project: &str, issues:
             current.insert(repo, o.alias);
         }
     }
+    // The tracked pull requests that close each issue, by alias (5.8's Recently closed).
+    let mut closed_by: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+    for (alias, t) in &tracked {
+        for issue in &t.closes {
+            closed_by.entry(issue.as_str()).or_default().push(alias.as_str());
+        }
+    }
+    let closed_by: BTreeMap<String, Value> = closed_by.into_iter().map(|(k, v)| (k.to_string(), json!(v))).collect();
     let mut matched = sessions::matches(conn, config, project, &current, &tracked)?;
     for i in issues.iter_mut() {
+        if i["kind"] == "issue" {
+            i["closed_by"] = closed_by
+                .get(i["id"].as_str().unwrap_or_default())
+                .cloned()
+                .unwrap_or(json!([]));
+        }
         let shown = matched.remove(i["id"].as_str().unwrap_or_default()).unwrap_or_default();
         if !shown.is_empty() && i["kind"] == "issue" && matches!(i["status"].as_str(), Some("ready" | "blocked")) {
             i["status"] = json!("in-progress");
@@ -533,6 +573,7 @@ pub fn derive(
     let overrides: BTreeMap<String, (DecisionValue, Option<String>)> = decision::overrides(conn, project)?;
     let window = taken_at - Duration::days(history_days as i64);
     let closes = write::standing_closes(conn, project)?;
+    let dismissals = decision::dismissals(conn, project)?;
 
     let mut repos = Vec::new();
     let mut issues = Vec::new();
@@ -554,6 +595,7 @@ pub fn derive(
             taken_at,
             stale,
             closes: &closes,
+            dismissals: &dismissals,
         };
         for id in members.all() {
             let Some(o) = observed(conn, &id)? else { continue };
@@ -595,6 +637,7 @@ pub fn derive(
         "default_view": p.default_view,
         "groups": groups(config, project)?,
         "sync_interval_minutes": sync_minutes,
+        "recently_closed_days": p.recently_closed_days.unwrap_or(DEFAULT_RECENTLY_CLOSED_DAYS),
         // The page tells a viewer whose actions would all be refused (10.5): none is set yet.
         "owner_id": Some(p.owner_id.as_str()).filter(|o| !o.is_empty() && *o != PENDING_OWNER),
     });

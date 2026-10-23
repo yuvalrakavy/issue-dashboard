@@ -196,7 +196,9 @@
         "waiting-on-author",
         "checks-running",
         "approved",
-        "needs-review"
+        "needs-review",
+        "closed",
+        "merged"
       ]
     },
     "created_at": {
@@ -421,6 +423,36 @@
               "type": "boolean"
             }
           }
+        }
+      ]
+    },
+    "state_reason": {
+      "description": "Why GitHub says an issue was closed (completed, not_planned, duplicate, reopened); null for a pull request or when GitHub gives none.",
+      "anyOf": [
+        {
+          "type": "string",
+          "minLength": 1
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "closed_by": {
+      "description": "The tracked pull requests whose closing references name this issue, by alias (5.8); issues only, empty when none.",
+      "type": "array",
+      "items": {
+        "$ref": "common.schema.json#/$defs/alias"
+      }
+    },
+    "dismissed_at": {
+      "description": "When the owner dismissed this closed item (dismiss_closed, 5.8), while it is still closed by the close that was dismissed; null otherwise. A dismissed item leaves every list of the page, but Trends still counts it.",
+      "anyOf": [
+        {
+          "$ref": "common.schema.json#/$defs/timestamp"
+        },
+        {
+          "type": "null"
         }
       ]
     },

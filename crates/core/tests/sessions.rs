@@ -985,3 +985,45 @@ fn ready_issue_in(d: &Value, repo: &str) -> (String, u64) {
     let n = alias.rsplit('#').next().unwrap().parse().unwrap();
     (alias, n)
 }
+
+#[test]
+fn a_closed_issue_with_its_fix_session_is_closed_not_in_progress() {
+    // Store#403's shape on the live page: closed as completed while the session that fixed it
+    // is still listed. The session stays shown; the status is the issue's own.
+    let t = root();
+    let (_, base) = run(&t, None, 0);
+    let (alias, n) = ready_store_issue(&base);
+    let id = by_alias(&base, &alias)["id"].as_str().unwrap().to_string();
+    let gh = gh_with(move |req, v| {
+        let mut v = v?;
+        if req.name == "nodes"
+            && let Some(nodes) = v["data"]["nodes"].as_array_mut()
+        {
+            for x in nodes.iter_mut().filter(|x| x["id"] == id.as_str()) {
+                x["state"] = json!("CLOSED");
+                x["stateReason"] = json!("COMPLETED");
+                x["closedAt"] = json!(at(4).to_rfc3339());
+                x["updatedAt"] = json!(at(4).to_rfc3339());
+            }
+        }
+        Ok(v)
+    });
+    let sessions = list(20, vec![row("fix", &format!("Fix gh #{n}: something"), STORE_CHECKOUT)]);
+    // A full read, so the closed node is read by id.
+    let r = cycle::cycle_full(
+        &t.root,
+        &gh,
+        None,
+        "home",
+        &Pages::default(),
+        Some(&sessions),
+        &move || at(24 * 60 + 5),
+        PAGE,
+    )
+    .unwrap();
+    let d: Value = serde_json::from_str(&fs::read_to_string(&r.outbox).unwrap()).unwrap();
+    let x = by_alias(&d, &alias);
+    assert_eq!(x["state"], "closed", "{x}");
+    assert_eq!(x["status"], "closed", "{x}");
+    assert_eq!(shown(&d, &alias).len(), 1, "the session stays shown: {x}");
+}

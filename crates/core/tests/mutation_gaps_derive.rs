@@ -272,7 +272,7 @@ fn an_issues_status_follows_the_chain_of_the_spec() {
         ),
         (
             Sc::new().labels(&[]).author("NONE", "stranger").closed(),
-            "untriaged",
+            "closed",
             true,
         ),
         // Inside authors: by association, or listed as a maintainer.
@@ -291,8 +291,14 @@ fn an_issues_status_follows_the_chain_of_the_spec() {
             "untriaged",
             false,
         ),
-        // Status does not look at the state: a closed item that is ready is ready.
-        (Sc::new().closed(), "ready", false),
+        // A closed issue is closed, whatever else would hold (the first of the chain).
+        (Sc::new().closed(), "closed", false),
+        (Sc::new().plus("umbrella").closed(), "closed", false),
+        (Sc::new().plus("needs-decision").closed(), "closed", false),
+        (Sc::new().plus("InProgress").closed(), "closed", false),
+        (Sc::new().blocked("OPEN").closed(), "closed", false),
+        (Sc::new().labels(&["bug", "kernel"]).closed(), "closed", false),
+        (Sc::new().labels(&[]).author("OWNER", "x").closed(), "closed", false),
     ];
     let list: Vec<(String, Sc)> = ids
         .iter()
@@ -1382,4 +1388,212 @@ fn the_pages_file_accepts_no_collection_it_does_not_know_and_needs_none_it_has()
     let some: Pages = serde_json::from_value(json!({"views": [], "launches": []})).unwrap();
     assert_eq!(some, Pages::default());
     assert!(serde_json::from_value::<Pages>(json!({"decisions": [], "comments": []})).is_err());
+}
+
+#[test]
+fn a_merged_or_closed_pull_request_is_merged_or_closed_not_waiting_for_review() {
+    for (state, status) in [("MERGED", "merged"), ("CLOSED", "closed")] {
+        let t = fixture_root();
+        let gh = gh_with(move |req, v| {
+            let mut v = v?;
+            if req.name == "nodes"
+                && let Some(nodes) = v["data"]["nodes"].as_array_mut()
+            {
+                for n in nodes.iter_mut().filter(|n| n["isDraft"].is_boolean()) {
+                    // Every other field would make it waiting on you (outside, needs review).
+                    n["isDraft"] = json!(false);
+                    n["mergeable"] = json!("MERGEABLE");
+                    n["reviewDecision"] = Value::Null;
+                    n["state"] = json!(state);
+                    n["closedAt"] = json!(at(-60).to_rfc3339());
+                    n["authorAssociation"] = json!("NONE");
+                    n["author"] = json!({"login": "stranger"});
+                }
+            }
+            Ok(v)
+        });
+        let d = doc(&run_with(&t, &gh, &no_pages(), 0));
+        let prs: Vec<&Value> = d["issues"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|i| i["kind"] == "pull_request")
+            .collect();
+        assert!(prs.len() >= 3, "{}", prs.len());
+        for pr in &prs {
+            assert_eq!(pr["status"], status, "{state}: {pr}");
+        }
+        summary_matches_the_issues(&d);
+    }
+}
+
+fn dismiss(id: &str, author: &str, item: &str, closed_at: &str) -> Decision {
+    decision(
+        id,
+        author,
+        Action::DismissClosed,
+        Target {
+            item: Some(item.into()),
+            ..Default::default()
+        },
+        Some(DecisionValue {
+            closed_at: Some(closed_at.into()),
+            ..Default::default()
+        }),
+    )
+}
+
+fn full_with(t: &TempRoot, gh: &Replay, p: &Pages, minutes: i64) -> Value {
+    doc(&cycle::cycle_full(&t.root, gh, None, "home", p, None, &move || at(minutes), PAGE).unwrap())
+}
+
+#[test]
+fn a_dismissed_close_sets_dismissed_at_and_undo_clears_it() {
+    let ids = open_ids(STORE);
+    let t = fixture_root();
+    let g = gh_scenarios(vec![(ids[0].clone(), Sc::new().closed_minutes_ago(60, "CLOSED"))]);
+    let d = doc(&run_with(&t, &g, &no_pages(), 0));
+    let closed_at = issue(&d, &ids[0])["closed_at"].as_str().unwrap().to_string();
+    assert_eq!(issue(&d, &ids[0])["dismissed_at"], Value::Null);
+    let d = doc(&run_with(
+        &t,
+        &g,
+        &pages(&[dismiss("D_dis", OWNER, &ids[0], &closed_at)]),
+        10,
+    ));
+    assert_eq!(ack(&d, "D_dis")["result"], "applied", "{}", ack(&d, "D_dis"));
+    assert_eq!(issue(&d, &ids[0])["dismissed_at"], "2026-10-23T08:00:00.000Z");
+    // Still in the outbox, so Trends counts it.
+    assert_eq!(issue(&d, &ids[0])["state"], "closed");
+    let d = doc(&run_with(&t, &g, &pages(&[undo("D_undis", "D_dis")]), 20));
+    assert_eq!(ack(&d, "D_dis")["result"], "cancelled");
+    assert_eq!(issue(&d, &ids[0])["dismissed_at"], Value::Null);
+}
+
+#[test]
+fn a_dismiss_of_an_open_item_another_close_or_by_a_stranger_is_refused() {
+    let ids = open_ids(STORE);
+    let t = fixture_root();
+    let g = gh_scenarios(vec![(ids[0].clone(), Sc::new().closed_minutes_ago(60, "CLOSED"))]);
+    let d = doc(&run_with(&t, &g, &no_pages(), 0));
+    let closed_at = issue(&d, &ids[0])["closed_at"].as_str().unwrap().to_string();
+    let d = doc(&run_with(
+        &t,
+        &g,
+        &pages(&[
+            dismiss("D_open", OWNER, &ids[1], &closed_at),
+            dismiss("D_other", OWNER, &ids[0], "2026-01-01T00:00:00Z"),
+            dismiss("D_stranger", "user_stranger", &ids[0], &closed_at),
+        ]),
+        10,
+    ));
+    let refused = |id: &str, part: &str| {
+        let a = ack(&d, id);
+        assert_eq!(a["result"], "refused", "{id}: {a}");
+        assert!(a["reason"].as_str().unwrap().contains(part), "{id}: {a}");
+    };
+    refused("D_open", "only a closed item can be dismissed");
+    refused("D_other", "the close the page showed is gone");
+    refused("D_stranger", "is not the project's owner_id");
+    assert_eq!(issue(&d, &ids[0])["dismissed_at"], Value::Null);
+    assert_eq!(issue(&d, &ids[1])["dismissed_at"], Value::Null);
+}
+
+#[test]
+fn a_dismissal_lapses_when_the_item_is_reopened_and_does_not_hide_a_later_close() {
+    let ids = open_ids(STORE);
+    let t = fixture_root();
+    let closed = gh_scenarios(vec![(ids[0].clone(), Sc::new().closed_minutes_ago(60, "CLOSED"))]);
+    let d = doc(&run_with(&t, &closed, &no_pages(), 0));
+    let closed_at = issue(&d, &ids[0])["closed_at"].as_str().unwrap().to_string();
+    let d = doc(&run_with(
+        &t,
+        &closed,
+        &pages(&[dismiss("D_dis", OWNER, &ids[0], &closed_at)]),
+        10,
+    ));
+    assert!(issue(&d, &ids[0])["dismissed_at"].is_string());
+    // Reopened (GitHub keeps the old closedAt on a reopened issue); the daily full read sees it.
+    const DAY: i64 = 24 * 60;
+    let reopened = gh_scenarios(vec![(
+        ids[0].clone(),
+        Sc::new()
+            .closed_minutes_ago(60, "OPEN")
+            .raw("updatedAt", json!(at(DAY + 15).to_rfc3339())),
+    )]);
+    let d = full_with(&t, &reopened, &no_pages(), DAY + 20);
+    assert_eq!(issue(&d, &ids[0])["state"], "open");
+    assert_eq!(issue(&d, &ids[0])["dismissed_at"], Value::Null);
+    // Closed again, later: a new close the owner has not dismissed.
+    let again = gh_scenarios(vec![(
+        ids[0].clone(),
+        Sc::new()
+            .closed_minutes_ago(-(2 * DAY + 25), "CLOSED")
+            .raw("updatedAt", json!(at(2 * DAY + 25).to_rfc3339())),
+    )]);
+    let d = full_with(&t, &again, &no_pages(), 2 * DAY + 30);
+    assert_eq!(issue(&d, &ids[0])["state"], "closed");
+    assert_ne!(issue(&d, &ids[0])["closed_at"], closed_at.as_str());
+    assert_eq!(issue(&d, &ids[0])["dismissed_at"], Value::Null);
+    // Closed again by the very close that was dismissed: the dismissal holds again.
+    let closed = gh_scenarios(vec![(
+        ids[0].clone(),
+        Sc::new()
+            .closed_minutes_ago(60, "CLOSED")
+            .raw("updatedAt", json!(at(3 * DAY + 35).to_rfc3339())),
+    )]);
+    let d = full_with(&t, &closed, &no_pages(), 3 * DAY + 40);
+    assert!(issue(&d, &ids[0])["dismissed_at"].is_string(), "{}", issue(&d, &ids[0]));
+}
+
+#[test]
+fn a_closed_issue_carries_its_close_reason_and_the_tracked_prs_that_close_it() {
+    let ids = open_ids(STORE);
+    let t = fixture_root();
+    let g = gh_scenarios(vec![(
+        ids[0].clone(),
+        Sc::new()
+            .closed_minutes_ago(60, "CLOSED")
+            .raw("stateReason", json!("NOT_PLANNED")),
+    )]);
+    let d = doc(&run_with(&t, &g, &no_pages(), 0));
+    assert_eq!(issue(&d, &ids[0])["state_reason"], "not_planned");
+    for i in d["issues"].as_array().unwrap() {
+        if i["kind"] == "issue" {
+            assert!(i["closed_by"].is_array(), "{i}");
+        } else {
+            assert!(i.get("closed_by").is_none(), "{i}");
+            assert_eq!(i["state_reason"], Value::Null, "{i}");
+        }
+    }
+    // Every alias in closed_by is a tracked pull request of the outbox.
+    let prs: Vec<&str> = d["issues"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|i| i["kind"] == "pull_request")
+        .map(|i| i["alias"].as_str().unwrap())
+        .collect();
+    let named: Vec<&str> = d["issues"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|i| i["closed_by"].as_array().into_iter().flatten())
+        .map(|a| a.as_str().unwrap())
+        .collect();
+    assert!(named.iter().all(|a| prs.contains(a)), "{named:?} vs {prs:?}");
+}
+
+#[test]
+fn the_recently_closed_window_is_carried_into_the_meta_document() {
+    let t = fixture_root();
+    let d = doc(&run_with(&t, &gh(), &no_pages(), 0));
+    assert_eq!(d["meta"]["recently_closed_days"], 7);
+    let p = t.path().join("projects/home.toml");
+    let text = std::fs::read_to_string(&p)
+        .unwrap()
+        .replace("history_days = 30\n", "history_days = 30\nrecently_closed_days = 3\n");
+    std::fs::write(&p, text).unwrap();
+    let d = doc(&run_with(&t, &gh(), &no_pages(), 1));
+    assert_eq!(d["meta"]["recently_closed_days"], 3);
 }
