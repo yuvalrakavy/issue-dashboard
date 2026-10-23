@@ -15,6 +15,7 @@ use issue_dashboard_core::config::ConfigSet;
 use issue_dashboard_core::cycle;
 use issue_dashboard_core::docs::LaunchRequest;
 use issue_dashboard_core::github::{GhCli, GitHub, Recorder, Replay};
+use issue_dashboard_core::write::{GhIssues, IssueWriter};
 use issue_dashboard_core::ingest::{self, Pages};
 use issue_dashboard_core::launch::{self, EndState, Via};
 use issue_dashboard_core::outcome::{self, GateRuns, Outcome, RecordedBy};
@@ -485,7 +486,17 @@ fn run(cli: Cli) -> anyhow::Result<Value> {
                 None => Pages::default(),
             };
             let gh = github()?;
-            serde_json::to_value(cycle::cycle(&root, gh.as_ref(), &project, &pages, &now, page_size()?)?)?
+            // A replayed GitHub is never written to: a close then stays pending.
+            let writer = std::env::var(ENV_REPLAY).is_err().then_some(&GhIssues as &dyn IssueWriter);
+            serde_json::to_value(cycle::cycle_with_writes(
+                &root,
+                gh.as_ref(),
+                writer,
+                &project,
+                &pages,
+                &now,
+                page_size()?,
+            )?)?
         }
         Command::Snapshot { project } => {
             let gh = github()?;
