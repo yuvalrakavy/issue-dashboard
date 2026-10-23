@@ -1270,10 +1270,15 @@ value can be recomputed for any point in the log.
 
 **Backup.** Each mutating command, before it releases the root lock, appends the events it
 committed to monthly JSON Lines files (`<root>/ledger/2026-10.jsonl`) and fsyncs them, then
-advances an export cursor stored in the ledger. On start, any command first exports events
-past the cursor, so a crash between commit and export loses nothing. The files only grow and
-are committed to git; `issue-dashboard rebuild` recreates the SQLite file from them. When the
-two disagree, SQLite is the authority and the files are re-exported from it.
+advances an export cursor stored in the ledger. Each line holds one event with its sequence
+number and a checksum of the line. On start, any command first checks the file's tail:
+a final line that does not parse or fails its checksum (a torn write) is cut off, events whose
+sequence number is already in the file are not appended again, and events past the cursor are
+exported. So a crash between the append and the cursor update neither loses nor duplicates an
+event. The files are committed to git; `issue-dashboard rebuild` recreates the SQLite file from
+them, verifying every checksum and refusing, with the line number, on a corrupt line in the
+middle of a file. When the two disagree, SQLite is the authority and the files are re-exported
+from it.
 
 **Identity.** Repos, issues and pull requests are stored by **GitHub's permanent node ids**.
 Each observation records the current `owner/repo#N` as an alias, so a renamed repo or a
@@ -1284,17 +1289,21 @@ recorded as `item_gone`, which removes it from every derived view; its events st
 ### 10.3 Events
 
 Every event has a **sequence number**, a **time**, a **kind**, a **subject** (the node id,
-launch id or decision id it concerns), and an **identity**: a hash of the kind, the subject
-and the fields that make this occurrence distinct. Recording an event whose identity exists is
-a no-op; that is what makes a repeated command safe. Different kinds, and different
-transitions of one subject, always have different identities.
+launch id or decision id it concerns), and an **identity**: a hash, over a canonical JSON
+serialisation (sorted keys, no whitespace), of the kind, the subject, the **sequence number of
+the subject's previous event of that kind** (0 for the first), and the fields that make this
+occurrence distinct. Recording an event whose identity exists is a no-op; that is what makes a
+repeated command safe. Because the predecessor is part of it, a value that returns to an
+earlier state (a configuration A → B → A, a label removed and put back) is a new occurrence and
+is recorded; a retry of the same command against the same predecessor is not.
 
 | Kind | Identity is the hash of | Recorded when |
 |---|---|---|
 | `config` | the configuration's content | a command sees a configuration it has not recorded |
 | `observed` | node id + a hash of the observed content (labels, state, assignees, links, the timeline event ids read) | a read returns an item whose content differs from its last observation; **the update time is not part of it**, so a change that does not move `updatedAt` is still recorded |
 | `item_gone` | node id + the read that confirmed it | 10.2 |
-| `decided` | the page document's id | ingest reads a page decision; it carries the author's user id (10.6) |
+| `decided` | the page document's id | ingest reads a page decision; it carries the author's user id (10.5) |
+| `view_saved`, `request` | the page document's id | ingest reads a saved view or a request (a brief preview, on-demand triage) |
 | `suggested` | triage run id + item + decision kind | the triage session records a suggestion |
 | `launch` | launch id + transition (`requested`, `reserved`, `queued`, `started`, `ended`, `released`, `unconfirmed`, `orphan`) + token | 10.7; only the transitions in 10.7's table are legal, and a command refuses any other |
 | `outcome` | launch id | a session records its outcome |
@@ -1318,9 +1327,19 @@ process id, so a stuck holder is visible rather than a silent hang.
 1. **ingest** (under the lock): the page documents the sync job fetched become `decided` and
    `launch` events, and their acknowledgements are prepared (10.6);
 2. **observe**: the snapshot reads GitHub (chapter 2) without the lock, then records
-   `observed` and `item_gone` events under it;
-3. **derive** (under the lock): compute the project's views and write the outbox with the next
-   sequence number (10.6).
+   `observed` and `item_gone` events under it. **A stale fetch never overwrites a fresher
+   one:** when two projects' cycles read the same repo, each observation carries the item's
+   GitHub `updatedAt` (and the read time), and an observation older than the item's latest
+   recorded one is discarded at commit, not appended;
+3. **derive**: take the next outbox sequence number under the lock, then compute the views
+   and write the outbox **outside** it, from one SQLite read transaction (a consistent
+   snapshot), so derivation never holds the lock.
+
+**What runs under the lock is small and bounded:** recording events and exporting them
+(10.2). Every lifecycle command (`reserve`, `launch-started`, `launch-ended`, `release`) is
+idempotent, and the dispatcher retries one that timed out on the lock, up to five times with
+backoff; if it still fails, the dispatcher posts the failure in the launch thread and the
+dashboard shows the launch as needing attention, so a held slot is never silent.
 
 Phase 2 inserts its reconcile, plan and apply steps between observe and derive (10.9).
 
@@ -1360,8 +1379,19 @@ so it is published as an **immutable generation** and switched on by one pinned 
 
 The page reads only the generation `meta` names, so it never sees half an outbox. Two
 overlapping syncs cannot both switch: the second's pinned write in step 4 fails because the
-first changed `meta`, and an older outbox is stopped at step 2 or step 4. A sync that dies
-after step 3 leaves an unused generation, which the next successful sync deletes.
+first changed `meta`, and an older outbox is stopped at step 2 or step 4.
+
+**Cleanup keeps the previous generation.** Step 5 deletes only generations older than the one
+that was active before the switch, so a page that read `meta` just before the switch can still
+finish reading. A page that finds a document missing re-reads `meta` and starts over. A
+generation that never became active (a sync that died after step 3) is deleted only once it is
+more than one hour old, so a publisher still uploading is never cut off. Only one sync job runs
+per project (it is one scheduled task), so overlapping publishers arise only from a slow run
+meeting the next one, which the pinned switch already settles.
+
+**Acknowledgements are cumulative.** Every generation carries the acks of every decision
+consumed in the last 30 days, not only the last cycle's, so a page that missed a generation
+still sees each decision acknowledged.
 
 Launch status shown on the page lives in a tracker-owned `launch_status` collection; the
 page's own `launches` documents are requests and are never changed after they are written.
@@ -1373,14 +1403,28 @@ A launch moves through these transitions, each a `launch` event, and only these:
 | From | To | By |
 |---|---|---|
 | — | `requested` | ingest of the page's launch document |
+| — | `requested` | `reserve --request <file>`, which records the launch document the dispatcher just read (its id is the identity, so the later ingest of the same document is a no-op) |
 | `requested` | `reserved` (with a token) or `queued` | `reserve` |
 | `queued` | `reserved` | `reserve`, when a slot frees |
 | `reserved` | `started` (with the session id) | `launch-started` |
-| `reserved` | `unconfirmed` | the dispatcher, on restart or on finding a reservation older than 15 minutes with no matching session |
-| `unconfirmed` | `started` or `released` | the dispatcher, after checking its session list |
+| `reserved` | `unconfirmed` | the owning dispatcher, on restart, when its start call never returned |
+| `reserved`, `unconfirmed` | `released` | the owning dispatcher, when its session list shows no session with the token and the reservation is older than 15 minutes |
+| `unconfirmed` | `started` | the owning dispatcher, when its session list shows the session |
 | `started` | `ended` (landed, stopped or failed) | `launch-ended` |
 | `ended` | `released` | the same command, freeing the slot |
-| any | `orphan` | `launch-started` with a token that is not `reserved` or `unconfirmed` |
+| `requested`, `queued` | `withdrawn` | a page decision cancelling the launch |
+
+**Retries and orphans.** `launch-started` with the token and session id already recorded is
+a no-op (it returns the recorded result). Only a session reporting a token that is
+`released`, or a different session id for a `started` token, is recorded as an `orphan`
+**alongside** the launch, not as its state: the dashboard shows it in the Inbox as possible
+duplicate work, and an orphan holds a slot until you settle it.
+
+**Ownership.** A reservation records the dispatcher session that made it. Only that
+dispatcher settles it from its session list, since only it is guaranteed to see the sessions
+it started; another dispatcher leaves it alone, and the dashboard shows it as held by that
+dispatcher. A session list is used as evidence of absence only for a reservation older than
+15 minutes, well past the time a `start_session` call takes to return.
 
 **A slot is freed only by a release, never by time.** `reserve` checks, in one ledger
 transaction across all projects, that no reservation for the issue (or any member of a batch)
