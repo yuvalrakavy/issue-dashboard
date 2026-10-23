@@ -754,7 +754,7 @@ field, never its id, and a page action on it still names the same item.
 | `views` | **page** | saved views (5.6) |
 | `requests` | **page** | brief previews and on-demand triage (10.8) |
 | `acks` | tracker | which page decisions each cycle consumed (10.6) |
-| `launches` | **page** | one per launch request; written once and never changed (a refused send is a second document, `not_sent`, naming the first) |
+| `launches` | **page** | one per launch request; written once and never changed (a refused send is a second document, `not_sent`, naming the first; each launch thread is a thread record of its own) |
 | `launch_status` | tracker | each launch's current transition (10.7) |
 
 "Tracker" in this table means the tracker's documents as written by the sync job (7.2),
@@ -784,10 +784,11 @@ The comment carries nothing but the id: the dispatcher reads the request from th
 so nothing typed into the thread can change what is launched.
 
 **One thread, not one per launch.** An artifact has a limit on its threads and replies, so
-launches reply into a single launch thread whose id the page keeps in `launches/_thread`
-(the page owns `launches`, see 5.3; the comments
+launches reply into a single launch thread whose id the page keeps in a thread record in
+`launches` (the page owns `launches`, see 5.3; the comments
 capability does not hand a thread id back on a later visit). When that thread is refused
-for being full, the page starts a new one and records its id. The dispatcher answers each
+for being full, the page starts a new one and writes a new thread record; the newest record is
+the current thread, so no record is ever rewritten. The dispatcher answers each
 launch in the thread with what it started. `sendToClaude` works for the
 artifact's editors only, so a person the page is shared with read-only cannot launch.
 
@@ -1666,7 +1667,7 @@ them rather than refusing.
   requests}`; an unknown collection is refused): launches first, then decisions, then the
   cancels, then views and requests. A document that fails its schema or the owner check is
   skipped and reported; one bad document never stops the rest. `not_sent` launch records and
-  the `_thread` document are not ingested in phase 1. Views and requests become `view_saved` and
+  thread records are not ingested in phase 1. Views and requests become `view_saved` and
   `request` events, one per document id.
 - *Cancels* are applied by `apply_cancels`, run on every ingest and after `reserve --request`,
   which withdraws each requested or queued launch an effective `cancel_launch` names, whichever
@@ -1735,13 +1736,16 @@ them rather than refusing.
   read (`gh issue view`): already closed records `already_closed` and posts no comment;
   otherwise `gh issue close <n> -R <repo> --reason completed|"not planned"|duplicate`
   (`--duplicate-of N` for a duplicate) with `--comment`. A failure is recorded and not retried:
-  the ack says refused with GitHub's error, and the owner can press Close again. **A crash** leaves
+  the ack says refused with GitHub's error, and the owner can press Close again. A read that
+  follows a write (the `closed_at` after the close, the precondition read before a reopen) is
+  read again after 1, 2 and 4 s while it does not show what the write did, since GitHub's read
+  can lag its own write: without it a lagging read records no `closed_at`, and every Undo of
+  that close is refused. **A crash** leaves
   an intent with no result; the next cycle's step reconciles it first from a fresh read: closed
   at or after the intent's time is `closed` (reconciled); still open with a comment of the
   intended text posted after the intent is a close re-sent without the comment; otherwise the
-  close is applied as new. **Undo.** A close's effect is dated at its intent, so an undo recorded
-  before the intent cancels it (nothing is written) and one recorded after reverses it: a
-  reopen, applied only if a fresh read shows the issue still closed at the close's recorded
+  close is applied as new. **Undo.** An undo cancels its close; a cancelled close with no
+  intent writes nothing, and one already closed on GitHub is reversed by a reopen, applied only if a fresh read shows the issue still closed at the close's recorded
   `closed_at` with no comment since, and only for a `closed` result (an `already_closed` one was
   someone else's close, so its undo is refused). Each issue document carries `dashboard_close`
   (the decision, its reason and time, and `undo_allowed` from the latest observation), and
@@ -1750,6 +1754,21 @@ them rather than refusing.
   conditional close); a crash after `gh` posted the comment and before it closed is caught by
   the comment-text match, but a person posting the same text in that window would make it
   skip the comment. The per-run cap of 1.7 does not apply: each close is one explicit decision.
+- *Corrections from slice 3's gate (round 1).* A refused send's `not_sent` outranks the
+  tracker's `requested` (every ingested launch is `requested`, heard or not); only a later
+  transition supersedes it. Each launch thread gets its own thread record (`T_…`, written once;
+  the first slice's rewritten `_thread` still reads, as the oldest). The page reads the current
+  thread before it writes the launch document, so a failed read records nothing, and a thread
+  record that fails after a send that succeeded is reported, not turned into `not_sent`. A
+  decision older than the ack window (`ACK_DAYS`, 30 days before the generation was taken) with
+  no ack is settled, not pending: its ack has aged out. A generation announced while the page
+  loads another is loaded after it. Page ids carry 8 random base-36 characters (there is no
+  create-only write, so the randomness keeps two writes in one second apart).
+- **Open (for the owner):** found by the gate and left for after landing: an upload abandoned
+  for over an hour and resumed after a cleanup leaves documents no marker names, which no later
+  cleanup finds; the page's own collections (`decisions`, `launches`, `views`) are read to
+  1000 documents with no partial notice; a group names repos by their configured name, so a
+  repo renamed on GitHub drops out of its group's scope.
 - **Open (for the owner):** "new" is approximated as open, with no comment by an inside author
   and no labels; a closed or merged pull request still gets a pull-request status (e.g.
   `needs-review`); `commits`, `rank` and `score` are empty; the `flow` and history snapshot files
