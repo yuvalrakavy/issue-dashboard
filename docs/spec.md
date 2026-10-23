@@ -1,182 +1,291 @@
 # issue-dashboard — design spec
 
-Status: **draft, chapter 1 for review.** Tier T2 (a generic tool whose config format is a
-contract other repos depend on).
+Status: **draft, chapter 1 (revision 2) for review.** Tier T2: a generic tool whose
+config format is a contract that several repos and projects depend on.
 
 ## Intent
 
-One private dashboard that shows the open issues of a whole project — a project being a
-set of GitHub repos — in one consolidated, prioritised queue, with triage suggestions and
-a button that starts a fix or triage session with a fitting model, effort and brief.
+A **project** is a collection of GitHub repos (for example the Villa Rakavy home
+automation system: Store, the MQTT bridges, airzoned, logmon, tracing-init). One
+**tracker** installation serves any number of projects. For each project it shows one
+private dashboard: the open issues of every member repo in one consolidated,
+prioritised queue, with triage suggestions and a button that starts a fix or triage
+session with a fitting model, effort and brief.
 
-**Settled decisions** (with the reason each was made):
+A repo may belong to several projects (tracing-init could be in two), and a bug can
+matter differently to each. A repo can also belong to a project without being owned by
+it (an upstream like Rhai).
+
+**Settled decisions:**
 
 | Decision | Reason |
 |---|---|
-| Generic code in this repo; each project's config lives elsewhere (for the first project, the private `yuval-claude-settings` repo) | The code must name no repo. A config lists private repos and their layout, so it must not sit beside public code |
-| Rust for the deterministic core (snapshot, label sync, config check) | Matches the fleet's toolchain; the config becomes a typed struct the compiler and `deny_unknown_fields` check |
-| The AI parts (triage judgement, briefs, dispatch) are Claude sessions, not code here | They are judgement, and the session already has `gh`, git and the model routing |
-| The dashboard is a private claude.ai Artifact with a `db` | Works on a phone; the page never needs GitHub access |
-| A launch button wakes the dispatcher through `comments.sendToClaude` | Probed 2026-10-22: a press woke the watching session in seconds, no polling |
-| The triage agent suggests; only accepted suggestions are written to GitHub | Writes to a repo are outward-facing, and on a public repo they are publication |
+| Generic code in this repo; the tracker's configuration and state in a private directory (for this installation, inside the `yuval-claude-settings` repo) | The code must name no repo; the configuration lists private repos and their layout |
+| Rust for the deterministic core (snapshot, translation, write-back, config check, `explain`) | Matches the fleet's toolchain; the config becomes typed structs checked with `deny_unknown_fields` |
+| The judgement parts (triage, briefs, dispatch) are Claude sessions, not code here | They are judgement, and a session already has `gh`, git and model routing |
+| Each project's dashboard is a private claude.ai Artifact with a `db` | Works on a phone; the page never needs GitHub access |
+| A launch button wakes the dispatcher through `comments.sendToClaude` | Probed 2026-10-22: a press woke the watching session within seconds |
+| **GitHub stays fully usable on its own.** The tracker reads it, and writes back only through each repo's own label names | Anyone working only in GitHub, a person or a session, must see a true picture |
+| The canonical axes are fixed by the tool | Project-wide aggregation (flow, aging, ordering across repos) needs every repo on the same axes |
+| Priority is per project; the tracker is the record of each project's view | A bug that is minor in one project can be a blocker in another |
 
-**Non-goals:** replacing GitHub as the store of record (status always lives on the
-issues), a multi-user tool, tracking anything but GitHub issues.
+**Non-goals:** a multi-user tool; tracking anything but GitHub issues; replacing
+GitHub as the record of the issues themselves.
 
 ## Chapters
 
-1. **The config format** ← this draft
+1. **Configuration, translation and priority** ← this draft
 2. The snapshot: what is read, what is derived, the JSON it writes
 3. The dashboard page and its database
 4. Ordering and the priority suggestion
 5. Launching sessions: the dispatcher, routing, briefs, launch recipes
-6. Label sync and config check (the CLI)
+6. The CLI: label sync, config check, `explain`, plan/apply
 7. Documentation and skills
 
 ---
 
-## 1. The config format
+## 1. Configuration, translation and priority
 
-### 1.1 Shape in one example
+### 1.1 Three layers
+
+| Layer | Where | Holds | Test for belonging here |
+|---|---|---|---|
+| **Repo registry** | `<root>/repos.toml` | one entry per repo, shared by every project that includes it: label translation, local checkout path, launch recipe, docs for briefs | true of the repo whichever project includes it |
+| **Project config** | `<root>/projects/<project>.toml` | the project's name, its member repos and its view of each (filter, extra issues, read-only, write policy), time limits, routing, the dashboard link | a choice this project makes |
+| **Repo file** (optional) | `.issue-dashboard.toml` at the root of a repo you own | the repo's own areas, launch recipe and docs | changes in the same commit as the repo's code |
+
+`<root>` is the tracker directory, given by `--root` or `$ISSUE_DASHBOARD_ROOT`. It also
+holds the tracker's state (1.6) and audit log (1.7), and is kept in git.
+
+A repo file is optional because some member repos cannot carry one (an upstream you do
+not own). When a key is set both in the repo file and in the registry, **the registry
+wins**, and the config check reports the disagreement so it does not go unnoticed.
+
+### 1.2 The canonical model
+
+| Axis | Values | On one issue | Kind |
+|---|---|---|---|
+| `type` | `bug`, `todo`, `decision`, `docs` | exactly one, else *untriaged* | true of the issue anywhere |
+| `area` | the repo's own area names | at least one, if the repo declares any | true of the issue anywhere |
+| `modifier` | `needs_decision`, `in_progress`, `self_contained`, `partial`, `umbrella` | any number | true of the issue anywhere |
+| `priority` | `p0`, `p1`, `p2`, `p3` | exactly one, else *untriaged* (unless `umbrella`) | **per project**, see 1.5 |
+
+`umbrella` marks a tracker or umbrella issue (Store #71, #81): shown, never prioritised,
+ordered or aged.
+
+### 1.3 Translation
+
+A registry entry translates the repo's labels to the canonical model:
 
 ```toml
-# One file per project. Path: --config <file>, else $ISSUE_DASHBOARD_CONFIG.
-schema = 1
+# <root>/repos.toml
 
-[project]
-name = "Villa Rakavy home system"
-
-# The shared default vocabulary. Every repo inherits it, key by key.
-[vocabulary]
-type.bug       = ["bug"]
-type.todo      = ["todo"]
-type.decision  = ["design-question"]
-type.docs      = ["docs"]
-priority.p0    = ["p0"]
-priority.p1    = ["p1"]
-priority.p2    = ["p2"]
-priority.p3    = ["p3"]
+# The default names, used by any repo that does not override a value.
+[defaults.translate]
+type.bug      = ["bug"]
+type.todo     = ["todo"]
+type.decision = ["design-question"]
+type.docs     = ["docs"]
+priority.p0   = ["p0"]
+priority.p1   = ["p1"]
+priority.p2   = ["p2"]
+priority.p3   = ["p3"]
 modifier.needs_decision = ["needs-decision"]
 modifier.in_progress    = ["InProgress"]
 modifier.self_contained = ["self-contained"]
 modifier.partial        = ["partial"]
 modifier.umbrella       = ["umbrella"]
 
-[defaults]
-writes = "labels-and-comments"      # what the triage agent may write after you accept
-launch = "worktree-pr"
+[repo."yuvalrakavy/Store"]
+local_path = "~/Documents/Projects/Store"
+launch     = "store-dev-track"
+# areas, docs: from Store's own .issue-dashboard.toml
 
-[[repo]]
-name   = "yuvalrakavy/Store"
-areas  = ["kernel", "sdl", "renderer", "admin-ui", "drivers", "hometouch",
-          "dev-loop", "harness", "process", "media-port", "behaviors"]
-launch = "store-dev-track"
+[repo."yuvalrakavy/airzoned"]
+local_path     = "~/Documents/Projects/Home/airzoned"
+translate.type.todo = ["todo", "enhancement"]
 
-[[repo]]
-name = "yuvalrakavy/airzoned"
-areas = []                          # no area axis in this repo (yet)
-vocabulary.type.todo = ["todo", "enhancement"]
-
-[[repo]]
-name   = "yuvalrakavy/mqtt_ac"
-writes = "labels"                   # public repo: no agent comments
-
-[launch.store-dev-track]            # fields defined in chapter 5
-[launch.worktree-pr]
+[repo."rhaiscript/rhai"]                   # upstream: no repo file possible
+translate.type.todo  = ["enhancement", "new feature"]
+translate.type.bug   = ["bug", "regression"]
+translate.priority.p1 = ["priority"]
+translate.area.vm    = ["vm"]              # canonical area name = its repo labels
 ```
 
-### 1.2 The canonical model is the tool's; the label names are the config's
+Rules:
 
-The dashboard compares issues across repos, so every repo's labels must land on **the same
-axes**. The axes and their values are fixed by the tool, because the ordering, the derived
-status and the time limits read them:
+1. **A repo's translation merges over the defaults value by value.** Setting
+   `translate.type.todo` replaces the default list for that one value only.
+2. **Several labels may mean one value**, in either direction of reading. **When writing,
+   the tracker uses the first label in the list**, so the list order states the preferred
+   name.
+3. **A label means at most one value in a repo**, across all axes including areas. The
+   config check refuses a label listed twice, naming both places. (This is a real
+   collision: the `ways-of-working` scheme uses `docs` both as a type and as an example
+   area. In a repo that wants a docs area, the area takes another name.)
+4. **Labels match case-insensitively**, as GitHub's do (probed, see the claims table).
+5. **Areas map canonical area names to repo labels** (`translate.area.<name>`), in the same
+   list shape as every other value; a repo file's `areas` list means each name maps to the
+   label of the same name.
+6. **A label that translates to nothing is reported, never dropped.** The issue is still
+   shown, and the label appears in the repo's "untranslated labels" list.
 
-| Axis | Values | Cardinality on one issue |
-|---|---|---|
-| `type` | `bug`, `todo`, `decision`, `docs` | exactly one, else *untriaged* |
-| `priority` | `p0`, `p1`, `p2`, `p3` | exactly one, else *untriaged* (unless `umbrella`) |
-| `area` | the repo's own `areas` list | at least one, if the list is non-empty |
-| `modifier` | `needs_decision`, `in_progress`, `self_contained`, `partial`, `umbrella` | any number |
+### 1.4 A project's view of a repo
 
-The config supplies only **which label names mean each value**. A repo whose labels already
-follow the shared scheme writes nothing; a repo with its own names maps them.
+```toml
+# <root>/projects/villa-rakavy.toml
+schema = 1
+name   = "Villa Rakavy home automation"
+dashboard = "https://claude.ai/artifact/…"
 
-`umbrella` is new: it marks a tracker or umbrella issue (Store #71, #81) that is shown but
-never prioritised, ordered or aged. It replaces exempting issues by number, which would put
-issue numbers into the config.
+[[member]]
+repo = "yuvalrakavy/Store"
 
-### 1.3 Resolution rules
+[[member]]
+repo = "yuvalrakavy/mqtt_ac"
+writes = "labels"                    # public repo: no agent comments
 
-1. **A repo's vocabulary merges over the default key by key.** `vocabulary.type.todo` in a
-   repo replaces the default's `type.todo` list for that repo and nothing else.
-2. **One canonical value may have several labels** (`todo = ["todo", "enhancement"]`); an
-   issue carrying either counts as `todo`.
-3. **A label means at most one canonical value in a repo.** The config check refuses a label
-   listed under two values (`bug` under both `type.bug` and `type.todo`), naming both.
-4. **Label names match case-insensitively**, because GitHub label names are unique
-   case-insensitively. The config keeps the spelling the label sync should create.
-5. **An area name is also a label name.** Areas are not mapped; `areas` lists the labels.
-   A name may not be both an area and a vocabulary label in one repo. This is a real
-   collision, not a theoretical one: the `ways-of-working` label scheme lists `docs` both as a
-   type and as an example component. In a repo that wants a docs area, the area takes a
-   different name (`documentation`), because the type is what the cross-repo view compares.
-6. **A label that maps to nothing is reported, never dropped.** The issue is still shown;
-   the label appears in the repo's "unmapped labels" list, so a vocabulary gap is visible.
-
-### 1.4 Per-repo settings
+[[member]]
+repo      = "rhaiscript/rhai"
+filter    = "author:yuvalrakavy"     # GitHub issue-search syntax
+also      = [912, 1047]              # plus these issues, by number
+read_only = true
+```
 
 | Key | Default | Meaning |
 |---|---|---|
-| `name` | required | `owner/repo`; also the repo's identity in every issue id (`owner/repo#N`) |
-| `areas` | required | the area labels; `[]` turns the area axis off for the repo |
-| `vocabulary.*` | inherited | overrides, as in 1.3 |
-| `writes` | `[defaults].writes` | `none`, `labels`, or `labels-and-comments` |
-| `launch` | `[defaults].launch` | names a `[launch.*]` recipe (chapter 5) |
-| `docs` | `[]` | paths, relative to the repo root, a fix brief should point to (a CLAUDE.md, guides) |
-| `local_path` | none | the local checkout, for duty-0 checks against git history; without it those checks are skipped and the dashboard says so |
+| `repo` | required | must have a registry entry |
+| `filter` | none (all issues) | GitHub issue-search qualifiers, passed to `gh` unchanged, so a filter can be tested in GitHub's search box. It may not contain `repo:`, `is:open`, `is:closed`, `is:pr` or `state:`, which the tracker sets itself |
+| `also` | `[]` | issue numbers included whatever the filter says; an issue is included if it matches the filter **or** is listed here |
+| `read_only` | `false` | the tracker writes nothing to this repo |
+| `writes` | `labels-and-comments` | `labels` or `labels-and-comments`; ignored when read-only |
 
-`writes` exists because seven of the project's repos are public: a comment the agent posts
-there is publication. The config check warns when a public repo (read from GitHub, not
-declared) has `writes = "labels-and-comments"`, and requires `allow_public_comments = true`
-on that repo to silence it.
+**Read-only is also forced** when the tracker's GitHub account lacks write access to the
+repo (read from GitHub, not declared). The dashboard shows which of the two made a repo
+read-only. Read-only stops the tracker writing; it does not stop you launching a fix
+session on the repo's issues.
 
-### 1.5 Issue identity and cross-repo links
+**Public repos:** the config check warns when a public repo (read from GitHub) allows
+comments, and `allow_public_comments = true` on the member silences it.
 
-Every issue is `owner/repo#N` inside the tool, the snapshot and the database. A body or
-comment's `blocked by #N` resolves within the issue's own repo; `blocked by owner/repo#N`
-crosses repos. A link to a repo not in the config is kept and shown as external, never
-followed.
+A filter names a GitHub username, never "me", so a project means the same thing whichever
+account runs the tracker.
 
-### 1.6 The config check
+### 1.5 Priority
 
-`issue-dashboard check-config` refuses, naming the key:
+An issue's priority in a project comes from the first of these that is set:
 
-- an unknown key anywhere (`deny_unknown_fields`), so a typo cannot silently mean "default";
-- `schema` other than one the tool knows;
-- a label under two canonical values, or both an area and a vocabulary label (1.3 rules 3, 5);
-- a `launch` name with no `[launch.*]` table;
-- two `[[repo]]` entries with the same name.
+| Order | Source | Written to GitHub? |
+|---|---|---|
+| 1 | **Local override**: this project's priority for one issue, with a reason | never |
+| 2 | **Project priority**: set in this project's dashboard | yes, unless the repo is read-only |
+| 3 | **The GitHub label**, read through the repo's translation | (it is GitHub's own) |
 
-It reports, without refusing: a repo `gh` cannot read; a configured label missing from the
-repo (label sync would create it); a label present on open issues that maps to nothing; a
-public repo allowed to receive comments without `allow_public_comments`.
+**Write-back.** Setting a project priority removes the repo's old priority label from the
+issue and adds the new one, using the first translated name (1.3 rule 2). If that label
+does not exist in the repo it is created. No other label is touched.
 
-### 1.7 Open questions for the owner
+**A repo shared by several projects.** Each project keeps its own priority. The label
+written to GitHub is the **highest project priority any project gives the issue**
+(overrides excluded), so the label means "the most urgent any project needs this" and
+does not flip as projects re-prioritise. A dashboard whose own priority differs shows
+"GitHub shows p1, set by another project".
 
-1. **Is the fixed canonical model right?** The four types, four priorities and five modifiers
-   are the ones `ways-of-working` already defines. A repo cannot add an axis or a value; it can
-   only name the labels. The alternative — config-defined axes — makes ordering rules
-   configurable too, which is a much larger contract. Recommendation: fixed.
-2. **One config file per project, or one file listing several projects?** Recommendation: one
-   per project, since a dashboard is one project and the file is its whole definition.
+**The tracker writes on a change, never re-asserts.** A priority label is written only when
+a project priority changes (set, changed, or cleared so that the shared maximum moves).
+A later run never rewrites the label just because it differs from the tracker's view, so
+an edit someone makes on GitHub stands until a project changes its priority again.
+Clearing every project priority writes nothing: the label is left as it is.
+
+**Edits made on GitHub.** The next snapshot reads every priority label change.
+
+- **In a repo that belongs to one project**, a GitHub-side change is adopted as that
+  project's priority. When both sides changed between two snapshots, the more recent change
+  wins, by the timestamps of the labelled/unlabelled events in the issue's timeline, and the
+  dashboard notes which change replaced which.
+- **In a shared repo**, a GitHub-side change is adopted by no project automatically, since
+  it cannot say which project it speaks for. Each dashboard shows "GitHub changed to p2" and
+  you accept or ignore it per project.
+
+**An override does not go quietly out of date.** When the priority beneath an override
+changes, the dashboard shows both ("override p0; GitHub now p1") until you keep or drop
+the override.
+
+**A blocker raises what it blocks automatically.** An issue that blocks another inherits
+that issue's priority for ordering (chapter 4), so "a low-priority Rhai bug blocks my Store
+work" needs no override when the link exists.
+
+### 1.6 Where each project's view is recorded
+
+The tracker's state lives in `<root>/state/<project>/` and is committed to git: project
+priorities, overrides with their reasons, accepted and rejected suggestions, and the
+override log the triage agent learns from. The dashboard's database is the working copy a
+person edits; each tracker run reads its changes into the state files first, then writes
+the state back to the database. Those writes are pinned to the version the run read, so an
+edit you make during a run is not overwritten: the pinned write fails and the next run
+picks the edit up. Keeping the state in files is what lets one project's run
+see another project's priorities for the shared-repo rule in 1.5.
+
+### 1.7 Writing to GitHub safely
+
+Every write to GitHub goes through **plan, then apply**:
+
+1. A run first computes every write it would make: issue, old labels, new labels, comment
+   text, and the reason.
+2. **A dry run is forced** on a repo's first run after it joins a project, and after its
+   translation changes. The plan is shown on the dashboard and applied only once you
+   approve it.
+3. **A cap per run:** a plan with more writes than `max_writes_per_run` (default 10, set in
+   the project config) waits for your approval.
+4. **Every applied write is logged** in `<root>/audit/` (one line per write, with the run
+   id), and `issue-dashboard undo <run id>` reverses a run. Undo restores a label only where
+the issue still carries what that run wrote; where someone has changed it since, undo
+skips that issue and reports it, rather than overwriting a later edit.
+
+Before applying each label write, the tracker re-reads the issue's labels and skips the
+write if the target state is already there, so two projects writing the same fact do not
+fight.
+
+### 1.8 Issue identity and links
+
+Every issue is `owner/repo#N` in the tracker, the state files and the database. Links
+between issues come from GitHub's own sub-issue and blocked-by relationships where the
+repo has them, and otherwise from `blocked by #N` / `blocked by owner/repo#N` in an issue's
+body or comments. Whether personal repos have the native relationships is **unverified**:
+a probe before chapter 2 decides which is primary. A link to a repo in no project is kept
+and shown as external.
+
+### 1.9 The config check and `explain`
+
+`issue-dashboard check` refuses, naming the file and key:
+
+- an unknown key anywhere (`deny_unknown_fields`);
+- a `schema` the tool does not know;
+- a label under two values in one repo (1.3 rule 3);
+- a member with no registry entry, or two members naming the same repo;
+- a `filter` containing a qualifier the tracker sets itself (1.4);
+- a `launch` naming no recipe.
+
+It reports, without refusing: a repo `gh` cannot read; a translated label missing from the
+repo; labels on open issues that translate to nothing; a key set differently in the repo
+file and the registry; a public repo allowed to receive comments without
+`allow_public_comments`; a filter that matches no issue.
+
+`issue-dashboard explain <owner/repo#N> --project <name>` prints how each value was
+reached: which label translated to which type and area, whether the filter or `also`
+included the issue, which priority source won (and what the others say), and why the repo
+is or is not read-only.
 
 ## Claims checked while writing this chapter
 
 | Claim | Status | Evidence |
 |---|---|---|
-| 11 active repos; open issues only in Store (67) and airzoned (14) | confirmed | `gh issue list` per repo, 2026-10-23 |
-| airzoned uses GitHub default labels; 3 of its 14 open issues carry `bug`, 1 `enhancement` | confirmed | `gh issue list -R yuvalrakavy/airzoned` |
-| Store and logmon-mcp use the `ways-of-working` scheme; logmon-mcp's areas are `daemon`, `shim`, `protocol` | confirmed | `gh label list` per repo |
-| Seven of the 11 are public | confirmed | `gh repo list` (tracing-init, mqtt_ac, logmon-mcp, mqtt_dmx, mqtt_dali, mqtt_ynca, mqtt_mdns) |
-| GitHub label names are unique case-insensitively | confirmed | probe on this repo, 2026-10-23: creating `BUG` beside `bug`, and `probe-case` beside `Probe-Case`, were both refused as "already exists" |
+| Open issues only in Store (67) and airzoned (14) among the 11 active repos | confirmed | `gh issue list` per repo, 2026-10-23 |
+| airzoned uses GitHub default labels: 3 of 14 open issues carry `bug`, 1 `enhancement` | confirmed | `gh issue list -R yuvalrakavy/airzoned` |
+| Rhai's labels are `bug, duplicate, enhancement, help wanted, question, wontfix, new feature, priority, regression, docs, vm` | confirmed | `gh label list -R rhaiscript/rhai`, 2026-10-23 |
+| `yuvalrakavy/rhai` (the fork) has issues disabled, so Rhai is tracked as `rhaiscript/rhai` | confirmed | `gh repo list` (`hasIssuesEnabled: false`) |
+| No open Rhai issue is authored by `yuvalrakavy`, so the example filter matches nothing today and the `also` numbers are placeholders | confirmed | `gh issue list -R rhaiscript/rhai --author yuvalrakavy` returned none |
+| GitHub label names are unique case-insensitively | confirmed | probe on this repo: `BUG` beside `bug`, and `probe-case` beside `Probe-Case`, both refused as "already exists" |
+| Seven of the 11 active repos are public | confirmed | `gh repo list` |
+| GitHub has native sub-issues and blocked-by links on personal repos | **unverified** | probe before chapter 2 |
 | `sendToClaude` wakes a watching session | confirmed | probe artifact, 2026-10-22 |
