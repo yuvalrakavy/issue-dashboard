@@ -549,13 +549,62 @@ through plan-then-apply. Two settings in the project config:
 - `voice`: a path to the project's own guidance for replies (a CONTRIBUTING file, a tone
   note), handed to any session that drafts one;
 - `disclose_drafting`: whether a comment the agent drafted carries a short footer saying
-  so. **Open question for the owner.**
+  so. **Default `false`** (owner, 2026-10-23): you approve every comment, so it is yours.
+  The plan-then-apply step offers a per-comment switch to add the footer anyway, for the
+  cases where you want contributors to know.
 
 ### 4.7 Contributor labels and metrics
 
 `good_first_issue` and `help_wanted` join the modifiers (1.2), translated per repo. The
 flow metrics gain: time to first response on outside issues, time to first review on
 outside pull requests, and outside items opened and closed per week.
+
+---
+
+## 7. Launching sessions, routing and decisions
+
+Only §7.1 is written so far; the dispatcher, routing, briefs and launch recipes follow.
+
+### 7.1 The decision seam
+
+Much of triage is a small typed decision made over many items: an issue's type, its area,
+the severity and reach inputs to its priority, whether an outside issue is a support
+question, whether outside text is trying to instruct the agent (chapter 4), whether two
+issues are duplicates, whether a commit fixes an issue, and which model and effort a
+launched session gets. Every such decision goes through **one interface**:
+
+```text
+decide(question, allowed answers, input)  ->  { answer, probability per allowed answer }
+```
+
+**A backend is anything that meets that contract.** Three kinds are expected:
+
+| Kind | How it gives probabilities |
+|---|---|
+| A model built for typed, calibrated decisions (TypeSafe's Jev is one; other vendors may ship similar models) | natively |
+| A general model with structured output (Claude, OpenAI's models, a local model) | from token probabilities where the API exposes them, otherwise by **asking several times and counting** how often each answer comes back |
+| A wrapper that adapts one kind to the other (such as TypeSafe's open-source one) | whatever it wraps |
+
+Asking several times and counting makes any model a backend, at the cost of more calls,
+and gives every backend the same contract, so they can be compared on equal terms.
+
+Two rules:
+
+1. **Probabilities are never trusted on a vendor's word.** Each backend is evaluated per
+   decision on the project's own history: the labelled open issues and the closed ones,
+   with the owner's priority overrides as further ground truth. The evaluation measures
+   accuracy and **calibration** (when it says 80 %, is it right about 80 % of the time). A
+   backend is used for a decision only where it passes, so one backend may win "type" and
+   lose "duplicate".
+2. **Backends are configuration, and so is who may see what.** The tracker-wide config picks
+   a backend per decision. Each repo has a data policy naming the backends allowed to see
+   its issue text; for a private repo, every external backend is off until the owner
+   allows it.
+
+Where a decision feeds the priority score, its probability is the score's **confidence**
+term directly (chapter 6). Work that needs to read code, use tools or write prose (duty-0
+checks, briefs, root-cause work, drafted replies and reviews) stays with Claude sessions and
+does not go through this seam.
 
 ## Claims checked
 
