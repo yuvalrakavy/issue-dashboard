@@ -1,6 +1,6 @@
 # issue-dashboard — design spec
 
-Status: **chapters 1-9 approved by the owner (2026-10-23); chapter 10 added after the first T2 verification (17 findings); re-verification pending.** Tier T2: a generic tool whose
+Status: **chapters 1-9 approved by the owner (2026-10-23); chapter 10 added after the first T2 verification (17 findings) and revised after the second (3 closed, 14 partly, 11 new); a third, scoped review of the phase-1 surface pending.** Tier T2: a generic tool whose
 config format is a contract that several repos and projects depend on.
 
 ## Intent
@@ -47,11 +47,12 @@ Some or all of a project's repos may be open source with the owner as maintainer
 7. Launching sessions: decisions, the dispatcher, routing, briefs, launch recipes — approved 2026-10-23 (7.2's sync job added after)
 8. The CLI — approved 2026-10-23, revised for chapter 10
 9. Documentation and skills — approved 2026-10-23
-10. **State and coordination: the event ledger** ← added after the first verification; awaiting re-verification and the owner's review
+10. **State and coordination: the event ledger, and the phases** ← revised after the second verification; scoped third review pending
 
 **Owner decisions still open** (proposed defaults are in the text, marked "proposed"):
-the scoring terms (6.2-6.4), the backend admission thresholds (7.1), and the two-minute
-self-write window (10.5).
+the scoring terms (6.2-6.4) and the backend admission thresholds (7.1). Phase 2's write
+rules are settled by its test-first build (10.9). **Phase 1 is read-only toward GitHub**
+(10.0): chosen by the author on 2026-10-23 under the owner's delegation, reversible.
 
 ---
 
@@ -186,6 +187,9 @@ exclude = ["yuvalrakavy/mqtt_dali"]      # not tracked in this project at all
 ```
 
 When a repo arrives through two members (a group and its own entry), its own entry wins.
+When it arrives through two groups and no entry of its own, the two members' settings must
+agree; if they differ, the config check refuses and names both, so the answer is never
+decided by the order of the file.
 **Excluding a repo here removes it from the project**: it is not read, counted or shown. To
 keep tracking a repo but not see it, use a dashboard view (5.6).
 
@@ -278,7 +282,8 @@ Every write to GitHub goes through **plan, then apply**:
    changed the same thing since.
 
 How plans carry preconditions, how approval binds to a plan's content, how a crash midway is
-reconciled, and exactly when undo is allowed: 10.5.
+reconciled, and exactly when undo is allowed: 10.9. **All of 1.7 is phase 2** (10.0): in
+phase 1 the tracker writes nothing to GitHub.
 
 ### 1.8 Issue identity and links
 
@@ -367,8 +372,13 @@ filter), after the repo's translation changes, and once a day. The daily read al
 what does not move an issue's update time: an issue transferred or deleted, and a label
 renamed in the repo's settings.
 
-A number in `also` that is a pull request, not an issue, or that does not exist, is
-reported by the config check and skipped, never silently treated as an issue.
+A number in `also` is looked up as an issue or a pull request (they share one number space
+in a repo) and joins the matching list (4.4); a number that exists as neither is reported by
+the config check and skipped.
+
+**An item entering a member's set is always read in full** on that cycle, even if it has not
+changed since the watermark, so an issue that newly matches a filter (or is added to `also`)
+appears with its details at once.
 
 ### 2.3 What is derived
 
@@ -720,9 +730,10 @@ repeated in the level lists.
 
 ### 5.3 The database
 
-Document ids replace `/` and `#` with `:`, so `yuvalrakavy/Store#403` is
-`yuvalrakavy:Store:403` (the database allows letters, digits and `_ - . ~ : @ +` in a
-segment).
+Document ids are GitHub's node ids (10.2), which use only letters, digits, `_` and `-`,
+all allowed in a database segment; each document also carries the current
+`owner/repo#N` for display. A rename or transfer therefore changes a document's display
+field, never its id, and a page action on it still names the same item.
 
 | Collection | Written by | Holds |
 |---|---|---|
@@ -735,7 +746,8 @@ segment).
 | `views` | **page** | saved views (5.6) |
 | `requests` | **page** | brief previews and on-demand triage (10.8) |
 | `acks` | tracker | which page decisions each cycle consumed (10.6) |
-| `launches` | **page**, then dispatcher | one per launch request, moving through `requested`, `queued`, `started`, then `landed`, `stopped` or `failed`, or `not_sent` (7.3, 7.8, 5.4) |
+| `launches` | **page** | one per launch request; written once and never changed (a refused send is a second document, `not_sent`, naming the first) |
+| `launch_status` | tracker | each launch's current transition (10.7) |
 
 "Tracker" in this table means the tracker's documents as written by the sync job (7.2),
 which carries the CLI's prepared documents into the database; the CLI itself never touches
@@ -830,7 +842,7 @@ the kind:
 
 | Suggestion | Main action | What happens |
 |---|---|---|
-| type or area | "Label as todo", "Set area: vm" | the label is written on the next run (1.7 still applies: a forced dry run or the per-run cap can hold it as a plan) |
+| type or area | "Label as todo", "Set area: vm" | recorded at the next cycle and shown as the issue's value; **in phase 1 not written to GitHub** (the card says so); in phase 2 written by the write engine, where a forced dry run or the per-run cap can hold it as a plan |
 | priority | "Set p1" | becomes this project's priority and is written back as the label under 1.5's rules (shared repos, read-only repos) |
 | likely fixed | "Check and close…" | starts a short check that the fix is present on the default branch; if it holds, a plan to close the issue with a comment naming the commit goes to the Inbox for approval |
 | duplicate | "Close as duplicate…" | a plan to close the issue as a duplicate, linking the other, goes to the Inbox for approval |
@@ -863,7 +875,7 @@ The sum of three terms, each on the relative scale 1, 2, 3, 5, 8, 13:
 
 | Term | From |
 |---|---|
-| **Value** | severity (data loss, a hang, a silent wrong answer score highest) × reach in this project; outside demand (reactions, distinct outside commenters, 4.3) raises reach |
+| **Value** | severity (data loss, a hang, a silent wrong answer score highest) plus reach in this project; outside demand (reactions, distinct outside commenters, 4.3) raises reach |
 | **Time criticality** | how much of its time limit the issue has used; a GitHub milestone with a due date |
 | **Risk reduction and opportunity** | the cost of delay of what it unblocks; membership of a defect class fixed in the same session; a silent failure becoming visible (detectability) |
 
@@ -991,7 +1003,7 @@ does not go through this seam.
 | Job | What it is | When |
 |---|---|---|
 | **Sync** | a scheduled Claude task on the smallest model: reads the page documents from the dashboard database, runs `issue-dashboard cycle` on them (10.4), then writes the cycle's outbox back in one pinned batch (10.6) | every `sync_interval` (default 5 min); this is the cycle that applies your decisions |
-| **Triage** | a Claude session: reads the snapshot, makes suggestions through the decision seam, checks claims against the code, groups defect classes and batches, applies accepted decisions and approved plans | daily, and on demand from the dashboard |
+| **Triage** | a Claude session: reads the snapshot, makes suggestions through the decision seam, checks claims against the code, groups defect classes and batches, and records all of it with `record-suggestions`; it applies nothing (10.4) | daily, and on demand from the dashboard |
 | **Dispatcher** | a long-lived Claude session watching each project's dashboard | always on while you want launches to work |
 
 **Why a sync job exists.** The dashboard's database is reachable through Claude's artifact
@@ -1018,8 +1030,9 @@ dispatcher runs on the strongest model at the highest effort, checks its own mod
 when it starts (`get_session self`), and refuses, with the reason in the launch thread, any
 launch whose routing it cannot honour, rather than starting it silently downgraded.
 
-On each launch comment, in order (every state change goes through a CLI command, so it is a
-ledger event; chapter 10):
+On every wake, first settle uncertain reservations from its session list (10.7). Then, on a
+launch comment, in order (every state change goes through a CLI command, so it is a ledger
+event; chapter 10):
 
 1. Read `launches/<id>`. Proceed only if it was written by the owner.
 2. Re-read the issue on GitHub; refuse if it is closed, or carries the in-progress label set
@@ -1030,13 +1043,13 @@ ledger event; chapter 10):
    its reason, which the dispatcher posts in the launch thread.
 4. `issue-dashboard brief --launch <id>` returns the brief (7.5); start the session with the
    routed model and effort and the token in its title.
-5. `issue-dashboard launch-started --token … --session …`; the next cycle writes the
-   in-progress label, and a "work started" comment only where the repo's policy allows
-   comments (10.7). Reply in the thread with a link to the session.
+5. `issue-dashboard launch-started --token … --session …`, and reply in the thread with a
+   link to the session. In phase 1 the tracker writes nothing to GitHub; the launched session
+   follows its repo's own process, including any in-progress label (10.0). In phase 2 the
+   write engine can take over the label, under the repo's write policy (10.9).
 6. When the app continues the dispatcher because the session ended its turn for good,
-   `issue-dashboard launch-ended --token … --state landed|stopped|failed`; the next cycle
-   removes the label (with a comment only where allowed), and the dispatcher reserves the
-   next queued launch.
+   `issue-dashboard launch-ended --token … --state landed|stopped|failed` (which also
+   releases the slot), then `reserve` for the next queued launch.
 
 ### 7.4 Routing
 
@@ -1064,7 +1077,8 @@ routing with a one-line reason before launch, and you can change it; a change is
 A brief is built **by the CLI from a fixed template** (`issue-dashboard brief`), not by a
 model, so its trust boundaries are enforced by code. The same command produces the dashboard's
 preview (10.8). Every piece of text in it carries a **source tag** from the ledger: tracker
-(the template, config, derived facts), inside author, or outside author. The template never
+(the template, config, derived facts), inside author, outside author, or private advisory
+(4.5), which is placed only in that advisory's own brief. The template never
 places outside text anywhere but inside a fenced, labelled block, and the task sentence is
 built from tracker facts only: it names the issue by number and kind ("Fix
 yuvalrakavy/airzoned#41, a bug"), never by an outside author's title. A structured filing
@@ -1142,22 +1156,22 @@ missing.
 
 One binary, `issue-dashboard`, with every subcommand taking `--root <dir>` (or
 `$ISSUE_DASHBOARD_ROOT`) and, where it acts on one project, `--project <name>`. It never
-writes to GitHub except through `apply` and `label-sync`, and never touches the dashboard
+writes to GitHub in phase 1 at all; from phase 2 only through `apply` and `label-sync`. It
+never touches the dashboard
 database (7.2).
 
 | Command | Does | Writes |
 |---|---|---|
 | `check` | the config check (1.9) | nothing |
-| `cycle --pages <file>` | the whole cycle of 10.4: ingest the fetched page documents, observe, reconcile, plan, apply what needs no approval, derive the outbox | the ledger; GitHub; `outbox/` |
+| `cycle --pages <file>` | the cycle of 10.4: ingest the fetched page documents, observe, derive the outbox | the ledger; `outbox/` |
 | `snapshot [--full]` | the observe step alone (chapter 2), for testing and `doctor` | the ledger |
-| `plan`, `apply <plan> [--yes]` | the plan and apply steps alone; `apply` checks each operation's precondition (10.5) and refuses an unapproved plan unless `--yes` is given at a terminal | the ledger; GitHub |
-| `undo <run>` | reverse what 10.5 allows | the ledger; GitHub |
+| `plan`, `apply <plan> [--yes]`, `undo <run>` | **phase 2** (10.9): the write engine | the ledger; GitHub |
 | `reserve`, `launch-started`, `launch-ended`, `release` | the launch reservation steps (10.7) | the ledger |
 | `brief --launch <id>` | the brief from its template (7.5) | nothing |
 | `record-suggestions <file>` | the triage session's suggestions, validated against their schema | the ledger |
 | `rebuild` | rebuild the SQLite ledger from the JSON Lines history (10.2) | the ledger |
 | `explain <owner/repo#N>` | how each value was reached (1.9) | nothing |
-| `label-sync [--dry-run]` | create in each member repo the translated labels it lacks; never renames or deletes; shows its plan first | GitHub; the ledger |
+| `label-sync [--dry-run]` | **phase 2**: create in each member repo the translated labels it lacks; never renames or deletes; shows its plan first | GitHub; the ledger |
 | `forks` | chapter 3 for each checkout with a manifest | the ledger |
 | `eval <decision> --backend <name>` | score a decision backend on the project's history (7.1): accuracy and calibration | `state/evals/` |
 | `record-outcome --launch <id> …` | what a session reports at its end (7.7) | the ledger |
@@ -1209,173 +1223,210 @@ repo once the tracker works:
 
 ## 10. State and coordination: the event ledger
 
-Added 2026-10-23 after the first design verification (Codex), whose serious findings shared
-one cause: five parts read and write shared state (the CLI, the sync job, the triage
-session, the dispatcher and the page), and their coordination had never been designed as
-one thing. This chapter is that design. Where an earlier chapter describes state, writes,
-plans, undo or launches differently, **this chapter governs**.
+Five parts act on shared state: the CLI, the sync job, the triage session, the dispatcher and
+the page. This chapter is the one design for how they coordinate; the earlier chapters
+describe state in its terms. It was added after the first design verification (2026-10-23),
+whose serious findings shared that missing design as their cause, and revised after the
+second.
+
+### 10.0 Phases
+
+| Phase | Toward GitHub | What it contains |
+|---|---|---|
+| **1** | **read-only: the tracker writes nothing to GitHub** | the ledger, the cycle, the snapshot, the dashboard, triage suggestions, priorities and overrides kept in the tracker, views, forks, launches and reservations, briefs, outcomes, `explain` |
+| **2** | the write engine (10.9): labels and priority write-back, label sync, plans, undo | built test-first against a scratch repository, so its timing questions are answered by running code and its review is a review of code |
+| **3** | closes, comments and reviews in the maintainer's name | the open-source writes of chapter 4 |
+
+In phase 1 a launched session still works on its issue the way it does today, under its
+repo's own process (the in-progress label, its commits, its pull request); the tracker
+itself does not write. Everything in this spec about writing to GitHub (1.5's write-back,
+1.7, label sync, 5.8's labels "written on the next run", undo) is **phase 2 or 3**; in
+phase 1 an accepted label or priority is recorded in the tracker and shown, and the
+dashboard says it is not written to GitHub yet.
 
 ### 10.1 Who writes what
 
 | State | Written by | Read by | On retry | On a crash midway |
 |---|---|---|---|---|
-| the **ledger** (`<root>/ledger.sqlite`) | the CLI only, one transaction at a time | the CLI | appends are keyed, so a repeat is a no-op (10.3) | a transaction either committed or did not |
-| GitHub issues, labels, comments | the CLI's write engine only (10.5) | the CLI's reads | each operation has an intent recorded first | reconciled on the next cycle from the intent (10.5) |
-| page documents (`decisions`, `launches`, `views`) | the page | the sync job, then the CLI as ledger events | the event key is the document id, so re-ingest is a no-op | the page document remains; ingested next cycle |
-| tracker documents (everything else in the database, including `acks`) | the sync job, carrying the CLI's outbox | the page | the outbox carries a sequence number; an older one is never written over a newer (10.6) | the page shows the previous outbox until the next sync |
-| sessions (fix, review, triage) | the dispatcher, through `start_session` | the dispatcher | a launch holds a reservation first (10.7) | the reservation's lease expires, or the dispatcher reconciles from its session list |
+| the **ledger** (`<root>/ledger.sqlite`) | CLI commands, each under the root lock (10.4) | CLI commands | every event has an identity, so a repeat is a no-op (10.3) | a transaction committed or did not |
+| the ledger's **backup** (`<root>/ledger/*.jsonl`) | the same command, before it releases the lock (10.2) | `rebuild` | appends from an export cursor, so a repeat writes nothing twice | SQLite is the authority; the next command exports what is missing |
+| page documents (`decisions`, `launches`, `views`, `requests`) | the page | the sync job, then the CLI | the document id is part of the event identity | the document stays; ingested next cycle |
+| tracker documents (everything else in the database) | the sync job, carrying an outbox | the page | an outbox is written only if its sequence is newer than the published one (10.6) | the page shows the previous outbox |
+| sessions (fix, review, triage) | the dispatcher, through `start_session` | the dispatcher | a launch holds a reservation first (10.7) | the reservation stays held until the dispatcher reconciles it (10.7) |
+| comments in the launch thread | the page (requests) and the dispatcher (replies) | the dispatcher, you | replies carry the launch id | none; the thread is a notification channel, not state |
+| GitHub | **nobody, in phase 1**; the write engine, in phase 2 (10.9) | the snapshot | — | — |
 
-Nothing else writes. The triage session and the dispatcher change state **only by calling CLI
-commands** (`record-suggestions`, `reserve`, `launch-started`, `record-outcome`), so every
-change passes through one writer and is recorded as an event.
+**The rule:** no ledger state changes except through a CLI command. The triage session and
+the dispatcher change it by calling commands (`record-suggestions`, `reserve`,
+`launch-started`, `launch-ended`, `record-outcome`), never by editing a file or a database
+document.
 
 ### 10.2 The ledger
 
-An append-only log of events in SQLite, in WAL mode, in the tracker root. Every derived
-value (an issue's priority in a project, a plan, the dashboard's documents, what undo may
-reverse) is computed from it, so the log is the single source of the tracker's truth and
-GitHub is the single source of the issues'.
+An append-only log of events in SQLite (WAL mode) in the tracker root. The tracker's derived
+values (priorities per project, the queue, the dashboard's documents) are computed from the
+events plus the configuration in force, which is itself recorded as an event, so a derived
+value can be recomputed for any point in the log.
 
-**Backup and history:** each cycle appends the new events to monthly JSON Lines files
-(`<root>/ledger/2026-10.jsonl`), committed to git. They only ever grow, so git diffs are
-additions, and the database can be rebuilt from them (`issue-dashboard rebuild`). The SQLite
-file itself is not in git.
+**Backup.** Each mutating command, before it releases the root lock, appends the events it
+committed to monthly JSON Lines files (`<root>/ledger/2026-10.jsonl`) and fsyncs them, then
+advances an export cursor stored in the ledger. On start, any command first exports events
+past the cursor, so a crash between commit and export loses nothing. The files only grow and
+are committed to git; `issue-dashboard rebuild` recreates the SQLite file from them. When the
+two disagree, SQLite is the authority and the files are re-exported from it.
 
-**Identity:** events refer to repos and issues by **GitHub's permanent node ids**, not by
-`owner/repo#N`. Each observation records the current display name as an alias, so a renamed
-repo or a transferred issue keeps its history, priorities and decisions; a deleted issue gets
-a tombstone event and leaves every view. (This replaces 1.8's "every issue is
-`owner/repo#N`" for storage; display and links still use the name.)
+**Identity.** Repos, issues and pull requests are stored by **GitHub's permanent node ids**.
+Each observation records the current `owner/repo#N` as an alias, so a renamed repo or a
+transferred issue keeps its history; display, links and database document ids use the node id
+plus the alias (5.3). An item GitHub no longer returns is confirmed on the daily full read and
+recorded as `item_gone`, which removes it from every derived view; its events stay in the log.
 
-### 10.3 Event types
+### 10.3 Events
 
-Each event has a sequence number, a time, a kind, the node id it concerns, and a **key**
-that makes it unique. Recording an event whose key exists is a no-op, which is what makes
-every retry safe.
+Every event has a **sequence number**, a **time**, a **kind**, a **subject** (the node id,
+launch id or decision id it concerns), and an **identity**: a hash of the kind, the subject
+and the fields that make this occurrence distinct. Recording an event whose identity exists is
+a no-op; that is what makes a repeated command safe. Different kinds, and different
+transitions of one subject, always have different identities.
 
-| Kind | Key | Recorded when |
+| Kind | Identity is the hash of | Recorded when |
 |---|---|---|
-| `observed` | issue node id + GitHub `updatedAt` | the snapshot reads an item that changed (labels, state, assignees, links, timeline event ids) |
-| `decided` | the page document's id | ingest reads a page decision: accept, dismiss, set priority, override, approve a plan, undo |
+| `config` | the configuration's content | a command sees a configuration it has not recorded |
+| `observed` | node id + a hash of the observed content (labels, state, assignees, links, the timeline event ids read) | a read returns an item whose content differs from its last observation; **the update time is not part of it**, so a change that does not move `updatedAt` is still recorded |
+| `item_gone` | node id + the read that confirmed it | 10.2 |
+| `decided` | the page document's id | ingest reads a page decision; it carries the author's user id (10.6) |
 | `suggested` | triage run id + item + decision kind | the triage session records a suggestion |
-| `write_intended` | plan id + operation index | a write is about to be sent (10.5) |
-| `write_applied` / `write_failed` / `write_conflicted` | the intent's key | the result is known |
-| `reserved` / `launch_started` / `launch_ended` / `reservation_expired` | the launch document's id | 10.7 |
+| `launch` | launch id + transition (`requested`, `reserved`, `queued`, `started`, `ended`, `released`, `unconfirmed`, `orphan`) + token | 10.7; only the transitions in 10.7's table are legal, and a command refuses any other |
 | `outcome` | launch id | a session records its outcome |
-| `config_changed` | hash of the config | `check` sees a new configuration |
+| `exported` | the export cursor's new value | 10.2 |
 
-The full field list per kind is the first artifact of the build: JSON Schema files in
-`schemas/`, which the CLI, the sync job and the page all validate against.
+Phase 2 adds the write events (10.9). The full field list per kind is the build's first
+artifact: JSON Schema files in `schemas/`, which the CLI, the sync job and the page validate
+against.
 
-### 10.4 The cycle
+### 10.4 The root lock and the cycle
 
-One command, `issue-dashboard cycle --project P`, runs every step that changes state, in this
-order, under one lock:
+**Every mutating command takes the root lock** (an exclusive lock on `<root>/lock`) for the
+time it writes the ledger, and holds it only for that: **no network call is made while the
+lock is held.** A command that needs network data (the snapshot) fetches first, then takes the
+lock and records. So a dispatcher's `reserve` waits at most for one short ledger write. A
+command waiting for the lock gives up after 30 s with a message naming the holder's command and
+process id, so a stuck holder is visible rather than a silent hang.
 
-1. **ingest** the page documents the sync job fetched (new `decided` and launch events);
-2. **observe**: the snapshot reads (chapter 2) and records `observed` events;
-3. **reconcile** open write intents from a previous crash (10.5);
-4. **plan**: compute every GitHub write the current events call for (10.5);
-5. **apply** the operations that need no further approval (10.5);
-6. **derive** the dashboard's documents and write them to the outbox with the cycle's
+`issue-dashboard cycle --project P --pages <file>` runs, in order:
+
+1. **ingest** (under the lock): the page documents the sync job fetched become `decided` and
+   `launch` events, and their acknowledgements are prepared (10.6);
+2. **observe**: the snapshot reads GitHub (chapter 2) without the lock, then records
+   `observed` and `item_gone` events under it;
+3. **derive** (under the lock): compute the project's views and write the outbox with the next
    sequence number (10.6).
 
-The sync job runs: fetch page documents → `cycle` → write the outbox. So "applied on the next
-run (in N minutes)" (5.2a) means the next sync cycle, which is true. The triage session does
-not apply anything; it records suggestions, and the next cycle acts on your answers to them.
+Phase 2 inserts its reconcile, plan and apply steps between observe and derive (10.9).
 
-### 10.5 Writing to GitHub
+The sync job runs: fetch page documents → `cycle` → publish the outbox. So "on the next run
+(in N minutes)" means the next sync cycle. The triage session never applies anything: it
+records suggestions, and the next cycle shows them.
 
-**What triggers a write.** A write is planned only from a `decided` event: you set a
-priority, accepted a suggestion, or approved a plan. An observation never triggers a write.
-That is the rule "writes on a change, never re-asserts" (1.5), made mechanical.
+### 10.5 Decisions: authorship, ordering and undo
 
-**Shared repos.** When a project priority changes, the plan computes the highest project
-priority across every project in the tracker root (one ledger, so the computation is
-serialised). If that maximum did not change, nothing is written, even if GitHub shows
-something else: a person's edit there stands.
-
-**Preconditions.** Every planned operation records the state it expects: the issue's
-relevant labels (or open/closed state) as last observed, and that observation's `updatedAt`.
-Applying re-reads the issue; **if the relevant state differs from the precondition, the
-operation is not applied**: it is recorded `write_conflicted`, and the item returns to the
-Inbox with both values. This is what stops an approved plan overwriting a newer edit.
-
-**Approval binds to content.** An approved plan is identified by its id and a hash of its
-operations; if a new cycle would plan anything different for those issues, the old approval
-no longer applies and the new plan is shown.
-
-**Intent first, then GitHub.** Each operation is recorded `write_intended` before it is sent,
-and `write_applied` or `write_failed` after. After a crash, step 3 of the next cycle reads
-each open intent's issue: if it already shows the target state the intent is recorded
-applied, otherwise failed, and its originating decision is planned again. A failed write
-keeps its trigger, because the `decided` event is still unanswered.
-
-**Telling the tracker's own writes apart.** The tracker usually runs under the owner's own
-GitHub account, so the actor on a label event cannot tell a tracker write from a person's
-edit. Instead, an observed label event that matches an applied write (same issue, same label,
-same direction, within two minutes after it) is the tracker's own and is not adopted as a
-GitHub-side edit; every other label event is. The accepted residual: a person making exactly
-the tracker's change within that window is counted as the tracker. With a separate bot account
-the actor alone decides, and the window is not used.
-
-**Automatic versus approved.** A cycle applies without asking: label and priority operations
-from accepted suggestions and set priorities, within `max_writes_per_run`, outside a forced dry
-run (1.7). Everything else waits in the Inbox as a plan: closes, comments, reviews, and any
-operation over the cap.
-
-**Undo, from history.** Undoing an applied operation is allowed only if the ledger shows no
-observed change to the same label (or state) on that issue after the operation. A value set
-back to the same thing by someone else still counts as a change, so undo never overwrites a
-person's later choice. A label or close can be reversed; a posted comment or review cannot, so
-it is offered no undo, only a follow-up comment.
+- **Only the owner's decisions count.** A `decided` event carries the author's user id from
+  the page; ingest accepts it only if that id is the project's configured `owner_id`, and
+  records any other as refused. The database's access rules already restrict page writes to
+  the owner (5.3); this check does not trust them alone.
+- **Undo is a decision that names another decision.** If the named decision is not yet
+  ingested (the two arrived in different fetches), the undo is recorded anyway, and the named
+  decision is marked cancelled the moment it is ingested, before it has any effect. Order of
+  arrival does not matter.
+- **Applying is deterministic.** Decisions take effect in sequence order; two decisions about
+  the same item resolve to the later one.
 
 ### 10.6 The outbox and acknowledgements
 
-Each cycle writes `<root>/outbox/<project>/<seq>.json`: the complete set of tracker documents
-for the database, stamped with the cycle's sequence number. The sync job writes it with the
-`meta` document pinned to the previously written sequence (`if_version`), so two overlapping
-syncs cannot put an older outbox over a newer one: the second's pinned write fails and it
-stops.
+Each cycle writes `<root>/outbox/<project>/<seq>.json`: the complete set of tracker documents,
+stamped with the cycle's sequence number, plus the acknowledgements of the decisions it
+consumed (the `acks` collection: decision id → cycle). **The tracker never edits a page
+document**; the page shows a decision as pending until its ack arrives.
 
-Consumed page decisions are acknowledged in a tracker-owned `acks` collection (decision id →
-the cycle that consumed it). **The tracker never edits a page document**; the page shows a
-decision as pending until its ack appears, and Undo on a pending decision is itself a new
-decision, which the next cycle applies first. (This replaces 5.3's "marks them consumed".)
+The sync job publishes an outbox only if it is newer than what the page shows:
+
+1. read the `meta` document, which records the published sequence;
+2. if the outbox's sequence is not greater, stop: a newer one is already published;
+3. otherwise write the whole outbox as one batch in which **every entry**, `meta` included,
+   is pinned to the version just read, with documents no longer present written as deletions.
+
+A batch whose entries are all pinned is applied all or nothing, so two overlapping syncs
+cannot interleave, and an older outbox can never replace a newer one: either it sees the newer
+sequence at step 2, or its pinned batch fails because the newer one changed `meta`.
+
+Launch status shown on the page lives in a tracker-owned `launch_status` collection; the
+page's own `launches` documents are requests and are never changed after they are written.
 
 ### 10.7 Launch reservations
 
-Before starting a session the dispatcher calls `issue-dashboard reserve --launch <id>`. In one
-ledger transaction, across all projects, it checks that no live reservation exists for the
-same issue node id (or any member of the batch), and that the launch recipe's pool has a free
-slot; if both hold it records `reserved` with a **lease** (default 15 minutes) and returns a
-token. Then:
+A launch moves through these transitions, each a `launch` event, and only these:
 
-- the dispatcher starts the session, including the token in the session's title, and calls
-  `launch-started --token … --session …`, which turns the lease into a held slot;
-- if the dispatcher crashes before that call, the lease expires (`reservation_expired`) and
-  the slot frees; on restart the dispatcher lists its sessions and records any it finds
-  carrying an unrecorded token, so a started session is never orphaned;
-- when no slot is free, the reservation is recorded as queued, in order. The dispatcher is
-  continued by the app whenever a session it started ends a turn, and at that moment it
-  calls `release` for the finished launch and `reserve` for the next queued one. That is the
-  wake source for the queue.
+| From | To | By |
+|---|---|---|
+| — | `requested` | ingest of the page's launch document |
+| `requested` | `reserved` (with a token) or `queued` | `reserve` |
+| `queued` | `reserved` | `reserve`, when a slot frees |
+| `reserved` | `started` (with the session id) | `launch-started` |
+| `reserved` | `unconfirmed` | the dispatcher, on restart or on finding a reservation older than 15 minutes with no matching session |
+| `unconfirmed` | `started` or `released` | the dispatcher, after checking its session list |
+| `started` | `ended` (landed, stopped or failed) | `launch-ended` |
+| `ended` | `released` | the same command, freeing the slot |
+| any | `orphan` | `launch-started` with a token that is not `reserved` or `unconfirmed` |
 
-The in-progress label and any "work started" comment are written through the write engine
-(10.5) like every other write, so a repo's write policy applies: under `writes = "labels"`
-the label is written and no comment is posted; a read-only repo gets neither. Approving a
-launch authorizes exactly those lifecycle writes for that issue, and no others.
+**A slot is freed only by a release, never by time.** `reserve` checks, in one ledger
+transaction across all projects, that no reservation for the issue (or any member of a batch)
+is in `reserved`, `unconfirmed` or `started`, and that the recipe's pool has a free slot.
 
-### 10.8 Who triggers each piece of work
+**The dispatcher is the only one who can see sessions**, so it, not the cycle, settles
+uncertain reservations: on its start, and whenever it is woken, it lists its sessions and, for
+each `reserved` or `unconfirmed` token, records `started` if a session carries the token in
+its title and `released` if none does. A session that was started under a token that has
+since been released reports `orphan` through `launch-started`; the dashboard shows it in the
+Inbox as possible duplicate work. A reservation that stays `unconfirmed` because no dispatcher
+is running is shown on the dashboard with its age, and you can release it.
+
+**The queue's wake source:** the app continues the dispatcher whenever a session it started
+ends a turn; it then records `ended` and `released`, and reserves the next queued launch.
+Releasing an unconfirmed reservation is also followed by a `reserve` for the next queued one.
+
+### 10.8 What wakes each piece of work
 
 | Work | Woken by |
 |---|---|
-| cycle | the sync job, at `sync_interval` |
-| a brief preview | a `preview` page document; the next cycle builds the brief (it is built by the CLI from a template, 7.5) and puts it in the outbox |
+| a cycle | the sync job, every `sync_interval` |
+| a brief preview | a `requests` document; the next cycle builds the brief (7.5) into the outbox |
 | a launch | the page's `sendToClaude` comment (5.4) |
-| the next queued launch | the app continuing the dispatcher when a session it started ends a turn |
-| triage | the daily schedule, or a `triage` page document handled as a launch |
-| fork work, review sessions | launches, like fixes |
+| the next queued launch | the app continuing the dispatcher when one of its sessions ends a turn; or a release |
+| settling uncertain reservations | the dispatcher's start, and every time it is woken |
+| triage | the daily schedule, or a `requests` document launched like a fix |
+| a stronger look at a hard triage call | an Inbox item "needs a stronger look", whose button is an ordinary launch at the routed model |
+
+### 10.9 Phase 2: the write engine
+
+Recorded here so phase 1 leaves room for it; its exact rules are settled by its test-first
+build against a scratch repository, since GitHub offers **no conditional write for labels**:
+any re-read-then-write leaves a window in which a person's edit can land, and the design must
+state that residual rather than claim it away. What phase 2 must provide, and its tests must
+show:
+
+- **writes triggered only by decisions**, never by an observation, and for a shared repo the
+  highest project priority, written only when that maximum changes (1.5);
+- **preconditions** on every operation, checked immediately before the write, with the
+  remaining window measured and reported;
+- **approval bound to an operation's content**;
+- **intent and result as separate committed events**, each operation under the root lock for
+  its own intent, write and result, so a crash is reconciled from operation-specific evidence
+  (the label event's timeline id, a comment's id), not from the issue merely showing the
+  target state;
+- **telling the tracker's own writes apart** by the timeline event ids its requests produced,
+  reconciled before the cycle classifies other observations;
+- **undo** only where a fresh read of the item's full timeline shows no other change to the
+  same label or state since the operation.
 
 ## Claims checked
 
