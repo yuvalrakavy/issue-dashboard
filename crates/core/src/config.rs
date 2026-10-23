@@ -269,6 +269,25 @@ pub fn parse_toml<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T> {
     })
 }
 
+/// Parses a config layer, checking it against its schema first (`schemas/<stem>.schema.json`),
+/// so what serde's types cannot express (a capacity of at least 1, `exclude` only with `group`,
+/// a filter without the tracker's own qualifiers) is refused, naming the file.
+fn parse_layer<T: serde::de::DeserializeOwned>(path: &Path, stem: &str) -> Result<T> {
+    let table: toml::Table = parse_toml(path)?;
+    let json = serde_json::to_value(&table)?;
+    let errors = crate::schema::errors(stem, &json);
+    if !errors.is_empty() {
+        return Err(Error::Config {
+            file: path.to_path_buf(),
+            reason: errors.join("; "),
+        });
+    }
+    serde_json::from_value(json).map_err(|e| Error::Config {
+        file: path.to_path_buf(),
+        reason: e.to_string(),
+    })
+}
+
 impl ConfigSet {
     /// Reads `<root>/repos.toml`, `<root>/projects/*.toml`, and the repo file of every
     /// registry entry with a `local_path` (a missing repo file is fine; 1.1).
@@ -280,7 +299,7 @@ impl ConfigSet {
                 reason: "the repo registry is missing".into(),
             });
         }
-        let registry: Registry = parse_toml(&registry_path)?;
+        let registry: Registry = parse_layer(&registry_path, "config-registry")?;
 
         let mut projects = BTreeMap::new();
         let dir = root.join("projects");
@@ -291,7 +310,7 @@ impl ConfigSet {
                     continue;
                 }
                 let name = path.file_stem().unwrap().to_string_lossy().into_owned();
-                projects.insert(name, parse_toml::<Project>(&path)?);
+                projects.insert(name, parse_layer::<Project>(&path, "config-project")?);
             }
         }
 
@@ -300,7 +319,7 @@ impl ConfigSet {
             if let Some(local) = &entry.local_path {
                 let path = expand_home(local).join(".issue-dashboard.toml");
                 if path.exists() {
-                    repo_files.insert(repo.clone(), parse_toml::<RepoFile>(&path)?);
+                    repo_files.insert(repo.clone(), parse_layer::<RepoFile>(&path, "config-repo-file")?);
                 }
             }
         }
@@ -320,7 +339,7 @@ impl ConfigSet {
     pub fn record(&self, tx: &mut Tx<'_>) -> Result<Recorded> {
         let content = serde_json::to_value(self)?;
         let hash = hash_value(&content);
-        tx.record(
+        tx.record_valid(
             Kind::Config,
             "config",
             json!({"content_hash": hash}),

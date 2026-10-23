@@ -448,3 +448,63 @@ fn every_launch_event_validates_against_the_launch_event_schema() {
         "not every transition was exercised: {transitions:?}"
     );
 }
+
+// ---- mutation-test additions ----
+
+#[test]
+fn settling_one_orphan_leaves_the_other_orphans_of_the_launch_holding_their_slots() {
+    let r = temp_root();
+    request(&r.root, "L1", &[ISSUE_A], "solo");
+    let token = token_of(&reserve(&r.root, "L1", D1).unwrap());
+    at(&r.root, 20, |tx| launch::release(tx, &token, D1)).unwrap();
+    at(&r.root, 21, |tx| launch::started(tx, &token, "S9")).unwrap(); // orphan
+    at(&r.root, 21, |tx| launch::started(tx, &token, "S8")).unwrap(); // a second orphan
+    request(&r.root, "L2", &[ISSUE_B], "solo");
+    assert!(matches!(
+        reserve(&r.root, "L2", D1).unwrap(),
+        Reservation::Queued { .. }
+    ));
+
+    at(&r.root, 22, |tx| launch::settle_orphan(tx, &token, "S9")).unwrap();
+    let next = at(&r.root, 23, |tx| launch::reserve_next(tx, D1, &cap)).unwrap();
+    assert!(
+        next.is_none(),
+        "S8 still holds the slot, but it was handed out: {next:?}"
+    );
+
+    at(&r.root, 24, |tx| launch::settle_orphan(tx, &token, "S8")).unwrap();
+    let next = at(&r.root, 25, |tx| launch::reserve_next(tx, D1, &cap)).unwrap();
+    assert!(
+        matches!(next, Some(Reservation::Reserved { ref launch, .. }) if launch == "L2"),
+        "{next:?}"
+    );
+}
+
+#[test]
+fn reserve_next_takes_the_launch_that_queued_first_not_the_one_requested_first() {
+    let r = temp_root();
+    let t1 = reserved(&r.root, "L1", &[ISSUE_A]);
+    let t2 = reserved(&r.root, "L2", &[ISSUE_B]); // "lanes" is now full
+    // L3 is requested before L4, but L4 reaches the queue first.
+    request(&r.root, "L3", &[ISSUE_C], "lanes");
+    request(&r.root, "L4", &["I_kwDOissueD"], "lanes");
+    assert!(matches!(
+        reserve(&r.root, "L4", D1).unwrap(),
+        Reservation::Queued { .. }
+    ));
+    assert!(matches!(
+        reserve(&r.root, "L3", D1).unwrap(),
+        Reservation::Queued { .. }
+    ));
+
+    // Both slots free at once, so only the order decides who gets the one reserve_next hands out.
+    for (token, session) in [(&t1, "S1"), (&t2, "S2")] {
+        at(&r.root, 3, |tx| launch::started(tx, token, session)).unwrap();
+        at(&r.root, 4, |tx| launch::ended(tx, token, EndState::Landed)).unwrap();
+    }
+    let next = at(&r.root, 5, |tx| launch::reserve_next(tx, D1, &cap)).unwrap();
+    assert!(
+        matches!(next, Some(Reservation::Reserved { ref launch, .. }) if launch == "L4"),
+        "the queue is first in first out by when launches queued: {next:?}"
+    );
+}

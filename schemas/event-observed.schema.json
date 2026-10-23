@@ -19,11 +19,22 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "content_hash"
+        "content_hash",
+        "alias"
       ],
       "properties": {
         "content_hash": {
           "$ref": "common.schema.json#/$defs/sha256"
+        },
+        "alias": {
+          "anyOf": [
+            {
+              "$ref": "common.schema.json#/$defs/alias"
+            },
+            {
+              "$ref": "common.schema.json#/$defs/repoName"
+            }
+          ]
         }
       }
     },

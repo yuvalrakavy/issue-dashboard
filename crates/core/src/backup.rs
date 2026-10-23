@@ -5,9 +5,10 @@
 //! date from it by every mutating command before it releases the root lock, and `rebuild`
 //! recreates SQLite from the backup.
 //!
-//! Lines are only ever appended to the latest file, so only its final line can be torn by a
-//! crash. An event goes to the file of its month, or to the latest file when the clock has
-//! stepped back, so the files read in name order are always in sequence order.
+//! Lines are only ever appended to the latest file, so only its trailing lines (one export's
+//! batch, under one fsync) can be torn by a crash. An event goes to the file of its month, or to
+//! the latest file when the clock has stepped back, so the files read in name order are always
+//! in sequence order.
 
 use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
@@ -126,9 +127,19 @@ fn is_month_file(name: &str) -> bool {
         && b[5..7].iter().all(u8::is_ascii_digit)
 }
 
-/// "2026-10" from an RFC 3339 time.
-fn month_of(time: &str) -> &str {
-    &time[..7]
+/// "2026-10" from an RFC 3339 time; refuses a time no month file can be named after (a year
+/// past 9999, or text that is not a time).
+fn month_of(event: &Event) -> Result<&str> {
+    let m = event.time.get(..7).unwrap_or_default();
+    let b = m.as_bytes();
+    if b.len() == 7 && b[..4].iter().all(u8::is_ascii_digit) && b[4] == b'-' && b[5..].iter().all(u8::is_ascii_digit) {
+        Ok(m)
+    } else {
+        Err(Error::refused(format!(
+            "event {} has a time the backup cannot file under a month: {}",
+            event.seq, event.time
+        )))
+    }
 }
 
 /// Splits a file into its lines, each without its newline; the flag says whether the last
@@ -173,12 +184,21 @@ impl Backup {
         Ok(out)
     }
 
-    /// Cuts a torn final line off the latest file (10.2): an unterminated fragment that does
-    /// not verify, then a final line that does not parse or verify. An unterminated line that
-    /// verifies is kept and terminated. A corrupt line before the final one is not repaired
-    /// here; it is refused.
+    /// Cuts a torn tail off the latest non-empty file (10.2). One export writes several lines
+    /// under one fsync, so a crash can garble more than the last: every trailing line that does
+    /// not parse or verify is cut, back to the last good one; SQLite holds their events and the
+    /// next export appends them again. An unterminated line that verifies is kept and
+    /// terminated. Corruption before a good line is not a torn tail: [`Backup::catch_up`]'s
+    /// full verification finds it.
     pub fn repair_tail(&self) -> Result<TailRepair> {
-        let Some(path) = self.files()?.pop() else {
+        let mut path = None;
+        for p in self.files()?.into_iter().rev() {
+            if fs::metadata(&p)?.len() > 0 {
+                path = Some(p);
+                break;
+            }
+        }
+        let Some(path) = path else {
             return Ok(TailRepair::default());
         };
         let bytes = fs::read(&path)?;
@@ -198,24 +218,11 @@ impl Backup {
             keep -= last.len();
             report.cut_lines += 1;
             remaining -= 1;
-        } else if remaining > 0 {
-            let last = lines[remaining - 1];
-            if parse_line(last).is_err() {
-                keep -= last.len() + 1;
-                report.cut_lines += 1;
-                remaining -= 1;
-            }
         }
-        // A torn write is one line. Anything before it must verify.
-        if report.cut_lines > 0 && remaining > 0 {
-            let last = lines[remaining - 1];
-            if let Err(reason) = parse_line(last) {
-                return Err(Error::CorruptBackup {
-                    file: path,
-                    line: remaining,
-                    reason,
-                });
-            }
+        while remaining > 0 && parse_line(lines[remaining - 1]).is_err() {
+            keep -= lines[remaining - 1].len() + 1;
+            report.cut_lines += 1;
+            remaining -= 1;
         }
         if keep < bytes.len() {
             let f = OpenOptions::new().write(true).open(&path)?;
@@ -242,9 +249,17 @@ impl Backup {
         Ok(None)
     }
 
-    /// Brings the backup up to date with SQLite: repairs the tail, appends every event past
-    /// the backup's last one (fsynced), then records the export cursor. Never appends an
-    /// event whose sequence number the backup already holds.
+    /// Brings the backup up to date with SQLite: repairs the tail, verifies the whole backup
+    /// against SQLite, appends every event past the backup's last one (fsynced), then records the
+    /// export cursor. Never appends an event whose sequence number the backup already holds.
+    ///
+    /// - A backup AHEAD of SQLite means the ledger is missing, replaced or older than its
+    ///   backup: refused, naming `rebuild`, since re-exporting would discard the newer history.
+    /// - A backup that differs from SQLite anywhere (a lost, changed or corrupt line) is moved to
+    ///   `diverged-<time>/` and re-exported from SQLite, the authority (10.2).
+    ///
+    /// The verification reads the whole backup and the whole ledger: its cost grows with the
+    /// history (10.10 records this as open).
     pub fn catch_up(
         &self,
         ledger: &mut Ledger,
@@ -256,14 +271,23 @@ impl Backup {
             ..ExportReport::default()
         };
 
-        let mut last = self.last_event()?;
-        if let Some(in_file) = &last
-            && ledger::event_at(ledger.conn(), in_file.seq)?.as_ref() != Some(in_file)
-        {
-            report.diverged = Some(self.move_aside(now)?);
-            last = None;
+        let sqlite_max = ledger::max_seq(ledger.conn())?;
+        let last_seq = self.last_event()?.map_or(0, |e| e.seq);
+        if last_seq > sqlite_max {
+            return Err(behind(last_seq, sqlite_max));
         }
-        let file_max = last.as_ref().map_or(0, |e| e.seq);
+        let matches = match self.read_all() {
+            Ok((events, tail)) if tail.cut_lines == 0 => {
+                events.len() as i64 == last_seq && ledger::events_between(ledger.conn(), 0, last_seq)? == events
+            }
+            _ => false,
+        };
+        let file_max = if matches {
+            last_seq
+        } else {
+            report.diverged = Some(self.move_aside(now)?);
+            0
+        };
 
         let pending = ledger::events_after(ledger.conn(), file_max)?;
         report.appended = self.append(&pending)?;
@@ -280,7 +304,7 @@ impl Backup {
         )?;
         if unmarked > 0 {
             let mut tx = ledger.begin(now)?;
-            tx.record(
+            tx.record_valid(
                 Kind::Exported,
                 "ledger",
                 json!({"cursor": new_cursor}),
@@ -299,7 +323,12 @@ impl Backup {
         if events.is_empty() {
             return Ok(0);
         }
-        fs::create_dir_all(&self.dir)?;
+        if !self.dir.exists() {
+            fs::create_dir_all(&self.dir)?;
+            if let Some(parent) = self.dir.parent() {
+                sync_dir(parent)?;
+            }
+        }
         let mut month: Option<String> = self
             .files()?
             .last()
@@ -307,9 +336,10 @@ impl Backup {
         let mut open: Option<(String, File)> = None;
         let mut created = false;
         for event in events {
+            let own = month_of(event)?;
             let m = match &month {
-                Some(latest) if latest.as_str() >= month_of(&event.time) => latest.clone(),
-                _ => month_of(&event.time).to_string(),
+                Some(latest) if latest.as_str() >= own => latest.clone(),
+                _ => own.to_string(),
             };
             month = Some(m.clone());
             if open.as_ref().map(|(name, _)| name != &m).unwrap_or(true) {
@@ -405,6 +435,15 @@ impl Backup {
         }
         Ok((events, tail))
     }
+}
+
+/// The refusal for a ledger that is missing or behind its backup.
+pub fn behind(backup_seq: i64, ledger_seq: i64) -> Error {
+    Error::refused(format!(
+        "the backup holds events up to seq {backup_seq} but the ledger only up to seq {ledger_seq}: \
+         ledger.sqlite is missing, replaced or older than its backup. `issue-dashboard rebuild` \
+         recreates it from the backup (with --force when a ledger.sqlite exists; it is kept beside)"
+    ))
 }
 
 /// The cursor recorded by the latest `exported` event; 0 when there is none.

@@ -4,8 +4,11 @@
   "kind": "decided",
   "subject": "D_20261023_0900_zz99",
   "pred": 0,
-  "distinct": {},
-  "identity": "e6208b075875409ecd213ccaf88d2ac7b0fbee0d569b1c902a449e4ef06afb95",
+  "distinct": {
+    "project": "home",
+    "accepted": false
+  },
+  "identity": "27450f7d7bd8cae1d220ac468d8a06a2a116becd1f8484ba29497132a398a16c",
   "data": {
     "project": "home",
     "author": "user_someone_else",

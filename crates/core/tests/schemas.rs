@@ -113,3 +113,14 @@ fn every_examples_dir_names_a_schema() {
         assert!(schemas.contains_key(&name), "examples/{name} matches no schema");
     }
 }
+
+#[test]
+fn the_embedded_schema_list_is_exactly_the_files_in_schemas() {
+    let on_disk: Vec<String> = load_schemas().into_keys().collect();
+    let mut embedded: Vec<String> = issue_dashboard_core::schema::SCHEMAS
+        .iter()
+        .map(|(s, _)| s.to_string())
+        .collect();
+    embedded.sort();
+    assert_eq!(embedded, on_disk);
+}

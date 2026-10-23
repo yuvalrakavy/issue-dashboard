@@ -18,6 +18,7 @@ pub mod lock;
 pub mod observe;
 pub mod outcome;
 pub mod root;
+pub mod schema;
 
 pub use error::{Error, Result};
 pub use event::{Event, Kind};

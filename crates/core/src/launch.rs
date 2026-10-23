@@ -170,6 +170,9 @@ pub struct Launch {
     pub queued_seq: Option<i64>,
     /// Orphans not yet settled; each holds a slot (10.7).
     pub orphans: Vec<Orphan>,
+    /// Orphans already settled. A session that reports again after its settlement is a repeat,
+    /// not a new orphan, so a retry cannot take the slot back.
+    pub settled_orphans: Vec<Orphan>,
     /// The sequence number of the launch's latest event.
     pub last_seq: i64,
 }
@@ -228,7 +231,7 @@ fn record(tx: &mut Tx<'_>, launch_id: &str, data: LaunchData) -> Result<Event> {
     }
     let value = serde_json::to_value(&data)?;
     Ok(tx
-        .record(Kind::Launch, launch_id, distinct, value, Dedupe::IdentityOnly)?
+        .record_valid(Kind::Launch, launch_id, distinct, value, Dedupe::IdentityOnly)?
         .event()
         .clone())
 }
@@ -258,6 +261,7 @@ fn fold(id: &str, events: &[Event]) -> Result<Option<Launch>> {
         reserved_at: None,
         queued_seq: None,
         orphans: Vec::new(),
+        settled_orphans: Vec::new(),
         last_seq: first.seq,
     };
     for e in &events[1..] {
@@ -290,9 +294,14 @@ fn fold(id: &str, events: &[Event]) -> Result<Option<Launch>> {
                 session: d.session.unwrap_or_default(),
                 reported_at: e.time.clone(),
             }),
-            Transition::OrphanSettled => l
-                .orphans
-                .retain(|o| Some(&o.token) != d.token.as_ref() || Some(&o.session) != d.session.as_ref()),
+            Transition::OrphanSettled => {
+                let (settled, open): (Vec<Orphan>, Vec<Orphan>) = l
+                    .orphans
+                    .drain(..)
+                    .partition(|o| Some(&o.token) == d.token.as_ref() && Some(&o.session) == d.session.as_ref());
+                l.orphans = open;
+                l.settled_orphans.extend(settled);
+            }
         }
         l.last_seq = e.seq;
     }
@@ -508,15 +517,26 @@ pub fn reserve_next(
     let all = all(tx.conn())?;
     let mut queued: Vec<&Launch> = all.iter().filter(|l| l.state == State::Queued).collect();
     queued.sort_by_key(|l| l.queued_seq);
+    let mut first_error = None;
     for l in queued {
         if held_item(l, &all).is_some() {
             continue;
         }
-        if let r @ Reservation::Reserved { .. } = try_reserve(tx, l, dispatcher, capacity, &all)? {
-            return Ok(Some(r));
+        // A launch whose recipe can no longer be resolved must not stop other recipes' queues;
+        // its refusal is returned only when nothing could be reserved.
+        match try_reserve(tx, l, dispatcher, capacity, &all) {
+            Ok(r @ Reservation::Reserved { .. }) => return Ok(Some(r)),
+            Ok(Reservation::Queued { .. }) => {}
+            Err(e @ Error::Refused(_)) => {
+                first_error.get_or_insert(e);
+            }
+            Err(e) => return Err(e),
         }
     }
-    Ok(None)
+    match first_error {
+        Some(e) => Err(e),
+        None => Ok(None),
+    }
 }
 
 /// `launch-started` (10.7). Idempotent for a token and session already recorded; a released
@@ -542,7 +562,8 @@ pub fn started(tx: &mut Tx<'_>, token: &str, session: &str) -> Result<StartResul
             })
         }
         State::Started | State::Ended | State::Released => {
-            if l.orphans.iter().any(|o| o.token == token && o.session == session) {
+            let reported = |o: &Orphan| o.token == token && o.session == session;
+            if l.orphans.iter().any(reported) || l.settled_orphans.iter().any(reported) {
                 return Ok(StartResult::Orphan {
                     launch: l.id,
                     repeat: true,
@@ -668,6 +689,12 @@ pub fn withdraw(tx: &mut Tx<'_>, launch_id: &str, decision: &str) -> Result<Move
 /// Settles an orphan, freeing the slot it held.
 pub fn settle_orphan(tx: &mut Tx<'_>, token: &str, session: &str) -> Result<Moved> {
     let l = by_token(tx.conn(), token)?;
+    if l.settled_orphans
+        .iter()
+        .any(|o| o.token == token && o.session == session)
+    {
+        return Ok(moved(&l, l.state, true));
+    }
     if !l.orphans.iter().any(|o| o.token == token && o.session == session) {
         return Err(Error::refused(format!(
             "launch {} has no unsettled orphan for session {session}",

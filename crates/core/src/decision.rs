@@ -12,10 +12,10 @@ use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::Result;
 use crate::docs::{Action, Decision, Priority};
-use crate::event::Kind;
+use crate::event::{Event, Kind};
 use crate::ledger::{self, Dedupe, Recorded, Tx};
+use crate::{Error, Result};
 
 /// The `data` of a `decided` event. Its schema is `schemas/event-decided.schema.json`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -28,10 +28,29 @@ pub struct DecidedData {
     pub document: Decision,
 }
 
-/// Records a page decision as a `decided` event. It is accepted only if its author is
-/// `owner_id` and it belongs to `project`; otherwise it is recorded as refused. Ingesting
-/// the same document again is a no-op.
+/// Records a page decision as a `decided` event, per ingesting project. It is accepted only if
+/// its author is `owner_id` and it belongs to `project`; otherwise it is recorded as refused.
+///
+/// - Ingesting the same document again with the same verdict is a no-op.
+/// - A refusal does not consume the document: a later ingest that accepts it (the right project,
+///   or `owner_id` corrected in the config) is recorded, and the decision takes effect at that
+///   event's place in the sequence.
+/// - Once accepted, a decision stays accepted: a later ingest is a repeat whatever it would say.
+/// - Page documents are never changed, so a different document under an ingested id is refused.
 pub fn ingest(tx: &mut Tx<'_>, project: &str, owner_id: &str, doc: &Decision) -> Result<Recorded> {
+    let earlier: Vec<(Event, DecidedData)> = ledger::events_of(tx.conn(), &doc.id, Kind::Decided)?
+        .into_iter()
+        .map(|e| Ok((e.clone(), serde_json::from_value::<DecidedData>(e.data)?)))
+        .collect::<Result<_>>()?;
+    if let Some((e, _)) = earlier.iter().find(|(_, d)| &d.document != doc) {
+        return Err(Error::refused(format!(
+            "decision {} was already ingested (seq {}) with a different document; page documents are never changed",
+            doc.id, e.seq
+        )));
+    }
+    if let Some((e, _)) = earlier.iter().find(|(_, d)| d.project == project && d.accepted) {
+        return Ok(Recorded::Repeat(e.clone()));
+    }
     let refusal = if doc.project != project {
         Some(format!(
             "decision {} belongs to project {}, not {project}",
@@ -49,12 +68,13 @@ pub fn ingest(tx: &mut Tx<'_>, project: &str, owner_id: &str, doc: &Decision) ->
         refusal,
         document: doc.clone(),
     };
-    tx.record(
+    let distinct = json!({"project": project, "accepted": data.accepted});
+    tx.record_valid(
         Kind::Decided,
         &doc.id,
-        json!({}),
+        distinct,
         serde_json::to_value(data)?,
-        Dedupe::Any,
+        Dedupe::Latest,
     )
 }
 
@@ -67,16 +87,23 @@ pub enum Status {
     Cancelled { by: String },
 }
 
-/// The ingested decisions of `project`, in sequence order.
+/// The ingested decisions of `project`, one per document, in sequence order: the accepting
+/// event if there is one, else the latest refusal.
 fn decided(conn: &Connection, project: &str) -> Result<Vec<DecidedData>> {
-    let mut out = Vec::new();
+    let mut chosen: HashMap<String, (i64, DecidedData)> = HashMap::new();
     for e in ledger::events_by_kind(conn, Kind::Decided)? {
         let d: DecidedData = serde_json::from_value(e.data)?;
-        if d.project == project {
-            out.push(d);
+        if d.project != project {
+            continue;
+        }
+        let keep_earlier = chosen.get(&e.subject).is_some_and(|(_, prev)| prev.accepted);
+        if !keep_earlier {
+            chosen.insert(e.subject.clone(), (e.seq, d));
         }
     }
-    Ok(out)
+    let mut out: Vec<(i64, DecidedData)> = chosen.into_values().collect();
+    out.sort_by_key(|(seq, _)| *seq);
+    Ok(out.into_iter().map(|(_, d)| d).collect())
 }
 
 /// The accepted undo that cancels `id`, if any. An undo cancels its target only while it is

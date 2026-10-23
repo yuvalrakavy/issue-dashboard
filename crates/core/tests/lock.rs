@@ -115,3 +115,22 @@ fn concurrent_commands_serialise_and_none_is_lost() {
     let expected: Vec<i64> = (1..=seqs.len() as i64).collect();
     assert_eq!(seqs, expected, "concurrent exports duplicated or lost a line");
 }
+
+// ---- mutation-test additions ----
+
+#[test]
+fn a_released_lock_leaves_no_holder_line_behind() {
+    let r = temp_root_with(quick("waiter"));
+    let held = RootLock::acquire(&r.root.lock_path(), "holder-command", Duration::from_secs(1)).unwrap();
+    assert!(
+        std::fs::read_to_string(r.root.lock_path())
+            .unwrap()
+            .contains("holder-command")
+    );
+    drop(held);
+    assert_eq!(
+        std::fs::read_to_string(r.root.lock_path()).unwrap().trim(),
+        "",
+        "a waiter could name a holder that has gone"
+    );
+}

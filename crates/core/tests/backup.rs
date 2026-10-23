@@ -377,3 +377,164 @@ fn a_backup_that_disagrees_with_sqlite_is_moved_aside_and_re_exported() {
         assert_eq!(v["event"]["identity"], json!(e.identity));
     }
 }
+
+// ---- mutation-test additions ----
+
+/// Rewrites line `index` of the latest file by `f`, re-checksumming it so the line is
+/// well-formed JSON with a valid checksum.
+fn rewrite_line(root: &Root, index: usize, f: impl FnOnce(&mut issue_dashboard_core::event::Event)) {
+    let file = root.backup().files().unwrap().pop().unwrap();
+    let text = fs::read_to_string(&file).unwrap();
+    let mut lines: Vec<String> = text.lines().map(str::to_string).collect();
+    let mut line: issue_dashboard_core::backup::Line = serde_json::from_str(&lines[index]).unwrap();
+    f(&mut line.event);
+    lines[index] = issue_dashboard_core::backup::Line::of(&line.event).render();
+    fs::write(&file, lines.join("\n") + "\n").unwrap();
+}
+
+#[test]
+fn an_event_stamped_in_an_earlier_month_than_the_latest_file_is_appended_to_the_latest_file() {
+    let r = temp_root();
+    record(&r.root, 0, "A");
+    record(&r.root, 60 * 24 * 10, "B"); // 2026-11-02: starts the November file
+    // A different item, read with the clock back in October: its event is stamped October but
+    // must still be appended to the November file (the same-item observation would be stale
+    // and record nothing, so it cannot show this).
+    let obs = Observation {
+        node_id: "I_kwDOissueB".into(),
+        item: ItemKind::Issue,
+        alias: "example-org/server#404".into(),
+        updated_at: t(5),
+        read_at: t(5),
+        read_id: "read-5".into(),
+        content: json!({"state": "open", "labels": [], "assignees": [],
+            "links": {"parent": null, "sub_issues": [], "blocked_by": [], "blocking": []},
+            "timeline_ids": []}),
+    };
+    r.root.mutate(t(5), |tx| observe::record(tx, &obs)).unwrap();
+    let seqs = backup_seqs(&r.root);
+    let mut sorted = seqs.clone();
+    sorted.sort();
+    assert_eq!(
+        seqs, sorted,
+        "an October event was appended to the October file after November began"
+    );
+    let october = fs::read_to_string(&r.root.backup().files().unwrap()[0]).unwrap();
+    assert!(
+        !october.contains("I_kwDOissueB"),
+        "the October file received a later event"
+    );
+}
+
+#[test]
+fn rebuild_refuses_a_line_whose_identity_does_not_match_its_fields_though_its_checksum_is_valid() {
+    let r = temp_root();
+    record(&r.root, 0, "A");
+    record(&r.root, 1, "B");
+    rewrite_line(&r.root, 1, |e| e.identity = "0".repeat(64));
+    fs::remove_file(r.root.ledger_path()).unwrap();
+    let err = r.root.rebuild(t(3), false).unwrap_err();
+    assert!(matches!(err, Error::CorruptBackup { line: 2, .. }), "{err}");
+}
+
+#[test]
+fn rebuild_refuses_an_event_whose_predecessor_is_not_the_subjects_previous_event() {
+    let r = temp_root();
+    record(&r.root, 0, "A");
+    record(&r.root, 1, "B");
+    record(&r.root, 2, "C");
+    // Line 3 (index 2) is B's observation, whose predecessor is A's (seq 1). Point it at
+    // nothing, keeping sequence number, identity and checksum consistent with that.
+    rewrite_line(&r.root, 2, |e| {
+        assert_eq!(e.pred, 1, "the fixture changed: pick another line");
+        e.pred = 0;
+        e.identity = issue_dashboard_core::event::identity(e.kind, &e.subject, e.pred, &e.distinct);
+    });
+    fs::remove_file(r.root.ledger_path()).unwrap();
+    let err = r.root.rebuild(t(4), false).unwrap_err();
+    assert!(matches!(err, Error::CorruptBackup { line: 3, .. }), "{err}");
+}
+
+#[test]
+fn a_torn_fragment_after_a_corrupt_complete_line_cuts_both_and_keeps_the_good_lines() {
+    let r = temp_root();
+    record(&r.root, 0, "A");
+    record(&r.root, 1, "B");
+    let file = r.root.backup().files().unwrap().pop().unwrap();
+    let text = fs::read_to_string(&file).unwrap();
+    let mut lines: Vec<String> = text.lines().map(str::to_string).collect();
+    let n = lines.len();
+    // The last complete line is corrupt (changed value, old checksum) AND a torn fragment
+    // follows it: one export's lines share one fsync, so a crash can garble both. Both are cut
+    // back to the last good line; SQLite holds their events.
+    let good = lines[..n - 1].join("\n") + "\n";
+    let mut v: Value = serde_json::from_str(&lines[n - 1]).unwrap();
+    v["event"]["data"] = json!({"tampered": true});
+    lines[n - 1] = serde_json::to_string(&v).unwrap();
+    let damaged = lines.join("\n") + "\n{\"checksum\":\"00";
+    fs::write(&file, &damaged).unwrap();
+
+    let repair = r.root.backup().repair_tail().unwrap();
+    assert_eq!(repair.cut_lines, 2);
+    assert_eq!(
+        fs::read_to_string(&file).unwrap(),
+        good,
+        "a good line was cut, or a bad one kept"
+    );
+    record(&r.root, 2, "C");
+    let seqs = backup_seqs(&r.root);
+    assert!(seqs.iter().copied().eq(1..=seqs.len() as i64), "{seqs:?}");
+}
+
+#[test]
+fn an_unterminated_final_line_that_verifies_is_kept_and_terminated() {
+    let r = temp_root();
+    record(&r.root, 0, "A");
+    let file = r.root.backup().files().unwrap().pop().unwrap();
+    let text = fs::read_to_string(&file).unwrap();
+    fs::write(&file, text.trim_end_matches('\n')).unwrap(); // the newline was never written
+    let before = backup_lines(&r.root).len();
+
+    let repair = r.root.backup().repair_tail().unwrap();
+    assert_eq!((repair.cut_lines, repair.cut_bytes), (0, 0));
+    assert!(
+        fs::read_to_string(&file).unwrap().ends_with('\n'),
+        "the line was left unterminated"
+    );
+    // The next append must start on its own line.
+    record(&r.root, 1, "B");
+    let seqs = backup_seqs(&r.root);
+    assert!(backup_lines(&r.root).len() > before);
+    let expected: Vec<i64> = (1..=seqs.len() as i64).collect();
+    assert_eq!(seqs, expected);
+}
+
+#[test]
+fn a_command_that_fails_still_exports_what_an_earlier_crash_left_unexported() {
+    let r = temp_root();
+    record(&r.root, 0, "A");
+    let crashing = with_failpoint(r.path(), Failpoint::AfterCommit);
+    crashing
+        .mutate(t(1), |tx| {
+            tx.record(
+                Kind::Config,
+                "config",
+                json!({"content_hash": "B"}),
+                json!({}),
+                Dedupe::Latest,
+            )
+        })
+        .unwrap_err();
+    let b_seq = *sqlite_seqs(&r.root).last().unwrap();
+    assert!(!backup_seqs(&r.root).contains(&b_seq));
+
+    // The next command is refused inside its own transaction: it never reaches its export,
+    // so only the catch-up before it can bring the backup up to date.
+    r.root
+        .mutate(t(2), |_| Err::<(), _>(Error::refused("refused for the test")))
+        .unwrap_err();
+    assert!(
+        backup_seqs(&r.root).contains(&b_seq),
+        "the earlier crash's event stayed unexported"
+    );
+}

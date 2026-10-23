@@ -4,8 +4,11 @@
   "kind": "decided",
   "subject": "D_20261023_0814_q1w2",
   "pred": 0,
-  "distinct": {},
-  "identity": "1957a58377d6d0e15168922c44649a776459b091ca47abe7d51d3f09540cf0d1",
+  "distinct": {
+    "project": "home",
+    "accepted": true
+  },
+  "identity": "7c398cef3842c4a5d1df69b5b7f6140b5c6925c2f2c8cea441a8f3fadb15bb6c",
   "data": {
     "project": "home",
     "author": "user_01ABCDEF",

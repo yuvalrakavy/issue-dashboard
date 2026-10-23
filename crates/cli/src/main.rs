@@ -2,6 +2,7 @@
 //! the ledger; each prints its result as JSON on stdout, and an error on stderr with the exit
 //! code of chapter 8 (1 refused by a check, 2 a file or environment error).
 
+use std::io::Write;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::Duration;
@@ -43,7 +44,7 @@ struct Cli {
 enum Command {
     /// Recreate the SQLite ledger from the JSON Lines backup, verifying every line (10.2).
     Rebuild {
-        /// Replace an existing ledger.sqlite (it is kept beside, renamed).
+        /// Replace an existing ledger.sqlite (a copy of it is kept beside).
         #[arg(long)]
         force: bool,
     },
@@ -141,11 +142,14 @@ struct OutcomeArgs {
     by: ByArg,
 }
 
-fn now() -> anyhow::Result<DateTime<Utc>> {
-    match std::env::var(ENV_NOW) {
-        Ok(s) => parse_time(&s).context(ENV_NOW),
-        Err(_) => Ok(Utc::now()),
-    }
+/// The command's clock: the fixed time of `ISSUE_DASHBOARD_NOW`, else the system clock. It is
+/// read once the root lock is held. A malformed override is an environment error (exit 2).
+fn clock() -> anyhow::Result<impl Fn() -> DateTime<Utc> + Copy> {
+    let fixed = match std::env::var(ENV_NOW) {
+        Ok(s) => Some(parse_time(&s).map_err(|e| anyhow::anyhow!("{ENV_NOW}: {e}"))?),
+        Err(_) => None,
+    };
+    Ok(move || fixed.unwrap_or_else(Utc::now))
 }
 
 fn options(command: &str) -> anyhow::Result<Options> {
@@ -217,7 +221,7 @@ fn run(cli: Cli) -> anyhow::Result<Value> {
     let dir = cli
         .root
         .context("no tracker root: pass --root or set ISSUE_DASHBOARD_ROOT")?;
-    let now = now()?;
+    let now = clock()?;
     let name = match &cli.command {
         Command::Rebuild { .. } => "rebuild",
         Command::Reserve(_) => "reserve",
@@ -231,7 +235,7 @@ fn run(cli: Cli) -> anyhow::Result<Value> {
 
     Ok(match cli.command {
         Command::Rebuild { force } => {
-            let r = root.rebuild(now, force)?;
+            let r = root.rebuild(now(), force)?;
             json!({
                 "events": r.events,
                 "files": r.files,
@@ -240,8 +244,6 @@ fn run(cli: Cli) -> anyhow::Result<Value> {
             })
         }
         Command::Reserve(a) => {
-            // Read before taking the lock: local files only, but the lock is for the ledger.
-            let config = ConfigSet::load(&dir)?;
             let request: Option<LaunchRequest> = match &a.request {
                 Some(path) => {
                     let text = std::fs::read_to_string(path).with_context(|| path.display().to_string())?;
@@ -259,8 +261,11 @@ fn run(cli: Cli) -> anyhow::Result<Value> {
                     Error::refused(format!("--launch {id} does not match the document's id {}", doc.id)).into(),
                 );
             }
-            let capacity = |recipe: &str| config.recipe(recipe).map(|r| r.capacity);
-            let result = root.mutate(now, |tx| {
+            let result = root.mutate_with_clock(now, |tx| {
+                // Read under the lock (local files only), so a config recorded here is never
+                // older than one another command recorded while this one waited.
+                let config = ConfigSet::load(&dir)?;
+                let capacity = |recipe: &str| config.recipe(recipe).map(|r| r.capacity);
                 config.record(tx)?;
                 if a.next {
                     return Ok(serde_json::to_value(launch::reserve_next(
@@ -290,7 +295,7 @@ fn run(cli: Cli) -> anyhow::Result<Value> {
             }
         }
         Command::LaunchStarted { token, session } => {
-            serde_json::to_value(root.mutate(now, |tx| launch::started(tx, &token, &session))?)?
+            serde_json::to_value(root.mutate_with_clock(now, |tx| launch::started(tx, &token, &session))?)?
         }
         Command::LaunchEnded { token, state } => {
             let state = match state {
@@ -298,7 +303,7 @@ fn run(cli: Cli) -> anyhow::Result<Value> {
                 EndStateArg::Stopped => EndState::Stopped,
                 EndStateArg::Failed => EndState::Failed,
             };
-            serde_json::to_value(root.mutate(now, |tx| launch::ended(tx, &token, state))?)?
+            serde_json::to_value(root.mutate_with_clock(now, |tx| launch::ended(tx, &token, state))?)?
         }
         Command::Release {
             token,
@@ -306,18 +311,18 @@ fn run(cli: Cli) -> anyhow::Result<Value> {
             orphan_session,
         } => {
             let moved = match (orphan_session, dispatcher) {
-                (Some(session), _) => root.mutate(now, |tx| launch::settle_orphan(tx, &token, &session))?,
-                (None, Some(d)) => root.mutate(now, |tx| launch::release(tx, &token, &d))?,
+                (Some(session), _) => root.mutate_with_clock(now, |tx| launch::settle_orphan(tx, &token, &session))?,
+                (None, Some(d)) => root.mutate_with_clock(now, |tx| launch::release(tx, &token, &d))?,
                 (None, None) => unreachable!("clap requires one of them"),
             };
             serde_json::to_value(moved)?
         }
         Command::Unconfirm { token, dispatcher } => {
-            serde_json::to_value(root.mutate(now, |tx| launch::unconfirm(tx, &token, &dispatcher))?)?
+            serde_json::to_value(root.mutate_with_clock(now, |tx| launch::unconfirm(tx, &token, &dispatcher))?)?
         }
         Command::RecordOutcome(a) => {
             let o = outcome_of(&a)?;
-            let r = root.mutate(now, |tx| outcome::record(tx, &o))?;
+            let r = root.mutate_with_clock(now, |tx| outcome::record(tx, &o))?;
             json!({"launch": o.launch, "seq": r.event().seq, "repeat": !r.is_new(), "missing": o.missing})
         }
     })
@@ -327,7 +332,8 @@ fn main() -> ExitCode {
     let cli = Cli::parse();
     match run(cli) {
         Ok(v) => {
-            println!("{v}");
+            // The command has committed; a closed stdout must not turn that into a panic.
+            let _ = writeln!(std::io::stdout(), "{v}");
             ExitCode::SUCCESS
         }
         Err(e) => {

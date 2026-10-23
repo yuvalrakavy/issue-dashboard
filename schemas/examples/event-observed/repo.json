@@ -5,9 +5,10 @@
   "subject": "R_kgDOAbCdEf",
   "pred": 0,
   "distinct": {
-    "content_hash": "a78bac237b4fa57274764d183309a5f2b596173d3e5f17834c99f77f8debf5f6"
+    "content_hash": "a78bac237b4fa57274764d183309a5f2b596173d3e5f17834c99f77f8debf5f6",
+    "alias": "example-org/server"
   },
-  "identity": "1c5461ed58ea2b4a9ae695dc83530d6a64d1cce032ac3a8c9cc7f9a2ed2d3dd0",
+  "identity": "e7b1c91da55657b51f69e6d8dd1733ee16ceaafa178c1c056f1f9c9538d43ec9",
   "data": {
     "item": "repo",
     "alias": "example-org/server",

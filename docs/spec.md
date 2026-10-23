@@ -1302,8 +1302,9 @@ attempt has committed, because the retry then sees that attempt as its predecess
 a new identity. So a repeat is decided by the distinguishing fields: for state-like kinds
 (`config`, `observed`, `exported`) an event equal to the subject's **latest** of its kind is a
 repeat, so A → A is a no-op and A → B → A is recorded; for kinds whose fields never recur
-(`decided`, `suggested`, `item_gone`, `outcome`) an event equal to **any** earlier one is a
-repeat; `launch` events are checked against 10.7's table before they are recorded. The identity
+(`suggested`, `item_gone`, `outcome`) an event equal to **any** earlier one is a repeat;
+`decided` is distinguished by the ingesting project and its verdict (10.10); `launch` events are
+checked against 10.7's table before they are recorded. The identity
 stays unique per event and is what the backup and `rebuild` verify.
 
 | Kind | Identity is the hash of | Recorded when |
@@ -1517,17 +1518,37 @@ them rather than refusing.
 - *Files:* an event goes to the file of its month, or to the latest file if the clock has
   stepped back, so the files in name order are in sequence order and only the latest file is
   ever appended to.
-- *Torn tail:* only one line can be torn. An unterminated final line that still verifies is
-  kept and terminated; one that does not is cut, as is a complete final line that fails to
-  parse or verify. The line before must then verify, or the command refuses.
-- *Disagreement:* every mutating command compares the backup's last line with SQLite's event of
-  that sequence number. If they differ (or the backup is ahead), the backup files are moved to
-  `ledger/diverged-<time>/` and re-exported from SQLite, which is the authority.
-- *`rebuild`* refuses when `ledger.sqlite` exists unless `--force`, which keeps the old file as
-  `ledger.sqlite.before-rebuild-<time>`. It tolerates a torn final line of the latest file and
-  reports it; a corrupt line anywhere else refuses with its file and line number.
-- *Stale observations:* compared by GitHub's `updatedAt`, then by read time, so of two reads
-  with the same `updatedAt` (a change that did not move it) the earlier read is the stale one.
+- *Torn tail:* one export writes its lines under one fsync, so a crash can garble several
+  trailing lines of the latest non-empty file. Every trailing line that fails to parse or verify
+  is cut back to the last good one (SQLite holds their events and re-exports them); an
+  unterminated final line that still verifies is kept and terminated.
+- *Disagreement:* every mutating command verifies the whole backup against SQLite (each line
+  equal to SQLite's event of that sequence number, contiguous from 1). If they differ anywhere,
+  the backup files are moved to `ledger/diverged-<time>/` and re-exported from SQLite, which is
+  the authority. **Open:** this reads the whole backup and ledger on every command; a manifest
+  or hash chain should replace it before the history grows large.
+- *A ledger missing or behind its backup* (a fresh clone, where only the backup is in git; a
+  lost file; an older copy restored) is refused, naming `rebuild`, and never opened empty: a
+  command that re-exported from it would set the newer history aside.
+- *`rebuild`* refuses when `ledger.sqlite` exists unless `--force`, which keeps a copy of the
+  old file as `ledger.sqlite.before-rebuild-<time>` (made unique). The old file is copied, not
+  renamed, and the new one is renamed over it, so a crash at any point leaves a `ledger.sqlite`;
+  a `-wal` or `-shm` beside the target is removed first, since it belongs to the old database.
+  `rebuild` tolerates a torn final line of the latest file and reports it; a corrupt line
+  anywhere else refuses with its file and line number.
+- *Schema version:* the ledger keeps its version in SQLite's `user_version`; a version this build
+  does not know is refused.
+- *Validation:* every event a module records is checked against its kind's schema before the
+  transaction commits, and each config layer against its schema when it is loaded, so values
+  serde's types cannot express (a capacity of 0, `exclude` without `group`, an empty session id,
+  a launch id outside the document-id pattern) are refused, naming the file or the event.
+- *Time:* a command's time is read once it holds the root lock, and `reserve` loads the config
+  under the lock, so neither can be older than what the previous holder recorded.
+- *Stale observations:* compared by GitHub's `updatedAt`, then by read time, at full precision,
+  so of two reads with the same `updatedAt` (a change that did not move it) the earlier read is
+  the stale one. An unchanged read that is fresher still advances the item's freshness, kept in
+  a `freshness` table beside the events (derived, not in the backup); so an older read that
+  commits after it is stale too. A change of alias alone (a rename or transfer) is recorded.
 - *Launches:* 10.3's transition list lacked `withdrawn`, which 10.7's table has; it is added,
   with `orphan_settled`, which frees the slot an orphan holds ("until you settle it", 10.7). A
   recipe's pool is keyed by the recipe's name, across every project and repo using it (for the
@@ -1537,8 +1558,15 @@ them rather than refusing.
   refused. A held issue refuses the reservation without changing the launch. `launch-ended`
   retried is a no-op, and with a different end state is refused. `release` needs the owning
   dispatcher and a reservation older than 15 minutes. `unconfirm` records `reserved` →
-  `unconfirmed`.
-- *Decisions:* a decision naming another project is refused like a non-owner's. An undo cancels
+  `unconfirmed`. A session that reports an orphan again, before or after it is settled, is a
+  repeat, and settling twice is a repeat. `reserve --next` skips a queued launch whose recipe can
+  no longer be resolved, and refuses with that reason only when nothing could be reserved.
+  `launch-started` is authorised by the token alone, not by a dispatcher id (the dispatcher holds
+  the token); so `unconfirmed` → `started` does not check the owner.
+- *Decisions:* a decision naming another project is refused like a non-owner's, but a refusal
+  does not consume the document: ingested again with the right project or a corrected
+  `owner_id`, it is accepted and takes effect at that point in the sequence. Once accepted, it
+  stays accepted. A different document under an ingested id is refused. An undo cancels
   its target only while the undo is not itself cancelled, so undoing an undo restores the
   decision; status is derived from every ingested undo whenever decisions are read, which is
   what makes arrival order irrelevant.

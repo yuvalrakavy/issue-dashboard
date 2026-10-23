@@ -18,8 +18,18 @@
     "distinct": {
       "type": "object",
       "additionalProperties": false,
-      "required": [],
-      "properties": {}
+      "required": [
+        "project",
+        "accepted"
+      ],
+      "properties": {
+        "project": {
+          "$ref": "common.schema.json#/$defs/projectName"
+        },
+        "accepted": {
+          "type": "boolean"
+        }
+      }
     },
     "data": {
       "type": "object",

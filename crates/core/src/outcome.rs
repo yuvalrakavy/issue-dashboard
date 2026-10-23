@@ -64,5 +64,5 @@ pub fn record(tx: &mut Tx<'_>, outcome: &Outcome) -> Result<Recorded> {
             outcome.launch, existing.seq
         )));
     }
-    tx.record(Kind::Outcome, &outcome.launch, json!({}), data, Dedupe::Any)
+    tx.record_valid(Kind::Outcome, &outcome.launch, json!({}), data, Dedupe::Any)
 }

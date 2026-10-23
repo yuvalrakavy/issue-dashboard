@@ -24,11 +24,12 @@ pub enum Dedupe {
     /// A repeat when the subject's LATEST event of this kind has the same distinguishing
     /// fields. A value that returns to an earlier state (A → B → A) is recorded, since it
     /// differs from the latest; a retry against an unchanged latest is not. For state-like
-    /// kinds: `config`, `observed`, `exported`.
+    /// kinds: `config`, `observed`, `exported`; and `decided`, distinguished by project and
+    /// verdict (see `decision::ingest`).
     Latest,
     /// A repeat when ANY event of this subject and kind has the same distinguishing fields.
-    /// For kinds whose distinguishing fields never legitimately recur: `decided` (the
-    /// document id is the subject), `suggested` (run id + decision), `item_gone`, `outcome`.
+    /// For kinds whose distinguishing fields never legitimately recur: `suggested` (run id +
+    /// decision), `item_gone` (the confirming read), `outcome` (one per launch).
     Any,
     /// Only an identical identity is a repeat; the caller has already decided. For `launch`,
     /// whose transitions are checked against 10.7's table before recording.
@@ -73,6 +74,20 @@ CREATE TRIGGER IF NOT EXISTS events_no_delete BEFORE DELETE ON events
     BEGIN SELECT RAISE(ABORT, 'the ledger is append-only'); END;
 ";
 
+/// The ledger's schema version, kept in SQLite's `user_version`.
+const VERSION: i64 = 1;
+
+/// Not an event table: the freshest (updatedAt, read time) each item was read at, kept so an
+/// unchanged read still makes an older read stale (10.4 step 2). It is derived and not in the
+/// backup; after `rebuild` it starts from the recorded observations.
+const FRESHNESS: &str = "
+CREATE TABLE IF NOT EXISTS freshness (
+    node       TEXT PRIMARY KEY,
+    updated_at TEXT NOT NULL,
+    read_at    TEXT NOT NULL
+);
+";
+
 const COLUMNS: &str = "seq, time, kind, subject, pred, distinct_json, identity, data";
 
 /// An open ledger file.
@@ -94,8 +109,30 @@ impl Ledger {
         }
         // FULL: a committed transaction survives a power loss, not only a process crash.
         conn.execute_batch("PRAGMA synchronous = FULL;")?;
-        conn.execute_batch(SCHEMA)?;
+        let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+        match version {
+            0 => conn.execute_batch(&format!("{SCHEMA} PRAGMA user_version = {VERSION};"))?,
+            VERSION => conn.execute_batch(SCHEMA)?,
+            other => {
+                return Err(Error::refused(format!(
+                    "{} has ledger schema version {other}; this build knows version {VERSION}",
+                    path.display()
+                )));
+            }
+        }
+        conn.execute_batch(FRESHNESS)?;
         Ok(Ledger { conn })
+    }
+
+    /// Opens an existing ledger; refuses, naming `rebuild`, when there is none.
+    pub fn open_existing(path: &Path) -> Result<Ledger> {
+        if !path.exists() {
+            return Err(Error::refused(format!(
+                "there is no ledger at {}; `issue-dashboard rebuild` recreates it from the backup",
+                path.display()
+            )));
+        }
+        Ledger::open(path)
     }
 
     /// Starts a write transaction; events recorded through it carry `now` as their time.
@@ -184,6 +221,28 @@ impl<'a> Tx<'a> {
             identity,
             data,
         }))
+    }
+
+    /// [`Tx::record`], refusing a new event that does not match its kind's schema
+    /// (`schemas/event-<kind>.schema.json`); the transaction is then rolled back by the caller's
+    /// error. Every module records through this; plain `record` is for tests of the ledger itself.
+    pub fn record_valid(
+        &mut self,
+        kind: Kind,
+        subject: &str,
+        distinct: Value,
+        data: Value,
+        dedupe: Dedupe,
+    ) -> Result<Recorded> {
+        let r = self.record(kind, subject, distinct, data, dedupe)?;
+        if let Recorded::New(e) = &r {
+            crate::schema::validate(
+                &crate::schema::event_stem(kind),
+                &format!("the {} event for {subject}", kind.as_str()),
+                &serde_json::to_value(e)?,
+            )?;
+        }
+        Ok(r)
     }
 
     pub fn commit(self) -> Result<()> {
@@ -279,6 +338,15 @@ pub fn events_after(conn: &Connection, after: i64) -> Result<Vec<Event>> {
         conn,
         &format!("SELECT {COLUMNS} FROM events WHERE seq > ?1 ORDER BY seq"),
         [after],
+    )
+}
+
+/// Every event with `after < seq <= upto`, in order.
+pub fn events_between(conn: &Connection, after: i64, upto: i64) -> Result<Vec<Event>> {
+    query(
+        conn,
+        &format!("SELECT {COLUMNS} FROM events WHERE seq > ?1 AND seq <= ?2 ORDER BY seq"),
+        [after, upto],
     )
 }
 

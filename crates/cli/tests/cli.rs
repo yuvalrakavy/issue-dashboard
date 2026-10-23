@@ -285,8 +285,16 @@ fn an_orphan_is_settled_with_release_orphan_session() {
         .to_string();
     t.ok(&["launch-started", "--token", &token, "--session", "S1"]);
     t.ok(&["launch-started", "--token", &token, "--session", "S2"]);
-    t.ok(&["release", "--token", &token, "--orphan-session", "S2"]);
-    t.fails(&["release", "--token", &token, "--orphan-session", "S2"], 1);
+    assert_eq!(
+        t.ok(&["release", "--token", &token, "--orphan-session", "S2"])["repeat"],
+        false
+    );
+    // A retried settle is a no-op (10.4: lifecycle commands are retried).
+    assert_eq!(
+        t.ok(&["release", "--token", &token, "--orphan-session", "S2"])["repeat"],
+        true
+    );
+    t.fails(&["release", "--token", &token, "--orphan-session", "S3"], 1);
 }
 
 #[test]
@@ -414,4 +422,23 @@ fn rebuild_refuses_a_corrupt_middle_line_with_exit_1() {
     fs::remove_file(t.path().join("ledger.sqlite")).unwrap();
     let err = t.fails(&["rebuild"], 1);
     assert!(err.contains("2026-10.jsonl:2"), "{err}");
+}
+
+// ---- mutation-test additions ----
+
+#[test]
+fn record_outcome_names_every_field_it_could_not_supply() {
+    let t = Tracker::new(2);
+    t.reserve_request("L1", "I_kwDOissueA", "D1");
+    let o = t.ok(&["record-outcome", "--launch", "L1", "--landed", "false"]);
+    assert_eq!(
+        o["missing"],
+        json!([
+            "commit",
+            "wall_clock_minutes",
+            "gate_runs",
+            "findings_fixed",
+            "context_tokens"
+        ])
+    );
 }

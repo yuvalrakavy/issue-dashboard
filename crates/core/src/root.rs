@@ -60,6 +60,29 @@ fn companions(db: &Path) -> [PathBuf; 2] {
     [PathBuf::from(format!("{s}-wal")), PathBuf::from(format!("{s}-shm"))]
 }
 
+fn sync_dir(dir: &Path) -> Result<()> {
+    fs::File::open(dir)?.sync_all()?;
+    Ok(())
+}
+
+/// A consistent copy of an SQLite database, WAL included. Falls back to copying the files
+/// when SQLite cannot read it (a damaged ledger is still worth keeping).
+fn copy_database(from: &Path, to: &Path) -> Result<()> {
+    let vacuumed =
+        rusqlite::Connection::open(from).and_then(|c| c.execute("VACUUM INTO ?1", [to.to_string_lossy()]).map(|_| ()));
+    if vacuumed.is_err() {
+        fs::copy(from, to)?;
+        for (f, t) in companions(from).into_iter().zip(companions(to)) {
+            if f.exists() {
+                fs::copy(f, t)?;
+            }
+        }
+    }
+    let copied = fs::File::open(to)?;
+    copied.sync_all()?;
+    Ok(())
+}
+
 impl Root {
     pub fn new(dir: impl Into<PathBuf>, options: Options) -> Root {
         Root {
@@ -105,10 +128,27 @@ impl Root {
     /// commits, exports what it recorded, and releases the lock. `f` must not make network
     /// calls (10.4).
     pub fn mutate<T>(&self, now: DateTime<Utc>, f: impl FnOnce(&mut Tx<'_>) -> Result<T>) -> Result<T> {
+        self.mutate_with_clock(|| now, f)
+    }
+
+    /// [`Root::mutate`] with the command's time read from `clock` once the lock is held, so an
+    /// event's time is never earlier than events recorded by whoever held the lock before.
+    pub fn mutate_with_clock<T>(
+        &self,
+        clock: impl FnOnce() -> DateTime<Utc>,
+        f: impl FnOnce(&mut Tx<'_>) -> Result<T>,
+    ) -> Result<T> {
         let _lock = self.lock()?;
-        let now = format_time(now);
-        let mut ledger = Ledger::open(&self.ledger_path())?;
+        let now = format_time(clock());
         let backup = self.backup();
+        // Never create an empty ledger beside a backup: that is a lost ledger, which rebuild
+        // restores; opening one here would make every later command refuse until --force.
+        if !self.ledger_path().exists()
+            && let Some(last) = backup.last_event()?
+        {
+            return Err(crate::backup::behind(last.seq, 0));
+        }
+        let mut ledger = Ledger::open(&self.ledger_path())?;
         backup.catch_up(&mut ledger, &now, &mut |_| Ok(()))?;
 
         let out = {
@@ -122,15 +162,15 @@ impl Root {
         Ok(out)
     }
 
-    /// Opens the ledger for reading, without the lock.
+    /// Opens the ledger for reading, without the lock. Refuses when there is no ledger yet,
+    /// rather than creating one.
     pub fn read<T>(&self, f: impl FnOnce(&Ledger) -> Result<T>) -> Result<T> {
-        fs::create_dir_all(&self.dir)?;
-        let ledger = Ledger::open(&self.ledger_path())?;
+        let ledger = Ledger::open_existing(&self.ledger_path())?;
         f(&ledger)
     }
 
     /// Recreates `ledger.sqlite` from the backup (10.2), verifying every line. Refuses when
-    /// `ledger.sqlite` exists unless `force`, which moves the old file aside first.
+    /// `ledger.sqlite` exists unless `force`, which keeps a copy of the old file beside it.
     pub fn rebuild(&self, now: DateTime<Utc>, force: bool) -> Result<RebuildReport> {
         let _lock = self.lock()?;
         let stamp = format_time(now);
@@ -160,20 +200,30 @@ impl Root {
             fresh.conn().execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")?;
         }
 
+        // The old ledger is COPIED aside, never renamed away, so at every moment there is a
+        // ledger.sqlite: a crash here leaves the old one in place, and the next command still
+        // works on it.
         let mut moved_aside = None;
         if target.exists() {
             let safe: String = stamp
                 .chars()
                 .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
                 .collect();
-            let aside = self.dir.join(format!("ledger.sqlite.before-rebuild-{safe}"));
-            fs::rename(&target, &aside)?;
-            for (from, to) in companions(&target).into_iter().zip(companions(&aside)) {
-                if from.exists() {
-                    fs::rename(from, to)?;
-                }
+            let mut aside = self.dir.join(format!("ledger.sqlite.before-rebuild-{safe}"));
+            let mut n = 1;
+            while aside.exists() {
+                n += 1;
+                aside = self.dir.join(format!("ledger.sqlite.before-rebuild-{safe}-{n}"));
             }
+            copy_database(&target, &aside)?;
             moved_aside = Some(aside);
+        }
+        // A WAL left beside the target belongs to the old database; the new file must never
+        // be opened next to it.
+        for p in companions(&target) {
+            if p.exists() {
+                fs::remove_file(p)?;
+            }
         }
         fs::rename(&tmp, &target)?;
         for p in companions(&tmp) {
@@ -181,6 +231,7 @@ impl Root {
                 fs::remove_file(p)?;
             }
         }
+        sync_dir(&self.dir)?;
         Ok(RebuildReport {
             events: events.len(),
             files: backup.files()?.len(),
