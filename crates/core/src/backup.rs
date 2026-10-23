@@ -416,11 +416,12 @@ impl Backup {
         let mut tail = TailRepair::default();
         let mut last_of: HashMap<(String, Kind), i64> = HashMap::new();
         for (fi, path) in files.iter().enumerate() {
-            let (lines, _) = split_lines(&contents[fi]);
+            let (lines, terminated) = split_lines(&contents[fi]);
             for (li, line) in lines.iter().enumerate() {
                 if Some(fi) == tail_file && Some(li) >= tail_start {
+                    let newline = u64::from(terminated || li + 1 < lines.len());
                     tail.cut_lines += 1;
-                    tail.cut_bytes += line.len() as u64 + 1;
+                    tail.cut_bytes += line.len() as u64 + newline;
                     continue;
                 }
                 let corrupt = |reason: String| Error::CorruptBackup {

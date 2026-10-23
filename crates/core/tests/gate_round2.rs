@@ -172,6 +172,43 @@ fn an_unreadable_backup_file_is_an_error_not_a_divergence() {
     assert_eq!(moved, 0, "a read error moved the backup aside");
 }
 
+// --- round 3 ----------------------------------------------------------------------------------
+
+#[test]
+fn a_forced_rebuild_refuses_while_a_reader_keeps_the_wal_from_being_checkpointed() {
+    let r = temp_root();
+    history(&r.root);
+    // A reader holds an old snapshot; later commits stay in the WAL past its mark.
+    let reader = rusqlite::Connection::open(r.root.ledger_path()).unwrap();
+    reader.execute_batch("BEGIN; SELECT COUNT(*) FROM events;").unwrap();
+    let _: i64 = reader
+        .query_row("SELECT COUNT(*) FROM events", [], |row| row.get(0))
+        .unwrap();
+    observe_label(&r.root, "e", 10);
+    let before = r.root.read(|l| ledger::max_seq(l.conn())).unwrap();
+    let result = r.root.rebuild(t(11), true);
+    assert!(
+        matches!(&result, Err(Error::Refused(m)) if m.contains("in use")),
+        "{result:?}"
+    );
+    drop(reader);
+    assert_eq!(r.root.read(|l| ledger::max_seq(l.conn())).unwrap(), before);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_missing_ledger_beside_an_unreadable_backup_is_an_io_error_not_a_rebuild_hint() {
+    use std::os::unix::fs::PermissionsExt;
+    let r = temp_root();
+    history(&r.root);
+    fs::remove_file(r.root.ledger_path()).unwrap();
+    let file = r.root.backup().files().unwrap().pop().unwrap();
+    fs::set_permissions(&file, fs::Permissions::from_mode(0o000)).unwrap();
+    let result = r.root.mutate(t(10), |_| Ok(()));
+    let _ = fs::set_permissions(&file, fs::Permissions::from_mode(0o644));
+    assert!(matches!(result, Err(Error::Io(_))), "{result:?}");
+}
+
 #[test]
 fn an_identical_refusal_is_a_repeat_whatever_another_project_ingested_in_between() {
     let r = temp_root();

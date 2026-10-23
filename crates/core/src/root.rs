@@ -70,22 +70,36 @@ fn sync_dir(dir: &Path) -> Result<()> {
 ///
 /// It first checkpoints the old database's WAL into its main file, so that removing the `-wal`
 /// afterwards (before the new file is renamed into place) loses nothing even if the process
-/// dies in between.
+/// dies in between. SQLite reports a checkpoint a reader blocked as a successful row saying
+/// "busy"; that is refused, since the WAL then still holds committed events. When SQLite cannot
+/// open or checkpoint the file at all, the main file and its WAL are copied together, so the
+/// copy holds everything the old pair did.
 fn copy_database(from: &Path, to: &Path) -> Result<()> {
-    let vacuumed = rusqlite::Connection::open(from).and_then(|c| {
-        c.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))?;
-        c.execute("VACUUM INTO ?1", [to.to_string_lossy()]).map(|_| ())
+    let checkpointed = rusqlite::Connection::open(from).and_then(|c| {
+        let (busy, log, done): (i64, i64, i64) = c.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+        })?;
+        Ok((c, busy != 0 || done < log))
     });
-    if vacuumed.is_err() {
-        fs::copy(from, to)?;
-        for (f, t) in companions(from).into_iter().zip(companions(to)) {
-            if f.exists() {
-                fs::copy(f, t)?;
+    match checkpointed {
+        Ok((_, true)) => {
+            return Err(Error::refused(format!(
+                "{} is in use: a reader keeps its WAL from being checkpointed; retry rebuild when it has finished",
+                from.display()
+            )));
+        }
+        Ok((c, false)) => c.execute("VACUUM INTO ?1", [to.to_string_lossy()]).map(|_| ())?,
+        Err(_) => {
+            fs::copy(from, to)?;
+            for (f, t) in companions(from).into_iter().zip(companions(to)) {
+                if f.exists() {
+                    fs::copy(f, &t)?;
+                    fs::File::open(&t)?.sync_all()?;
+                }
             }
         }
     }
-    let copied = fs::File::open(to)?;
-    copied.sync_all()?;
+    fs::File::open(to)?.sync_all()?;
     Ok(())
 }
 
@@ -151,7 +165,12 @@ impl Root {
         // restores; opening one here would make every later command refuse until --force.
         // Read-only: a torn tail here is left for rebuild, which tolerates it.
         if !self.ledger_path().exists() && backup.holds_events()? {
-            let held = backup.read_all().map_or(0, |(events, _)| events.len() as i64);
+            let held = match backup.read_all() {
+                Ok((events, _)) => events.len() as i64,
+                // Corruption is for rebuild to report; a failed read is reported as itself.
+                Err(Error::CorruptBackup { .. }) => 0,
+                Err(e) => return Err(e),
+            };
             return Err(crate::backup::behind(held, 0));
         }
         let mut ledger = Ledger::open(&self.ledger_path())?;
