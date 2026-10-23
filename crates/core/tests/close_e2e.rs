@@ -27,11 +27,23 @@ fn gh(args: &[&str]) -> String {
     String::from_utf8_lossy(&out.stdout).trim().to_string()
 }
 
-/// Deletes the scratch repository however the test ends.
+/// Deletes the scratch repository however the test ends, and only a name this test makes.
 struct Scratch(String);
+
+/// Whether `repo` is `<owner>/issue-dashboard-e2e-<YYYYmmddHHMMSS>`, the only name the test creates.
+fn is_scratch_name(repo: &str, owner: &str) -> bool {
+    repo.strip_prefix(owner)
+        .and_then(|r| r.strip_prefix("/issue-dashboard-e2e-"))
+        .is_some_and(|stamp| stamp.len() == 14 && stamp.bytes().all(|b| b.is_ascii_digit()))
+}
 
 impl Drop for Scratch {
     fn drop(&mut self) {
+        let owner = self.0.split('/').next().unwrap_or_default().to_string();
+        if !is_scratch_name(&self.0, &owner) {
+            eprintln!("not deleting {}: not a name this test creates", self.0);
+            return;
+        }
         let _ = Command::new("gh").args(["repo", "delete", &self.0, "--yes"]).status();
     }
 }
@@ -131,4 +143,20 @@ fn a_close_and_its_undo_against_a_scratch_repository() {
     assert_eq!(issue_now(&repo, &number)["state"], "OPEN");
     let ack = d["acks"].as_array().unwrap().iter().find(|a| a["decision"] == "D_e2e_undo").unwrap().clone();
     assert_eq!(ack["result"], "applied", "{ack}");
+}
+
+// Kills: the scratch guard deleting a repo whose name the test did not make.
+#[test]
+fn only_a_scratch_name_is_ever_deleted() {
+    assert!(is_scratch_name("me/issue-dashboard-e2e-20261023170000", "me"));
+    for other in [
+        "me/issue-dashboard",
+        "me/Store",
+        "other/issue-dashboard-e2e-20261023170000",
+        "me/issue-dashboard-e2e-2026102317000",
+        "me/issue-dashboard-e2e-2026102317000x",
+        "me/issue-dashboard-e2e-20261023170000/x",
+    ] {
+        assert!(!is_scratch_name(other, "me"), "{other}");
+    }
 }
