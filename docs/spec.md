@@ -873,7 +873,8 @@ its approval at once: the sheet already shows the reason and the exact comment, 
 applies it without a further plan. The plans above remain for closes the tracker proposes.
 
 **Recently closed, and dismissing a closed item.** The Inbox ends with every issue closed in
-the last N days (the project's `recently_closed_days`, 7 when unset), newest first. Each
+the last N days (the project's `recently_closed_days`, 7 when unset, and never longer than
+`history_days`, since an item closed before that is neither read nor kept), newest first. Each
 entry says when and how it was closed (GitHub's reason, or "closed from the dashboard as …"),
 the tracked pull requests whose closing references name it, and its matched sessions. A close
 made from the dashboard keeps its **Reopen** while Undo is allowed (5.2a); every other close

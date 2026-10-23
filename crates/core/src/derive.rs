@@ -637,7 +637,8 @@ pub fn derive(
         "default_view": p.default_view,
         "groups": groups(config, project)?,
         "sync_interval_minutes": sync_minutes,
-        "recently_closed_days": p.recently_closed_days.unwrap_or(DEFAULT_RECENTLY_CLOSED_DAYS),
+        // No longer than the history window: an item closed before it is neither read nor kept.
+        "recently_closed_days": p.recently_closed_days.unwrap_or(DEFAULT_RECENTLY_CLOSED_DAYS).min(history_days),
         // The page tells a viewer whose actions would all be refused (10.5): none is set yet.
         "owner_id": Some(p.owner_id.as_str()).filter(|o| !o.is_empty() && *o != PENDING_OWNER),
     });

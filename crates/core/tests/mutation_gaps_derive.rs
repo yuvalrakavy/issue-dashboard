@@ -1596,4 +1596,16 @@ fn the_recently_closed_window_is_carried_into_the_meta_document() {
     std::fs::write(&p, text).unwrap();
     let d = doc(&run_with(&t, &gh(), &no_pages(), 1));
     assert_eq!(d["meta"]["recently_closed_days"], 3);
+    // Longer than the history window: the window, since nothing closed before it is kept.
+    let text = std::fs::read_to_string(&p).unwrap().replace(
+        "history_days = 30
+recently_closed_days = 3
+",
+        "history_days = 2
+recently_closed_days = 7
+",
+    );
+    std::fs::write(&p, text).unwrap();
+    let d = doc(&run_with(&t, &gh(), &no_pages(), 2));
+    assert_eq!(d["meta"]["recently_closed_days"], 2);
 }

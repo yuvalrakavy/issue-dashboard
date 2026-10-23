@@ -116,6 +116,11 @@ test("a dismissed issue leaves the list at once, comes back on Undo or refusal, 
   const u = { id: "D_undo", action: "undo", target: { decision: d.id, item: "I_7" } };
   assert.equal(D.dismissed(Object.assign({}, i, { dismissed_at: "2026-10-23T08:00:00Z" }), [d, u], []), false, "Undo shows it at once");
   assert.equal(D.dismissed(i, [d, u], [{ decision: "D_undo", result: "refused" }]), true, "a refused undo leaves it dismissed");
+  const u2 = { id: "D_redo", action: "undo", target: { decision: "D_undo", item: "I_7" } };
+  assert.equal(D.dismissed(i, [d, u, u2], []), true, "an undo of the undo dismisses it again, as decision.rs resolves the chain");
+  assert.equal(D.dismissed(i, [d, u, u2], [{ decision: d.id, result: "applied" }, { decision: "D_undo", result: "cancelled" }, { decision: "D_redo", result: "applied" }]), true);
+  assert.equal(D.dismissed(i, [d], [{ decision: d.id, result: "cancelled" }]), false, "cancelled by an undo past the page's list: the tracker's word");
+  assert.equal(D.dismissed(i, [d, u2], [{ decision: "D_undo", result: "cancelled" }]), true, "an undo cancelled by the tracker, itself past the list, takes nothing back");
   assert.equal(D.dismissed(Object.assign({}, i, { dismissed_at: "2026-10-23T08:00:00Z" }), [], []), true, "the tracker's word when the page holds none");
   const again = Object.assign({}, i, { closed_at: "2026-10-23T07:00:00Z", dismissed_at: null });
   assert.equal(D.dismissed(again, [d], []), false, "a dismissal of an earlier close does not hide a later one");

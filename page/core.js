@@ -436,17 +436,36 @@
     return open.length ? open[0].doc : null;
   }
 
-  // Whether the owner dismissed this closed item (5.8): the page wrote a dismiss of this very
-  // close that no cycle refused and no undo took back, or, when the page holds none, the tracker
-  // says so (dismissed_at). The page's own decisions win so a Dismiss or its Undo shows at once.
+  // Whether the owner dismissed this closed item (5.8): the page holds a dismiss of this very
+  // close still in force, or, when it holds none, the tracker says so (dismissed_at). The page's
+  // own decisions win so a Dismiss or its Undo shows at once.
   function dismissed(issue, decisions, acks) {
     if (issue.state === "open" || !issue.closed_at) return false;
-    const refused = new Set((acks || []).filter((a) => a.result === "refused").map((a) => a.decision));
-    const undone = new Set((decisions || []).filter((d) => d.action === "undo" && d.target && !refused.has(d.id)).map((d) => d.target.decision));
     const mine = (decisions || []).filter((d) =>
       d.action === "dismiss_closed" && d.target && d.target.item === issue.id && d.value && Date.parse(d.value.closed_at) === Date.parse(issue.closed_at));
-    if (mine.length) return mine.some((d) => !undone.has(d.id) && !refused.has(d.id));
-    return Boolean(issue.dismissed_at);
+    if (!mine.length) return Boolean(issue.dismissed_at);
+    const result = new Map((acks || []).map((a) => [a.decision, a.result]));
+    const undos = new Map();
+    for (const d of decisions || []) {
+      if (d.action !== "undo" || !d.target || !d.target.decision) continue;
+      if (!undos.has(d.target.decision)) undos.set(d.target.decision, []);
+      undos.get(d.target.decision).push(d.id);
+    }
+    // In force: not refused, and not cancelled by an undo in force, along a chain of undos as
+    // decision.rs resolves it. With no undo of it on the page (one past the list's limit), a
+    // `cancelled` ack is the tracker's word.
+    const visiting = new Set();
+    const inForce = (id) => {
+      if (visiting.has(id)) return true;
+      if (result.get(id) === "refused") return false;
+      const by = undos.get(id) || [];
+      if (!by.length) return result.get(id) !== "cancelled";
+      visiting.add(id);
+      const cancelled = by.some(inForce);
+      visiting.delete(id);
+      return !cancelled;
+    };
+    return mine.some((d) => inForce(d.id));
   }
 
   const CLOSED_AS = { completed: "completed", not_planned: "not planned", duplicate: "a duplicate" };
