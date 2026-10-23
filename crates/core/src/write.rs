@@ -11,6 +11,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
+use chrono::{DateTime, Utc};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -232,10 +233,24 @@ fn observed(conn: &Connection, id: &str) -> Result<Option<ObservedData>> {
 }
 
 /// The preconditions of a close (10.10). `Err` in the inner result is the refusal.
-fn close_target(conn: &Connection, config: &ConfigSet, project: &str, d: &Decision) -> Result<std::result::Result<(Issue, CloseValue), String>> {
+fn close_target(
+    conn: &Connection,
+    config: &ConfigSet,
+    project: &str,
+    d: &Decision,
+    now: DateTime<Utc>,
+) -> Result<std::result::Result<(Issue, CloseValue), String>> {
     let Some(v) = d.value.as_ref().and_then(|v| v.close.clone()) else {
         return Ok(Err("a close needs value.close".into()));
     };
+    // Past the ack window the page no longer shows the close as pending (5.3), so it is not
+    // made: the owner closes again if they still want it.
+    if now - parse_time(&d.created_at)? > chrono::Duration::days(derive::ACK_DAYS) {
+        return Ok(Err(format!(
+            "the decision is older than {} days, so the page no longer showed it as pending",
+            derive::ACK_DAYS
+        )));
+    }
     let Some(item) = d.target.item.clone() else {
         return Ok(Err("a close needs target.item".into()));
     };
@@ -348,7 +363,7 @@ pub fn step(
         let p = progress(w.session.ledger().conn(), &d.id)?;
         // A crash's intent is settled first, whatever the decision's status now.
         if let OpState::Intended(e) = &p.close
-            && !w.reconcile_close(e)?
+            && !w.reconcile_close(e, &status, &d, config)?
         {
             continue;
         }
@@ -360,7 +375,8 @@ pub fn step(
         let p = progress(w.session.ledger().conn(), &d.id)?;
         match status {
             Status::Applied if p.close == OpState::None => {
-                match close_target(w.session.ledger().conn(), config, project, &d)? {
+                let now = w.session.now();
+                match close_target(w.session.ledger().conn(), config, project, &d, now)? {
                     Ok((issue, v)) => w.close(&issue, &v)?,
                     Err(why) => w.failed(Op::Close, "precondition", &why)?,
                 }
@@ -466,7 +482,9 @@ impl Step<'_, '_, '_> {
     }
 
     /// Settles a close whose intent has no result. Returns false when GitHub could not be read.
-    fn reconcile_close(&mut self, intent: &Event) -> Result<bool> {
+    /// An issue still open is closed only if the decision still stands and its preconditions
+    /// still hold: an undo, or a repo made read-only, since the crash means no close.
+    fn reconcile_close(&mut self, intent: &Event, status: &Status, decision: &Decision, config: &ConfigSet) -> Result<bool> {
         let d = &intent.data;
         let issue = Issue {
             item: d["item"].as_str().unwrap_or("").to_string(),
@@ -493,6 +511,15 @@ impl Step<'_, '_, '_> {
             };
             let result = if ours { "closed" } else { "already_closed" };
             self.applied(Op::Close, result, now.closed_at, true)?;
+            return Ok(true);
+        }
+        if !matches!(status, Status::Applied) {
+            self.failed(Op::Close, "precondition", "undone before the close was made")?;
+            return Ok(true);
+        }
+        let now_t = self.session.now();
+        if let Err(why) = close_target(self.session.ledger().conn(), config, self.project, decision, now_t)? {
+            self.failed(Op::Close, "precondition", &why)?;
             return Ok(true);
         }
         // gh posts the comment before it closes: a comment of the intended text since the
@@ -594,6 +621,11 @@ pub fn standing_closes(conn: &Connection, project: &str) -> Result<BTreeMap<Stri
             .find(|e| e.distinct["op"] == "close")
             .map(|e| e.time)
             .unwrap_or_default();
+        // A later close that found the issue already closed (two tabs, one issue) does not hide
+        // the close that closed it.
+        if closed["result"] != "closed" && out.get(&item).is_some_and(|s: &Value| s["result"] == "closed") {
+            continue;
+        }
         let undo_open = matches!(status, Status::Applied) && p.reopen == OpState::None && closed["result"] == "closed";
         let undo_allowed = undo_open && observed_still_ours(conn, &item, closed)?;
         out.insert(

@@ -394,6 +394,11 @@ impl Session<'_> {
         &self.ledger
     }
 
+    /// The session's clock.
+    pub fn now(&self) -> DateTime<Utc> {
+        (self.clock)()
+    }
+
     /// One transaction: committed, then exported to the backup before this returns.
     pub fn commit<T>(&mut self, f: impl FnOnce(&mut Tx<'_>) -> Result<T>) -> Result<T> {
         let now = format_time((self.clock)());

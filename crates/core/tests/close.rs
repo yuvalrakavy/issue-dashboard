@@ -721,3 +721,96 @@ fn without_a_writer_a_close_stays_pending() {
 }
 
 use issue_dashboard_core::Root;
+
+// Round 2, S2-1. Kills: a close applied however old the decision, after the page has stopped
+// showing it as pending.
+#[test]
+fn a_close_older_than_the_ack_window_is_refused_and_never_written() {
+    let t = fixture_root();
+    let w = FakeGh::new();
+    let (x, alias) = tracked(&t, &w, STORE, "issue");
+    // The decision is from 08:00 on the recording day; the cycle runs 31 days later.
+    let late = 31 * 24 * 60;
+    run(&t, &w, &pages(&[close("D_old", &x, &alias, CloseReason::Completed, None, "done")]), late).unwrap();
+    assert!(w.writes().is_empty(), "{:?}", w.calls());
+    let ev = write_events(&t, "D_old");
+    assert_eq!(kinds(&t, "D_old"), vec![Kind::WriteFailed]);
+    assert_eq!(ev[0].1["stage"], "precondition");
+    assert!(ev[0].1["why"].as_str().unwrap().contains("older than"), "{}", ev[0].1);
+    // One day inside the window is still applied.
+    let t2 = fixture_root();
+    let w2 = FakeGh::new();
+    let (x2, alias2) = tracked(&t2, &w2, STORE, "issue");
+    run(&t2, &w2, &pages(&[close("D_new", &x2, &alias2, CloseReason::Completed, None, "done")]), 29 * 24 * 60).unwrap();
+    assert_eq!(w2.writes().len(), 1, "{:?}", w2.calls());
+}
+
+// Round 2, S2-2. Kills: a crash's dangling intent closing an issue whose close was undone.
+#[test]
+fn an_undo_after_a_crash_left_the_close_intended_never_closes_the_issue() {
+    let t = fixture_root_with(Options {
+        failpoint: Some(Failpoint::AfterWriteIntent),
+        ..Options::default()
+    });
+    let w = FakeGh::new();
+    let (x, alias) = tracked(&t, &w, STORE, "issue");
+    let c = close("D_close", &x, &alias, CloseReason::NotPlanned, None, NOT_PLANNED);
+    assert!(run(&t, &w, &pages(&[c.clone()]), 10).is_err());
+    assert_eq!(kinds(&t, "D_close"), vec![Kind::WriteIntended]);
+
+    let healed = Root::new(t.path(), Options::default());
+    let p = pages(&[c, undo("D_undo", "D_close")]);
+    let r = cycle::cycle_with_writes(&healed, &gh(), Some(&w), "home", &p, &|| at(20), PAGE).unwrap();
+    assert!(w.writes().is_empty(), "nothing is closed, commented or reopened: {:?}", w.calls());
+    assert_eq!(w.get(&alias).state, "OPEN");
+    assert_eq!(kinds(&t, "D_close"), vec![Kind::WriteIntended, Kind::WriteFailed]);
+    let d = doc(&r);
+    assert_eq!(ack(&d, "D_close")["result"], "cancelled");
+    assert_eq!(ack(&d, "D_undo")["result"], "applied");
+}
+
+// Round 2, S2-2. Kills: a dangling intent re-sent without re-checking the close's preconditions.
+#[test]
+fn a_dangling_intent_on_a_repo_made_read_only_since_is_not_closed() {
+    let t = fixture_root_with(Options {
+        failpoint: Some(Failpoint::AfterWriteIntent),
+        ..Options::default()
+    });
+    let w = FakeGh::new();
+    let (x, alias) = tracked(&t, &w, STORE, "issue");
+    let p = pages(&[close("D_close", &x, &alias, CloseReason::NotPlanned, None, NOT_PLANNED)]);
+    assert!(run(&t, &w, &p, 10).is_err());
+
+    let home = t.path().join("projects/home.toml");
+    let text = std::fs::read_to_string(&home).unwrap();
+    let marked = text.replacen("repo = \"yuvalrakavy/Store\"\n", "repo = \"yuvalrakavy/Store\"\nread_only = true\n", 1);
+    assert_ne!(text, marked, "the fixture names Store as a member");
+    std::fs::write(&home, marked).unwrap();
+
+    let healed = Root::new(t.path(), Options::default());
+    cycle::cycle_with_writes(&healed, &gh(), Some(&w), "home", &p, &|| at(20), PAGE).unwrap();
+    assert!(w.writes().is_empty(), "{:?}", w.calls());
+    let ev = write_events(&t, "D_close");
+    assert_eq!(kinds(&t, "D_close"), vec![Kind::WriteIntended, Kind::WriteFailed]);
+    assert!(ev[1].1["why"].as_str().unwrap().contains("read-only"), "{}", ev[1].1);
+}
+
+// Round 2, S2-3. Kills: a second close of a closed issue hiding the first close's Undo.
+#[test]
+fn a_second_close_of_the_same_issue_keeps_the_first_closes_undo() {
+    let t = fixture_root();
+    let w = FakeGh::new();
+    let (x, alias) = tracked(&t, &w, STORE, "issue");
+    let a = close("D_a", &x, &alias, CloseReason::NotPlanned, None, NOT_PLANNED);
+    let b = close("D_b", &x, &alias, CloseReason::Completed, None, "done");
+    run(&t, &w, &pages(&[a.clone(), b.clone()]), 10).unwrap();
+    assert_eq!(w.writes().len(), 1, "closed once: {:?}", w.calls());
+    assert_eq!(write_events(&t, "D_b")[1].1["result"], "already_closed");
+    // Its own close is still the one shown, with Undo, on the cycle after (the observation now
+    // shows the close).
+    let r = run(&t, &w, &pages(&[a, b]), 20).unwrap();
+    let d = doc(&r);
+    let standing = &issue(&d, &x)["dashboard_close"];
+    assert_eq!(standing["decision"], "D_a", "{standing}");
+    assert_eq!(standing["result"], "closed");
+}
