@@ -1297,6 +1297,15 @@ repeated command safe. Because the predecessor is part of it, a value that retur
 earlier state (a configuration A → B → A, a label removed and put back) is a new occurrence and
 is recorded; a retry of the same command against the same predecessor is not.
 
+*Correction (build, 10.10):* the identity alone cannot make a retry a no-op once the first
+attempt has committed, because the retry then sees that attempt as its predecessor and computes
+a new identity. So a repeat is decided by the distinguishing fields: for state-like kinds
+(`config`, `observed`, `exported`) an event equal to the subject's **latest** of its kind is a
+repeat, so A → A is a no-op and A → B → A is recorded; for kinds whose fields never recur
+(`decided`, `suggested`, `item_gone`, `outcome`) an event equal to **any** earlier one is a
+repeat; `launch` events are checked against 10.7's table before they are recorded. The identity
+stays unique per event and is what the backup and `rebuild` verify.
+
 | Kind | Identity is the hash of | Recorded when |
 |---|---|---|
 | `config` | the configuration's content | a command sees a configuration it has not recorded |
@@ -1305,7 +1314,7 @@ is recorded; a retry of the same command against the same predecessor is not.
 | `decided` | the page document's id | ingest reads a page decision; it carries the author's user id (10.5) |
 | `view_saved`, `request` | the page document's id | ingest reads a saved view or a request (a brief preview, on-demand triage) |
 | `suggested` | triage run id + item + decision kind | the triage session records a suggestion |
-| `launch` | launch id + transition (`requested`, `reserved`, `queued`, `started`, `ended`, `released`, `unconfirmed`, `orphan`) + token | 10.7; only the transitions in 10.7's table are legal, and a command refuses any other |
+| `launch` | launch id + transition (`requested`, `reserved`, `queued`, `started`, `ended`, `released`, `unconfirmed`, `withdrawn`, `orphan`, `orphan_settled`) + token (+ the session, for `started` and the orphan transitions) | 10.7; only the transitions in 10.7's table are legal, and a command refuses any other |
 | `outcome` | launch id | a session records its outcome |
 | `exported` | the export cursor's new value | 10.2 |
 
@@ -1490,6 +1499,50 @@ them: in the project config `owner_id` (10.5), `time_limits_days` (per priority,
 values and the launch document's `kind` values; a launch document names its `recipe`, whose
 pool it takes a slot from. The filing block allows unknown keys, since 2.6 keeps and reports
 them rather than refusing.
+
+**The ledger (`crates/core`).**
+
+- *Repeats:* see the correction under 10.3.
+- *Append-only* is enforced by SQLite triggers that refuse an `UPDATE` or `DELETE` of an event.
+  Sequence numbers are contiguous from 1; `rebuild` checks that.
+- *Checksum:* each backup line's checksum is the sha256 of its event's canonical JSON, so a
+  change of whitespace in a line is harmless and a change of content is caught. `rebuild` and
+  the tail check also recompute each event's identity, and `rebuild` checks each predecessor.
+- *The export cursor* is the value of the latest `exported` event. The backup is always
+  appended from its own last sequence number, not from the cursor, so a crash between the
+  append and the cursor update (or a lost cursor) can neither duplicate nor skip a line. An
+  `exported` event is recorded only when non-`exported` events passed the cursor, so a command
+  that records nothing adds nothing; the `exported` event itself reaches the backup with the
+  next command.
+- *Files:* an event goes to the file of its month, or to the latest file if the clock has
+  stepped back, so the files in name order are in sequence order and only the latest file is
+  ever appended to.
+- *Torn tail:* only one line can be torn. An unterminated final line that still verifies is
+  kept and terminated; one that does not is cut, as is a complete final line that fails to
+  parse or verify. The line before must then verify, or the command refuses.
+- *Disagreement:* every mutating command compares the backup's last line with SQLite's event of
+  that sequence number. If they differ (or the backup is ahead), the backup files are moved to
+  `ledger/diverged-<time>/` and re-exported from SQLite, which is the authority.
+- *`rebuild`* refuses when `ledger.sqlite` exists unless `--force`, which keeps the old file as
+  `ledger.sqlite.before-rebuild-<time>`. It tolerates a torn final line of the latest file and
+  reports it; a corrupt line anywhere else refuses with its file and line number.
+- *Stale observations:* compared by GitHub's `updatedAt`, then by read time, so of two reads
+  with the same `updatedAt` (a change that did not move it) the earlier read is the stale one.
+- *Launches:* 10.3's transition list lacked `withdrawn`, which 10.7's table has; it is added,
+  with `orphan_settled`, which frees the slot an orphan holds ("until you settle it", 10.7). A
+  recipe's pool is keyed by the recipe's name, across every project and repo using it (for the
+  owner to confirm: a recipe shared by several repos then shares one pool). The queue is first
+  in, first out: a new request queues behind an earlier queued launch of the same recipe that
+  could take the slot. `reserve` retried returns the recorded token; another dispatcher is
+  refused. A held issue refuses the reservation without changing the launch. `launch-ended`
+  retried is a no-op, and with a different end state is refused. `release` needs the owning
+  dispatcher and a reservation older than 15 minutes. `unconfirm` records `reserved` →
+  `unconfirmed`.
+- *Decisions:* a decision naming another project is refused like a non-owner's. An undo cancels
+  its target only while the undo is not itself cancelled, so undoing an undo restores the
+  decision; status is derived from every ingested undo whenever decisions are read, which is
+  what makes arrival order irrelevant.
+- *Outcomes:* one per launch; the same record again is a no-op, a different one is refused.
 
 ## Claims checked
 

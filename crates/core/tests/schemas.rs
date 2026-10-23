@@ -2,38 +2,17 @@
 //! `schemas/examples/<schema>/` validates against its schema, and every example whose file
 //! name starts with `bad-` is refused by it.
 
+mod common;
+
 use std::collections::BTreeMap;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
+use common::{ID_BASE, schemas_dir, validator_for};
 use serde_json::Value;
-
-const ID_BASE: &str = "https://github.com/yuvalrakavy/issue-dashboard/schemas/";
-
-fn schemas_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../schemas")
-}
 
 /// Schemas that hold only shared definitions and have no instances of their own.
 const DEFINITIONS_ONLY: &[&str] = &["common"];
-
-struct LocalRetriever {
-    dir: PathBuf,
-}
-
-impl jsonschema::Retrieve for LocalRetriever {
-    fn retrieve(
-        &self,
-        uri: &jsonschema::Uri<String>,
-    ) -> Result<Value, Box<dyn std::error::Error + Send + Sync>> {
-        let name = uri
-            .as_str()
-            .strip_prefix(ID_BASE)
-            .ok_or_else(|| format!("refusing to fetch a schema outside this repo: {uri}"))?;
-        let text = fs::read_to_string(self.dir.join(name))?;
-        Ok(serde_json::from_str(&text)?)
-    }
-}
 
 fn load_schemas() -> BTreeMap<String, Value> {
     let mut out = BTreeMap::new();
@@ -48,15 +27,6 @@ fn load_schemas() -> BTreeMap<String, Value> {
         }
     }
     out
-}
-
-pub fn validator_for(schema: &Value) -> jsonschema::Validator {
-    jsonschema::options()
-        .with_draft(jsonschema::Draft::Draft202012)
-        .should_validate_formats(true)
-        .with_retriever(LocalRetriever { dir: schemas_dir() })
-        .build(schema)
-        .unwrap_or_else(|e| panic!("schema does not compile: {e}"))
 }
 
 fn load_example(path: &Path) -> Value {
