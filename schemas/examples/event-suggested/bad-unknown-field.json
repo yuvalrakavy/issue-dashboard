@@ -1,0 +1,32 @@
+{
+  "seq": 9,
+  "time": "2026-10-23T08:00:00Z",
+  "kind": "suggested",
+  "subject": "I_kwDOAbCdEf5xYz34",
+  "pred": 0,
+  "distinct": {
+    "run_id": "triage-20261023",
+    "decision": "type"
+  },
+  "identity": "b5cfd064c825bd05489650d211bd5d5fa96af54b261407fdb469212257d49026",
+  "data": {
+    "project": "home",
+    "run_id": "triage-20261023",
+    "suggestion": {
+      "item": "I_kwDOAbCdEf5xYz34",
+      "alias": "example-org/server#405",
+      "decision": "type",
+      "answer": "bug",
+      "probabilities": {
+        "bug": 0.91,
+        "todo": 0.07,
+        "decision": 0.01,
+        "docs": 0.01
+      },
+      "backend": "claude",
+      "evaluated": false,
+      "reason": "the body describes a crash on a valid input",
+      "confidence_text": "high"
+    }
+  }
+}

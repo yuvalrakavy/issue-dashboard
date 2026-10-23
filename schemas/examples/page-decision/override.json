@@ -1,0 +1,14 @@
+{
+  "id": "D_20261023_0816_t5y6",
+  "project": "home",
+  "author": "user_01ABCDEF",
+  "created_at": "2026-10-23T08:16:00Z",
+  "action": "set_override",
+  "target": {
+    "item": "I_kwDOAbCdEf5xYz34"
+  },
+  "value": {
+    "priority": "p0"
+  },
+  "reason": "blocks the release this week"
+}

@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yuvalrakavy/issue-dashboard/schemas/config-repo-file.schema.json",
+  "title": "Config: a repo file",
+  "description": ".issue-dashboard.toml at the root of a repo you own (1.1): the repo's own areas, launch recipe and docs.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [],
+  "properties": {
+    "schema": {
+      "const": 1
+    },
+    "areas": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "uniqueItems": true
+    },
+    "launch": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "capacity",
+          "workspace",
+          "release",
+          "gate",
+          "land"
+        ],
+        "properties": {
+          "capacity": {
+            "description": "The size of the recipe's pool of launch slots (10.7).",
+            "type": "integer",
+            "minimum": 1
+          },
+          "workspace": {
+            "type": "string",
+            "minLength": 1
+          },
+          "release": {
+            "type": "string",
+            "minLength": 1
+          },
+          "gate": {
+            "type": "object",
+            "minProperties": 1,
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "run",
+                "minutes"
+              ],
+              "properties": {
+                "run": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "minutes": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            }
+          },
+          "land": {
+            "type": "string",
+            "minLength": 1
+          },
+          "process": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "docs": {
+      "description": "Docs to name in briefs (7.5).",
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    }
+  }
+}

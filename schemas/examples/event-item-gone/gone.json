@@ -1,0 +1,16 @@
+{
+  "seq": 4,
+  "time": "2026-10-23T08:00:00Z",
+  "kind": "item_gone",
+  "subject": "I_kwDOAbCdEf5xYz34",
+  "pred": 0,
+  "distinct": {
+    "read_id": "full-20261023"
+  },
+  "identity": "3c952e791578e54454ed9d9e19b582a0e3c1c17135ec1b9a028f02bfc904bff2",
+  "data": {
+    "alias": "example-org/server#404",
+    "read_id": "full-20261023",
+    "read_at": "2026-10-23T08:00:00Z"
+  }
+}

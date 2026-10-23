@@ -1,0 +1,349 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yuvalrakavy/issue-dashboard/schemas/doc-issue.schema.json",
+  "title": "Tracker document: issues",
+  "description": "One issue or pull request: the snapshot row (2.4) plus its rank and score terms (chapter 6). The document id is the node id.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "alias",
+    "kind",
+    "title",
+    "state",
+    "type",
+    "areas",
+    "modifiers",
+    "priority",
+    "status",
+    "created_at",
+    "updated_at",
+    "idle_days",
+    "limit_breached",
+    "links",
+    "commits",
+    "author",
+    "outside",
+    "rank",
+    "score"
+  ],
+  "properties": {
+    "id": {
+      "$ref": "common.schema.json#/$defs/nodeId"
+    },
+    "alias": {
+      "$ref": "common.schema.json#/$defs/alias"
+    },
+    "kind": {
+      "enum": [
+        "issue",
+        "pull_request"
+      ]
+    },
+    "title": {
+      "type": "string"
+    },
+    "state": {
+      "enum": [
+        "open",
+        "closed",
+        "merged"
+      ]
+    },
+    "type": {
+      "anyOf": [
+        {
+          "$ref": "common.schema.json#/$defs/type"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "areas": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "modifiers": {
+      "type": "array",
+      "items": {
+        "$ref": "common.schema.json#/$defs/modifier"
+      },
+      "uniqueItems": true
+    },
+    "priority": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "value",
+        "source",
+        "label",
+        "project",
+        "override"
+      ],
+      "properties": {
+        "value": {
+          "anyOf": [
+            {
+              "$ref": "common.schema.json#/$defs/priority"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "source": {
+          "anyOf": [
+            {
+              "enum": [
+                "override",
+                "project",
+                "label"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "label": {
+          "anyOf": [
+            {
+              "$ref": "common.schema.json#/$defs/priority"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "project": {
+          "anyOf": [
+            {
+              "$ref": "common.schema.json#/$defs/priority"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "override": {
+          "anyOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "value",
+                "reason"
+              ],
+              "properties": {
+                "value": {
+                  "$ref": "common.schema.json#/$defs/priority"
+                },
+                "reason": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "stale": {
+                  "type": "boolean"
+                }
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "effective": {
+          "description": "After blocker elevation (6.1).",
+          "anyOf": [
+            {
+              "$ref": "common.schema.json#/$defs/priority"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "github_shows": {
+          "description": "The label when another project set it (1.5).",
+          "anyOf": [
+            {
+              "$ref": "common.schema.json#/$defs/priority"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "status": {
+      "enum": [
+        "new",
+        "untriaged",
+        "needs-decision",
+        "in-progress",
+        "blocked",
+        "ready",
+        "umbrella",
+        "draft",
+        "conflicting",
+        "checks-failing",
+        "waiting-on-author",
+        "checks-running",
+        "approved",
+        "needs-review"
+      ]
+    },
+    "created_at": {
+      "$ref": "common.schema.json#/$defs/timestamp"
+    },
+    "updated_at": {
+      "$ref": "common.schema.json#/$defs/timestamp"
+    },
+    "idle_days": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "limit_breached": {
+      "type": "boolean"
+    },
+    "links": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "blocked_by",
+        "blocks",
+        "parent",
+        "children"
+      ],
+      "properties": {
+        "blocked_by": {
+          "type": "array",
+          "items": {
+            "$ref": "common.schema.json#/$defs/alias"
+          }
+        },
+        "blocks": {
+          "type": "array",
+          "items": {
+            "$ref": "common.schema.json#/$defs/alias"
+          }
+        },
+        "parent": {
+          "anyOf": [
+            {
+              "$ref": "common.schema.json#/$defs/alias"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "children": {
+          "type": "array",
+          "items": {
+            "$ref": "common.schema.json#/$defs/alias"
+          }
+        }
+      }
+    },
+    "commits": {
+      "type": "array",
+      "items": {
+        "$ref": "common.schema.json#/$defs/commit"
+      }
+    },
+    "author": {
+      "type": "string",
+      "minLength": 1
+    },
+    "outside": {
+      "type": "boolean"
+    },
+    "rank": {
+      "anyOf": [
+        {
+          "type": "integer",
+          "minimum": 1
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "score": {
+      "anyOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "cost_of_delay",
+            "value",
+            "time_criticality",
+            "risk_opportunity",
+            "job_size",
+            "confidence",
+            "score"
+          ],
+          "properties": {
+            "cost_of_delay": {
+              "type": "number",
+              "minimum": 0
+            },
+            "value": {
+              "type": "number",
+              "minimum": 0
+            },
+            "time_criticality": {
+              "type": "number",
+              "minimum": 0
+            },
+            "risk_opportunity": {
+              "type": "number",
+              "minimum": 0
+            },
+            "job_size": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "confidence": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "score": {
+              "type": "number",
+              "minimum": 0
+            }
+          }
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "untranslated_labels": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "launch": {
+      "anyOf": [
+        {
+          "$ref": "common.schema.json#/$defs/docId"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "stale": {
+      "type": "boolean"
+    }
+  }
+}

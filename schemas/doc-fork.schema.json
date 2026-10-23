@@ -1,0 +1,162 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yuvalrakavy/issue-dashboard/schemas/doc-fork.schema.json",
+  "title": "Tracker document: forks",
+  "description": "A dependency served from a fork (chapter 3), its delta, its state and how far behind its base is.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "consumer",
+    "manifest",
+    "dependency",
+    "fork",
+    "upstream",
+    "pinned",
+    "state",
+    "delta",
+    "links",
+    "base_version",
+    "latest_version",
+    "releases_behind",
+    "security_release"
+  ],
+  "properties": {
+    "id": {
+      "$ref": "common.schema.json#/$defs/docId"
+    },
+    "consumer": {
+      "$ref": "common.schema.json#/$defs/repoName"
+    },
+    "manifest": {
+      "description": "path:line of the dependency line.",
+      "type": "string",
+      "minLength": 1
+    },
+    "dependency": {
+      "type": "string",
+      "minLength": 1
+    },
+    "fork": {
+      "$ref": "common.schema.json#/$defs/repoName"
+    },
+    "upstream": {
+      "$ref": "common.schema.json#/$defs/repoName"
+    },
+    "pinned": {
+      "$ref": "common.schema.json#/$defs/commit"
+    },
+    "state": {
+      "enum": [
+        "not_offered",
+        "under_review",
+        "merged_unreleased",
+        "released",
+        "partly_released"
+      ]
+    },
+    "delta": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "commit",
+          "state"
+        ],
+        "properties": {
+          "commit": {
+            "$ref": "common.schema.json#/$defs/commit"
+          },
+          "state": {
+            "enum": [
+              "unaccounted",
+              "not_offered",
+              "under_review",
+              "merged_unreleased",
+              "released"
+            ]
+          },
+          "matched_by": {
+            "anyOf": [
+              {
+                "enum": [
+                  "pull_request",
+                  "patch_id",
+                  "squash"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "upstream_change": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      }
+    },
+    "links": {
+      "type": "array",
+      "items": {
+        "$ref": "common.schema.json#/$defs/alias"
+      }
+    },
+    "base_version": {
+      "anyOf": [
+        {
+          "type": "string",
+          "minLength": 1
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "latest_version": {
+      "anyOf": [
+        {
+          "type": "string",
+          "minLength": 1
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "releases_behind": {
+      "anyOf": [
+        {
+          "type": "integer",
+          "minimum": 0
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "security_release": {
+      "type": "boolean"
+    },
+    "go_back_to": {
+      "anyOf": [
+        {
+          "type": "string",
+          "minLength": 1
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  }
+}

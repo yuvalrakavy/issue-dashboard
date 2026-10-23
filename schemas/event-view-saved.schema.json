@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yuvalrakavy/issue-dashboard/schemas/event-view-saved.schema.json",
+  "title": "Ledger event: view_saved",
+  "description": "Ingest read a saved view (5.6).",
+  "allOf": [
+    {
+      "$ref": "common.schema.json#/$defs/eventEnvelope"
+    }
+  ],
+  "properties": {
+    "kind": {
+      "const": "view_saved"
+    },
+    "subject": {
+      "$ref": "common.schema.json#/$defs/docId"
+    },
+    "distinct": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [],
+      "properties": {}
+    },
+    "data": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "project",
+        "document"
+      ],
+      "properties": {
+        "project": {
+          "$ref": "common.schema.json#/$defs/projectName"
+        },
+        "document": {
+          "$ref": "page-view.schema.json"
+        }
+      }
+    }
+  }
+}

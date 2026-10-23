@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yuvalrakavy/issue-dashboard/schemas/event-exported.schema.json",
+  "title": "Ledger event: exported",
+  "description": "The export cursor's new value (10.2).",
+  "allOf": [
+    {
+      "$ref": "common.schema.json#/$defs/eventEnvelope"
+    }
+  ],
+  "properties": {
+    "kind": {
+      "const": "exported"
+    },
+    "subject": {
+      "const": "ledger"
+    },
+    "distinct": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "cursor"
+      ],
+      "properties": {
+        "cursor": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "data": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "cursor"
+      ],
+      "properties": {
+        "cursor": {
+          "description": "Every event with seq <= cursor is in the JSON Lines backup.",
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    }
+  }
+}

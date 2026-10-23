@@ -1,0 +1,14 @@
+{
+  "seq": 18,
+  "time": "2026-10-23T08:00:00Z",
+  "kind": "exported",
+  "subject": "cursor",
+  "pred": 0,
+  "distinct": {
+    "cursor": 17
+  },
+  "identity": "de5338332d27c0314c773b3e40ef39f5a0070a97c0798dd0c2d5174317ddd284",
+  "data": {
+    "cursor": 17
+  }
+}

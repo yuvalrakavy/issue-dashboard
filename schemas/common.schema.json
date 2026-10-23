@@ -1,0 +1,329 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yuvalrakavy/issue-dashboard/schemas/common.schema.json",
+  "title": "Shared definitions",
+  "description": "Definitions shared by the other schemas. Has no instances of its own.",
+  "$defs": {
+    "nodeId": {
+      "description": "A GitHub node id: permanent, survives renames and transfers (10.2). Also a valid database document id (5.3).",
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]+$",
+      "minLength": 1
+    },
+    "docId": {
+      "description": "A dashboard database document id: letters, digits, _ and - only (5.3).",
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]+$",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "repoName": {
+      "description": "owner/name of a GitHub repo.",
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
+    },
+    "alias": {
+      "description": "The current owner/repo#N of an issue or pull request, for display (1.8).",
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#[1-9][0-9]*$"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "commit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{7,40}$"
+    },
+    "token": {
+      "description": "A launch reservation token, carried in the launched session's title (7.3).",
+      "type": "string",
+      "pattern": "^res-[0-9a-f]{32}$"
+    },
+    "projectName": {
+      "description": "A project's config file stem (<root>/projects/<project>.toml).",
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9_-]*$"
+    },
+    "type": {
+      "enum": [
+        "bug",
+        "todo",
+        "decision",
+        "docs"
+      ]
+    },
+    "priority": {
+      "enum": [
+        "p0",
+        "p1",
+        "p2",
+        "p3"
+      ]
+    },
+    "modifier": {
+      "enum": [
+        "needs_decision",
+        "in_progress",
+        "self_contained",
+        "partial",
+        "umbrella",
+        "good_first_issue",
+        "help_wanted"
+      ]
+    },
+    "authorAssociation": {
+      "enum": [
+        "OWNER",
+        "MEMBER",
+        "COLLABORATOR",
+        "CONTRIBUTOR",
+        "FIRST_TIME_CONTRIBUTOR",
+        "FIRST_TIMER",
+        "NONE"
+      ]
+    },
+    "launchTransition": {
+      "description": "A launch's transitions (10.7). orphan and orphan_settled are recorded alongside a launch, never as its state.",
+      "enum": [
+        "requested",
+        "queued",
+        "reserved",
+        "unconfirmed",
+        "started",
+        "ended",
+        "released",
+        "withdrawn",
+        "orphan",
+        "orphan_settled"
+      ]
+    },
+    "endState": {
+      "enum": [
+        "landed",
+        "stopped",
+        "failed"
+      ]
+    },
+    "routing": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "model",
+        "effort"
+      ],
+      "properties": {
+        "model": {
+          "type": "string",
+          "minLength": 1
+        },
+        "effort": {
+          "enum": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ]
+        },
+        "workspace": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        }
+      }
+    },
+    "scopeEntry": {
+      "description": "One entry of a view's include or exclude list (5.6).",
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "maxProperties": 1,
+      "properties": {
+        "repo": {
+          "$ref": "#/$defs/repoName"
+        },
+        "group": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "links": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "parent",
+        "sub_issues",
+        "blocked_by",
+        "blocking"
+      ],
+      "properties": {
+        "parent": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/nodeId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sub_issues": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/nodeId"
+          }
+        },
+        "blocked_by": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/nodeId"
+          }
+        },
+        "blocking": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/nodeId"
+          }
+        }
+      }
+    },
+    "suggestionBody": {
+      "description": "A triage suggestion as the triage session records it (7.1, 5.8).",
+      "type": "object",
+      "required": [
+        "item",
+        "alias",
+        "decision",
+        "answer",
+        "probabilities",
+        "backend",
+        "evaluated"
+      ],
+      "properties": {
+        "item": {
+          "$ref": "#/$defs/nodeId"
+        },
+        "alias": {
+          "$ref": "#/$defs/alias"
+        },
+        "decision": {
+          "description": "The decision seam question this answers.",
+          "enum": [
+            "type",
+            "area",
+            "severity",
+            "reach",
+            "priority",
+            "likely_fixed",
+            "duplicate",
+            "support_question",
+            "instructs_agent",
+            "routing"
+          ]
+        },
+        "answer": {
+          "type": [
+            "string",
+            "boolean"
+          ]
+        },
+        "probabilities": {
+          "description": "The probability of each allowed answer.",
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          }
+        },
+        "backend": {
+          "type": "string",
+          "minLength": 1
+        },
+        "evaluated": {
+          "description": "false while the backend is unevaluated for this decision (7.1 cold start).",
+          "type": "boolean"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "from_reporter": {
+          "description": "The suggestion repeats a request in outside text (4.2).",
+          "type": "boolean"
+        },
+        "related": {
+          "description": "The other item, for duplicate.",
+          "$ref": "#/$defs/nodeId"
+        },
+        "commit": {
+          "description": "The fixing commit, for likely_fixed.",
+          "$ref": "#/$defs/commit"
+        }
+      }
+    },
+    "eventEnvelope": {
+      "description": "The fields every ledger event has (10.3). identity = sha256 of the canonical JSON (sorted keys, no whitespace) of {kind, subject, pred, distinct}.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "seq",
+        "time",
+        "kind",
+        "subject",
+        "pred",
+        "distinct",
+        "identity",
+        "data"
+      ],
+      "properties": {
+        "seq": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "time": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "kind": {
+          "enum": [
+            "config",
+            "observed",
+            "item_gone",
+            "decided",
+            "view_saved",
+            "request",
+            "suggested",
+            "launch",
+            "outcome",
+            "exported"
+          ]
+        },
+        "subject": {
+          "type": "string",
+          "minLength": 1
+        },
+        "pred": {
+          "description": "The sequence number of the subject's previous event of this kind; 0 for the first.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "distinct": {
+          "type": "object"
+        },
+        "identity": {
+          "$ref": "#/$defs/sha256"
+        },
+        "data": {
+          "type": "object"
+        }
+      }
+    }
+  }
+}

@@ -1272,7 +1272,8 @@ value can be recomputed for any point in the log.
 committed to monthly JSON Lines files (`<root>/ledger/2026-10.jsonl`) and fsyncs them, then
 advances an export cursor stored in the ledger. Each line holds one event with its sequence
 number and a checksum of the line. On start, any command first checks the file's tail:
-a final line that does not parse or fails its checksum (a torn write) is cut off, events whose
+a final line that does not parse or fails its checksum (a torn write) is cut off (as built,
+the whole trailing run of such lines, 10.10), events whose
 sequence number is already in the file are not appended again, and events past the cursor are
 exported. So a crash between the append and the cursor update neither loses nor duplicates an
 event. The files are committed to git; `issue-dashboard rebuild` recreates the SQLite file from
@@ -1297,6 +1298,16 @@ repeated command safe. Because the predecessor is part of it, a value that retur
 earlier state (a configuration A → B → A, a label removed and put back) is a new occurrence and
 is recorded; a retry of the same command against the same predecessor is not.
 
+*Correction (build, 10.10):* the identity alone cannot make a retry a no-op once the first
+attempt has committed, because the retry then sees that attempt as its predecessor and computes
+a new identity. So a repeat is decided by the distinguishing fields: for state-like kinds
+(`config`, `observed`, `exported`) an event equal to the subject's **latest** of its kind is a
+repeat, so A → A is a no-op and A → B → A is recorded; for kinds whose fields never recur
+(`suggested`, `item_gone`, `outcome`) an event equal to **any** earlier one is a repeat;
+`decided` is distinguished by the ingesting project and its verdict (10.10); `launch` events are
+checked against 10.7's table before they are recorded. The identity
+stays unique per event and is what the backup and `rebuild` verify.
+
 | Kind | Identity is the hash of | Recorded when |
 |---|---|---|
 | `config` | the configuration's content | a command sees a configuration it has not recorded |
@@ -1305,7 +1316,7 @@ is recorded; a retry of the same command against the same predecessor is not.
 | `decided` | the page document's id | ingest reads a page decision; it carries the author's user id (10.5) |
 | `view_saved`, `request` | the page document's id | ingest reads a saved view or a request (a brief preview, on-demand triage) |
 | `suggested` | triage run id + item + decision kind | the triage session records a suggestion |
-| `launch` | launch id + transition (`requested`, `reserved`, `queued`, `started`, `ended`, `released`, `unconfirmed`, `orphan`) + token | 10.7; only the transitions in 10.7's table are legal, and a command refuses any other |
+| `launch` | launch id + transition (`requested`, `reserved`, `queued`, `started`, `ended`, `released`, `unconfirmed`, `withdrawn`, `orphan`, `orphan_settled`) + token (+ the session, for `started` and the orphan transitions) | 10.7; only the transitions in 10.7's table are legal, and a command refuses any other |
 | `outcome` | launch id | a session records its outcome |
 | `exported` | the export cursor's new value | 10.2 |
 
@@ -1475,6 +1486,108 @@ show:
   reconciled before the cycle classifies other observations;
 - **undo** only where a fresh read of the item's full timeline shows no other change to the
   same label or state since the operation.
+
+### 10.10 As built: phase 1
+
+Notes added while building phase 1, for the owner to review. Each is either a choice the spec
+left open or a correction to it.
+
+**Schemas (`schemas/`).** One JSON Schema (draft 2020-12) per event kind, page document,
+tracker document, the filing block and each config layer; `schemas/examples/<schema>/` holds
+valid examples and `bad-*` ones that must be refused, checked by the test suite. Names the
+spec mentions but does not spell, chosen by the build and reversible until something consumes
+them: in the project config `owner_id` (10.5), `time_limits_days` (per priority, 2.3),
+`sync_interval_minutes` (7.2), `routing` (by launch kind, 7.4); the page decision's `action`
+values and the launch document's `kind` values; a launch document names its `recipe`, whose
+pool it takes a slot from. The filing block allows unknown keys, since 2.6 keeps and reports
+them rather than refusing.
+
+**The ledger (`crates/core`).**
+
+- *Repeats:* see the correction under 10.3.
+- *Append-only* is enforced by SQLite triggers that refuse an `UPDATE` or `DELETE` of an event.
+  Sequence numbers are contiguous from 1; `rebuild` checks that.
+- *Checksum:* each backup line's checksum is the sha256 of its event's canonical JSON, so a
+  change of whitespace in a line is harmless and a change of content is caught. `rebuild` and
+  the tail check also recompute each event's identity, and `rebuild` checks each predecessor.
+- *The export cursor* is the value of the latest `exported` event. The backup is always
+  appended from its own last sequence number, not from the cursor, so a crash between the
+  append and the cursor update (or a lost cursor) can neither duplicate nor skip a line. An
+  `exported` event is recorded only when non-`exported` events passed the cursor, so a command
+  that records nothing adds nothing; the `exported` event itself reaches the backup with the
+  next command.
+- *Files:* an event goes to the file of its month, or to the latest file if the clock has
+  stepped back, so the files in name order are in sequence order and only the latest file is
+  ever appended to.
+- *Torn tail:* one export writes its lines under one fsync, so a crash can garble several
+  trailing lines of the latest non-empty file. Every trailing line that fails to parse or verify
+  is cut back to the last good one (SQLite holds their events and re-exports them); an
+  unterminated final line that still verifies is kept and terminated.
+- *Disagreement:* every mutating command verifies the whole backup against SQLite (each line
+  equal to SQLite's event of that sequence number, contiguous from 1). If they differ anywhere,
+  the backup files are moved to `ledger/diverged-<time>/` and re-exported from SQLite, which is
+  the authority. **Open:** this reads the whole backup and ledger on every command; a manifest
+  or hash chain should replace it before the history grows large.
+- *A ledger missing or behind its backup* (a fresh clone, where only the backup is in git; a
+  lost file; an older copy restored) is refused, naming `rebuild`, and never opened empty: a
+  command that re-exported from it would set the newer history aside.
+- *`rebuild`* refuses when `ledger.sqlite` exists unless `--force`, which keeps the old file
+  as `ledger.sqlite.before-rebuild-<time>` (made unique). Nothing of the old database is deleted,
+  copied or checkpointed: the main file and any `-wal` / `-shm` beside the target are renamed
+  aside together (main file first), then the new file is renamed in. A crash in between leaves
+  no `ledger.sqlite`, which the next command refuses, naming `rebuild`; a stray WAL is never
+  left beside the new file. `rebuild.pending` names the aside set while the old files move, so
+  a move interrupted by a crash resumes into the same set. (Two earlier shapes, copy-aside with
+  a checkpoint, kept drawing findings in the gate: an incomplete checkpoint, a WAL removed before
+  the rename.) An existing ledger is opened without SQLite's create flag. **Open:** `rebuild`
+  takes the root lock, but a lock-free reader holding the old file open across the renames is not
+  excluded; before the cycle's lock-free derive step (10.4 step 3) is built, readers need a shared
+  lease that `rebuild` takes exclusively. Until then `rebuild` is for when no other tracker
+  command runs.
+  `rebuild` tolerates a torn tail by the same rule as the tail repair (the trailing run of bad
+  lines of the latest non-empty file) and reports how many lines it dropped; a corrupt line
+  anywhere else, that is one followed by a good line, refuses with its file and line number. A
+  read that fails (permissions, a failing disk) is an error, never taken for divergence.
+- *Schema version:* the ledger keeps its version in SQLite's `user_version`; a version this build
+  does not know is refused.
+- *Validation:* every event a module records is checked against its kind's schema before it
+  is inserted, and each config layer against its schema when it is loaded, so values
+  serde's types cannot express (a capacity of 0, `exclude` without `group`, an empty session id,
+  a launch id outside the document-id pattern) are refused, naming the file or the event.
+- *Time:* a command's time is read once it holds the root lock, and `reserve` loads the config
+  under the lock, so neither can be older than what the previous holder recorded.
+- *Stale observations:* compared by GitHub's `updatedAt`, then by read time, at full precision,
+  so of two reads with the same `updatedAt` (a change that did not move it) the earlier read is
+  the stale one. An unchanged read that is fresher still advances the item's freshness, kept in
+  a `freshness` table beside the events (derived, not in the backup); so an older read that
+  commits after it is stale too. A change of alias alone (a rename or transfer) is recorded.
+  **Accepted residual (for the owner to confirm):** the freshness of an unchanged read is not in
+  the backup, so after `rebuild` an older read taken before the rebuild and committed after it
+  could be recorded over an unchanged fresher one; the next read records the truth again.
+  Closing it would take an event per unchanged read.
+- *Launches:* 10.3's transition list lacked `withdrawn`, which 10.7's table has; it is added,
+  with `orphan_settled`, which frees the slot an orphan holds ("until you settle it", 10.7). A
+  recipe's pool is keyed by the recipe's name, across every project and repo using it (for the
+  owner to confirm: a recipe shared by several repos then shares one pool). The queue is first
+  in, first out: a new request queues behind an earlier queued launch of the same recipe that
+  could take the slot. `reserve` retried returns the recorded token; another dispatcher is
+  refused. A held issue refuses the reservation without changing the launch. `launch-ended`
+  retried is a no-op, and with a different end state is refused. `release` needs the owning
+  dispatcher and a reservation older than 15 minutes. `unconfirm` records `reserved` →
+  `unconfirmed`. A session that reports an orphan again, before or after it is settled, is a
+  repeat, and settling twice is a repeat. `reserve --next` skips a queued launch whose recipe can
+  no longer be resolved, and refuses with that reason only when nothing could be reserved, so
+  an unresolvable queued launch is never silent; any other refusal stops it.
+  `launch-started` is authorised by the token alone, not by a dispatcher id (the dispatcher holds
+  the token); so `unconfirmed` → `started` does not check the owner.
+- *Decisions:* a decision naming another project is refused like a non-owner's, but a refusal
+  does not consume the document: ingested again with the right project or a corrected
+  `owner_id`, it is accepted and takes effect at that point in the sequence. Once accepted, it
+  stays accepted. A different document under an ingested id is refused. An undo cancels
+  its target only while the undo is not itself cancelled, so undoing an undo restores the
+  decision; status is derived from every ingested undo whenever decisions are read, which is
+  what makes arrival order irrelevant.
+- *Outcomes:* one per launch; the same record again is a no-op, a different one is refused.
 
 ## Claims checked
 

@@ -1,0 +1,32 @@
+{
+  "seq": 6,
+  "time": "2026-10-23T08:00:00Z",
+  "kind": "decided",
+  "subject": "D_20261023_0900_zz99",
+  "pred": 0,
+  "distinct": {
+    "project": "home",
+    "accepted": false
+  },
+  "identity": "27450f7d7bd8cae1d220ac468d8a06a2a116becd1f8484ba29497132a398a16c",
+  "data": {
+    "project": "home",
+    "author": "user_someone_else",
+    "accepted": false,
+    "refusal": "author user_someone_else is not the project's owner_id",
+    "document": {
+      "id": "D_20261023_0900_zz99",
+      "project": "home",
+      "author": "user_someone_else",
+      "created_at": "2026-10-23T08:14:00Z",
+      "action": "set_priority",
+      "target": {
+        "item": "I_kwDOAbCdEf5xYz12",
+        "alias": "example-org/server#403"
+      },
+      "value": {
+        "priority": "p1"
+      }
+    }
+  }
+}

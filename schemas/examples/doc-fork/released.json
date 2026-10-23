@@ -1,0 +1,26 @@
+{
+  "id": "F_server_engine",
+  "consumer": "example-org/server",
+  "manifest": "Cargo.toml:85",
+  "dependency": "engine",
+  "fork": "example-org/engine",
+  "upstream": "upstream-org/engine",
+  "pinned": "1a2b3c4d5e6f",
+  "state": "released",
+  "delta": [
+    {
+      "commit": "aaf90906",
+      "state": "released",
+      "matched_by": "pull_request",
+      "upstream_change": "upstream-org/engine#1189"
+    }
+  ],
+  "links": [
+    "upstream-org/engine#1189"
+  ],
+  "base_version": "1.26.1",
+  "latest_version": "1.27.0",
+  "releases_behind": 1,
+  "security_release": false,
+  "go_back_to": "1.27.0"
+}

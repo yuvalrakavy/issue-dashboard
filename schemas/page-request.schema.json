@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yuvalrakavy/issue-dashboard/schemas/page-request.schema.json",
+  "title": "Page document: requests",
+  "description": "A brief preview or on-demand triage request (10.8).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "project",
+    "author",
+    "created_at",
+    "kind"
+  ],
+  "properties": {
+    "id": {
+      "$ref": "common.schema.json#/$defs/docId"
+    },
+    "project": {
+      "$ref": "common.schema.json#/$defs/projectName"
+    },
+    "author": {
+      "description": "The page's user id of whoever wrote the document (10.5).",
+      "type": "string",
+      "minLength": 1
+    },
+    "created_at": {
+      "$ref": "common.schema.json#/$defs/timestamp"
+    },
+    "kind": {
+      "enum": [
+        "brief_preview",
+        "triage"
+      ]
+    },
+    "launch": {
+      "description": "For a brief preview: the launch whose brief to build.",
+      "$ref": "common.schema.json#/$defs/docId"
+    },
+    "items": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "common.schema.json#/$defs/nodeId"
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "brief_preview"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "launch"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "triage"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "items"
+        ]
+      }
+    }
+  ]
+}

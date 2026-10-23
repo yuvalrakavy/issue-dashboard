@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yuvalrakavy/issue-dashboard/schemas/ledger-line.schema.json",
+  "title": "A line of the JSON Lines backup",
+  "description": "One line of <root>/ledger/YYYY-MM.jsonl (10.2): one event and the sha256 of the event's canonical JSON.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "checksum",
+    "event"
+  ],
+  "properties": {
+    "checksum": {
+      "$ref": "common.schema.json#/$defs/sha256"
+    },
+    "event": {
+      "$ref": "event.schema.json"
+    }
+  }
+}

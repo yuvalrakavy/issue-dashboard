@@ -1,0 +1,6 @@
+schema = 1
+name = "x"
+owner_id = "u"
+[[member]]
+repo = "a/b"
+group = "bridges"

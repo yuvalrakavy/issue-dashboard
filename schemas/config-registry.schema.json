@@ -1,0 +1,464 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yuvalrakavy/issue-dashboard/schemas/config-registry.schema.json",
+  "title": "Config: the repo registry",
+  "description": "<root>/repos.toml (1.1): one entry per repo, shared by every project that includes it.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "repo"
+  ],
+  "properties": {
+    "schema": {
+      "const": 1
+    },
+    "defaults": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [],
+      "properties": {
+        "translate": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "bug": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "minItems": 1
+                },
+                "todo": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "minItems": 1
+                },
+                "decision": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "minItems": 1
+                },
+                "docs": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "minItems": 1
+                }
+              }
+            },
+            "priority": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "p0": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "minItems": 1
+                },
+                "p1": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "minItems": 1
+                },
+                "p2": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "minItems": 1
+                },
+                "p3": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "minItems": 1
+                }
+              }
+            },
+            "modifier": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "needs_decision": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "minItems": 1
+                },
+                "in_progress": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "minItems": 1
+                },
+                "self_contained": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "minItems": 1
+                },
+                "partial": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "minItems": 1
+                },
+                "umbrella": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "minItems": 1
+                },
+                "good_first_issue": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "minItems": 1
+                },
+                "help_wanted": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "minItems": 1
+                }
+              }
+            },
+            "area": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "minItems": 1
+              }
+            }
+          }
+        }
+      }
+    },
+    "repo": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [],
+        "properties": {
+          "local_path": {
+            "type": "string",
+            "minLength": 1
+          },
+          "launch": {
+            "description": "The recipe this repo's launches use.",
+            "type": "string",
+            "minLength": 1
+          },
+          "translate": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "type": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "bug": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "minItems": 1
+                  },
+                  "todo": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "minItems": 1
+                  },
+                  "decision": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "minItems": 1
+                  },
+                  "docs": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "minItems": 1
+                  }
+                }
+              },
+              "priority": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "p0": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "minItems": 1
+                  },
+                  "p1": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "minItems": 1
+                  },
+                  "p2": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "minItems": 1
+                  },
+                  "p3": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "minItems": 1
+                  }
+                }
+              },
+              "modifier": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "needs_decision": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "minItems": 1
+                  },
+                  "in_progress": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "minItems": 1
+                  },
+                  "self_contained": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "minItems": 1
+                  },
+                  "partial": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "minItems": 1
+                  },
+                  "umbrella": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "minItems": 1
+                  },
+                  "good_first_issue": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "minItems": 1
+                  },
+                  "help_wanted": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "minItems": 1
+                  }
+                }
+              },
+              "area": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "minItems": 1
+                }
+              }
+            }
+          },
+          "docs": {
+            "description": "Docs to name in briefs (7.5).",
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      }
+    },
+    "groups": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "array",
+        "items": {
+          "$ref": "common.schema.json#/$defs/repoName"
+        },
+        "uniqueItems": true
+      }
+    },
+    "launch": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "capacity",
+          "workspace",
+          "release",
+          "gate",
+          "land"
+        ],
+        "properties": {
+          "capacity": {
+            "description": "The size of the recipe's pool of launch slots (10.7).",
+            "type": "integer",
+            "minimum": 1
+          },
+          "workspace": {
+            "type": "string",
+            "minLength": 1
+          },
+          "release": {
+            "type": "string",
+            "minLength": 1
+          },
+          "gate": {
+            "type": "object",
+            "minProperties": 1,
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "run",
+                "minutes"
+              ],
+              "properties": {
+                "run": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "minutes": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            }
+          },
+          "land": {
+            "type": "string",
+            "minLength": 1
+          },
+          "process": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "forks": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "owners"
+      ],
+      "properties": {
+        "owners": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "fork": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [],
+        "properties": {
+          "upstream": {
+            "$ref": "common.schema.json#/$defs/repoName"
+          },
+          "fixes": {
+            "type": "array",
+            "items": {
+              "$ref": "common.schema.json#/$defs/alias"
+            }
+          }
+        }
+      }
+    }
+  }
+}

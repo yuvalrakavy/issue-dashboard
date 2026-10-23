@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yuvalrakavy/issue-dashboard/schemas/event-suggested.schema.json",
+  "title": "Ledger event: suggested",
+  "description": "The triage session recorded a suggestion; identity is triage run id + item + decision kind.",
+  "allOf": [
+    {
+      "$ref": "common.schema.json#/$defs/eventEnvelope"
+    }
+  ],
+  "properties": {
+    "kind": {
+      "const": "suggested"
+    },
+    "subject": {
+      "$ref": "common.schema.json#/$defs/nodeId"
+    },
+    "distinct": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "run_id",
+        "decision"
+      ],
+      "properties": {
+        "run_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "decision": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "data": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "project",
+        "run_id",
+        "suggestion"
+      ],
+      "properties": {
+        "project": {
+          "$ref": "common.schema.json#/$defs/projectName"
+        },
+        "run_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "suggestion": {
+          "allOf": [
+            {
+              "$ref": "common.schema.json#/$defs/suggestionBody"
+            }
+          ],
+          "unevaluatedProperties": false
+        }
+      }
+    }
+  }
+}

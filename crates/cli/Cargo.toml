@@ -1,0 +1,23 @@
+[package]
+name = "issue-dashboard"
+description = "A config-driven issue tracker for a project made of many GitHub repos"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "issue-dashboard"
+path = "src/main.rs"
+
+[dependencies]
+issue-dashboard-core.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+
+[dev-dependencies]
+issue-dashboard-core.workspace = true
+tempfile.workspace = true
+serde_json.workspace = true

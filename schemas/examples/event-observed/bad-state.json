@@ -1,0 +1,49 @@
+{
+  "seq": 2,
+  "time": "2026-10-23T08:00:00Z",
+  "kind": "observed",
+  "subject": "I_kwDOAbCdEf5xYz12",
+  "pred": 0,
+  "distinct": {
+    "content_hash": "231ba9a0b46612a09c44270ee3e112e8fe751a5952b0c04e324f697078fb352b",
+    "alias": "example-org/server#403"
+  },
+  "identity": "7f11fa0a8d447e732f6121812476296eb4ddb1a7bbf453118985225c77fb777b",
+  "data": {
+    "item": "issue",
+    "alias": "example-org/server#403",
+    "updated_at": "2026-10-22T17:00:00Z",
+    "read_at": "2026-10-23T08:00:00Z",
+    "read_id": "read-20261023T080000Z-server",
+    "content_hash": "231ba9a0b46612a09c44270ee3e112e8fe751a5952b0c04e324f697078fb352b",
+    "content": {
+      "state": "deleted",
+      "state_reason": null,
+      "title": "DeleteStore parks in remove_dir_all and the server stops answering",
+      "labels": [
+        "bug",
+        "p0"
+      ],
+      "assignees": [],
+      "author": "example-owner",
+      "author_association": "OWNER",
+      "created_at": "2026-10-20T10:00:00Z",
+      "closed_at": null,
+      "comment_count": 2,
+      "reactions": {
+        "THUMBS_UP": 1
+      },
+      "links": {
+        "parent": null,
+        "sub_issues": [],
+        "blocked_by": [],
+        "blocking": [
+          "I_kwDOAbCdEf5xYz34"
+        ]
+      },
+      "timeline_ids": [
+        "LE_lADOAbCd123"
+      ]
+    }
+  }
+}

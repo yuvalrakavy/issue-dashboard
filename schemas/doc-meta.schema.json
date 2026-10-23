@@ -1,0 +1,173 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yuvalrakavy/issue-dashboard/schemas/doc-meta.schema.json",
+  "title": "Tracker document: meta",
+  "description": "The project summary and per-repo read state; also names the active outbox generation (10.6).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "project",
+    "name",
+    "generation",
+    "sequence",
+    "taken_at",
+    "summary",
+    "repos"
+  ],
+  "properties": {
+    "schema": {
+      "const": 1
+    },
+    "project": {
+      "$ref": "common.schema.json#/$defs/projectName"
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "generation": {
+      "type": "string",
+      "pattern": "^gen-[1-9][0-9]*$"
+    },
+    "sequence": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "taken_at": {
+      "$ref": "common.schema.json#/$defs/timestamp"
+    },
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "p0_open",
+        "waiting_on_you",
+        "untriaged",
+        "over_time_limit",
+        "open"
+      ],
+      "properties": {
+        "p0_open": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "waiting_on_you": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "untriaged": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "over_time_limit": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "open": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "repos": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "repo",
+          "read_at",
+          "read",
+          "error",
+          "stale"
+        ],
+        "properties": {
+          "repo": {
+            "$ref": "common.schema.json#/$defs/repoName"
+          },
+          "id": {
+            "$ref": "common.schema.json#/$defs/nodeId"
+          },
+          "read_at": {
+            "anyOf": [
+              {
+                "$ref": "common.schema.json#/$defs/timestamp"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "read": {
+            "enum": [
+              "full",
+              "incremental"
+            ]
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "stale": {
+            "type": "boolean"
+          },
+          "read_only": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "value",
+              "why"
+            ],
+            "properties": {
+              "value": {
+                "type": "boolean"
+              },
+              "why": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "declared",
+                      "no_write_access"
+                    ]
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "dispatcher_seen_at": {
+      "anyOf": [
+        {
+          "$ref": "common.schema.json#/$defs/timestamp"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "default_view": {
+      "anyOf": [
+        {
+          "type": "string",
+          "minLength": 1
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  }
+}

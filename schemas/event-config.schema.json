@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yuvalrakavy/issue-dashboard/schemas/event-config.schema.json",
+  "title": "Ledger event: config",
+  "description": "A configuration the ledger has not recorded (10.2): every derived value is computed from the events plus the configuration in force.",
+  "allOf": [
+    {
+      "$ref": "common.schema.json#/$defs/eventEnvelope"
+    }
+  ],
+  "properties": {
+    "kind": {
+      "const": "config"
+    },
+    "subject": {
+      "const": "config"
+    },
+    "distinct": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "content_hash"
+      ],
+      "properties": {
+        "content_hash": {
+          "$ref": "common.schema.json#/$defs/sha256"
+        }
+      }
+    },
+    "data": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "content_hash",
+        "content"
+      ],
+      "properties": {
+        "content_hash": {
+          "description": "sha256 of the canonical JSON of content.",
+          "$ref": "common.schema.json#/$defs/sha256"
+        },
+        "content": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "registry",
+            "projects",
+            "repo_files"
+          ],
+          "properties": {
+            "registry": {
+              "$ref": "config-registry.schema.json"
+            },
+            "projects": {
+              "type": "object",
+              "additionalProperties": {
+                "$ref": "config-project.schema.json"
+              }
+            },
+            "repo_files": {
+              "description": "Repo files read from the local checkouts, by owner/name.",
+              "type": "object",
+              "additionalProperties": {
+                "$ref": "config-repo-file.schema.json"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

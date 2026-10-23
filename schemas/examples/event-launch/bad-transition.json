@@ -1,0 +1,17 @@
+{
+  "seq": 11,
+  "time": "2026-10-23T08:00:00Z",
+  "kind": "launch",
+  "subject": "L_20261023_080000_ab12",
+  "pred": 10,
+  "distinct": {
+    "transition": "running",
+    "token": "res-0123456789abcdef0123456789abcdef"
+  },
+  "identity": "c2445d20218c23454a4ac64c4ffb13c6ad85b47970339119c1da5a92806e1e25",
+  "data": {
+    "transition": "running",
+    "token": "res-0123456789abcdef0123456789abcdef",
+    "dispatcher": "local_dispatcher_1"
+  }
+}

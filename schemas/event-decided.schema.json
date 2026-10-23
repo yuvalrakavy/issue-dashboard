@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yuvalrakavy/issue-dashboard/schemas/event-decided.schema.json",
+  "title": "Ledger event: decided",
+  "description": "Ingest read a page decision (10.5).",
+  "allOf": [
+    {
+      "$ref": "common.schema.json#/$defs/eventEnvelope"
+    }
+  ],
+  "properties": {
+    "kind": {
+      "const": "decided"
+    },
+    "subject": {
+      "$ref": "common.schema.json#/$defs/docId"
+    },
+    "distinct": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "project",
+        "accepted"
+      ],
+      "properties": {
+        "project": {
+          "$ref": "common.schema.json#/$defs/projectName"
+        },
+        "accepted": {
+          "type": "boolean"
+        }
+      }
+    },
+    "data": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "project",
+        "author",
+        "accepted",
+        "refusal",
+        "document"
+      ],
+      "properties": {
+        "project": {
+          "$ref": "common.schema.json#/$defs/projectName"
+        },
+        "author": {
+          "type": "string",
+          "minLength": 1
+        },
+        "accepted": {
+          "description": "false unless the author is the project's owner_id (10.5).",
+          "type": "boolean"
+        },
+        "refusal": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "document": {
+          "$ref": "page-decision.schema.json"
+        }
+      }
+    }
+  }
+}

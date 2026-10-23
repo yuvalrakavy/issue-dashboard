@@ -1,0 +1,21 @@
+{
+  "seq": 17,
+  "time": "2026-10-23T08:00:00Z",
+  "kind": "outcome",
+  "subject": "L_20261023_090000_ef56",
+  "pred": 0,
+  "distinct": {},
+  "identity": "4260c918ad487008daf6f7e434b56052c0b529ffeac3279b01bd368473910923",
+  "data": {
+    "launch": "L_20261023_090000_ef56",
+    "landed": false,
+    "recorded_by": "dispatcher",
+    "missing": [
+      "commit",
+      "wall_clock_minutes",
+      "gate_runs",
+      "findings_fixed",
+      "context_tokens"
+    ]
+  }
+}

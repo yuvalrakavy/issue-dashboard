@@ -1,0 +1,346 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yuvalrakavy/issue-dashboard/schemas/event-observed.schema.json",
+  "title": "Ledger event: observed",
+  "description": "A read returned an item whose content differs from its last observation. The update time is not part of the identity.",
+  "allOf": [
+    {
+      "$ref": "common.schema.json#/$defs/eventEnvelope"
+    }
+  ],
+  "properties": {
+    "kind": {
+      "const": "observed"
+    },
+    "subject": {
+      "$ref": "common.schema.json#/$defs/nodeId"
+    },
+    "distinct": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "content_hash",
+        "alias"
+      ],
+      "properties": {
+        "content_hash": {
+          "$ref": "common.schema.json#/$defs/sha256"
+        },
+        "alias": {
+          "anyOf": [
+            {
+              "$ref": "common.schema.json#/$defs/alias"
+            },
+            {
+              "$ref": "common.schema.json#/$defs/repoName"
+            }
+          ]
+        }
+      }
+    },
+    "data": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "item",
+        "alias",
+        "updated_at",
+        "read_at",
+        "read_id",
+        "content_hash",
+        "content"
+      ],
+      "properties": {
+        "item": {
+          "enum": [
+            "issue",
+            "pull_request",
+            "repo"
+          ]
+        },
+        "alias": {
+          "description": "owner/repo#N for an issue or pull request, owner/name for a repo.",
+          "anyOf": [
+            {
+              "$ref": "common.schema.json#/$defs/alias"
+            },
+            {
+              "$ref": "common.schema.json#/$defs/repoName"
+            }
+          ]
+        },
+        "updated_at": {
+          "description": "GitHub's updatedAt; an observation older than the latest recorded one is discarded at commit (10.4).",
+          "$ref": "common.schema.json#/$defs/timestamp"
+        },
+        "read_at": {
+          "$ref": "common.schema.json#/$defs/timestamp"
+        },
+        "read_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "content_hash": {
+          "$ref": "common.schema.json#/$defs/sha256"
+        },
+        "content": {
+          "type": "object"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "item": {
+                "const": "repo"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "content": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "visibility",
+                  "viewer_permission",
+                  "labels"
+                ],
+                "properties": {
+                  "visibility": {
+                    "enum": [
+                      "public",
+                      "private",
+                      "internal"
+                    ]
+                  },
+                  "viewer_permission": {
+                    "enum": [
+                      "ADMIN",
+                      "MAINTAIN",
+                      "WRITE",
+                      "TRIAGE",
+                      "READ",
+                      "NONE"
+                    ]
+                  },
+                  "labels": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "default_branch": {
+                    "type": "string"
+                  }
+                }
+              },
+              "alias": {
+                "$ref": "common.schema.json#/$defs/repoName"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "content": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "state",
+                  "labels",
+                  "assignees",
+                  "links",
+                  "timeline_ids"
+                ],
+                "properties": {
+                  "state": {
+                    "enum": [
+                      "open",
+                      "closed",
+                      "merged"
+                    ]
+                  },
+                  "state_reason": {
+                    "anyOf": [
+                      {
+                        "enum": [
+                          "completed",
+                          "not_planned",
+                          "reopened",
+                          "duplicate"
+                        ]
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "title": {
+                    "type": "string"
+                  },
+                  "labels": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "assignees": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "author": {
+                    "type": "string"
+                  },
+                  "author_association": {
+                    "$ref": "common.schema.json#/$defs/authorAssociation"
+                  },
+                  "milestone": {
+                    "anyOf": [
+                      {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "title"
+                        ],
+                        "properties": {
+                          "title": {
+                            "type": "string"
+                          },
+                          "due_on": {
+                            "anyOf": [
+                              {
+                                "$ref": "common.schema.json#/$defs/timestamp"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
+                        }
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "created_at": {
+                    "$ref": "common.schema.json#/$defs/timestamp"
+                  },
+                  "closed_at": {
+                    "anyOf": [
+                      {
+                        "$ref": "common.schema.json#/$defs/timestamp"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "comment_count": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "reactions": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "type": "integer",
+                      "minimum": 0
+                    }
+                  },
+                  "body_hash": {
+                    "anyOf": [
+                      {
+                        "$ref": "common.schema.json#/$defs/sha256"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "links": {
+                    "$ref": "common.schema.json#/$defs/links"
+                  },
+                  "timeline_ids": {
+                    "description": "The ids of the labelled/unlabelled timeline events read (1.5).",
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "pull_request": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "draft",
+                      "review_decision",
+                      "mergeable",
+                      "head",
+                      "checks",
+                      "closes"
+                    ],
+                    "properties": {
+                      "draft": {
+                        "type": "boolean"
+                      },
+                      "review_decision": {
+                        "anyOf": [
+                          {
+                            "enum": [
+                              "APPROVED",
+                              "CHANGES_REQUESTED",
+                              "REVIEW_REQUIRED"
+                            ]
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "mergeable": {
+                        "enum": [
+                          "MERGEABLE",
+                          "CONFLICTING",
+                          "UNKNOWN"
+                        ]
+                      },
+                      "head": {
+                        "$ref": "common.schema.json#/$defs/commit"
+                      },
+                      "checks": {
+                        "anyOf": [
+                          {
+                            "enum": [
+                              "SUCCESS",
+                              "FAILURE",
+                              "PENDING",
+                              "ERROR",
+                              "EXPECTED"
+                            ]
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "closes": {
+                        "type": "array",
+                        "items": {
+                          "$ref": "common.schema.json#/$defs/nodeId"
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              "alias": {
+                "$ref": "common.schema.json#/$defs/alias"
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

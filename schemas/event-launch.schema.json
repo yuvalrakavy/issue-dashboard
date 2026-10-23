@@ -1,0 +1,187 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yuvalrakavy/issue-dashboard/schemas/event-launch.schema.json",
+  "title": "Ledger event: launch",
+  "description": "A launch transition (10.7). Only the transitions of 10.7's table are legal; orphan and orphan_settled are recorded alongside the launch.",
+  "allOf": [
+    {
+      "$ref": "common.schema.json#/$defs/eventEnvelope"
+    }
+  ],
+  "properties": {
+    "kind": {
+      "const": "launch"
+    },
+    "subject": {
+      "$ref": "common.schema.json#/$defs/docId"
+    },
+    "distinct": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "transition",
+        "token"
+      ],
+      "properties": {
+        "transition": {
+          "$ref": "common.schema.json#/$defs/launchTransition"
+        },
+        "token": {
+          "anyOf": [
+            {
+              "$ref": "common.schema.json#/$defs/token"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "session": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "data": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "transition"
+      ],
+      "properties": {
+        "transition": {
+          "$ref": "common.schema.json#/$defs/launchTransition"
+        },
+        "token": {
+          "$ref": "common.schema.json#/$defs/token"
+        },
+        "session": {
+          "type": "string",
+          "minLength": 1
+        },
+        "dispatcher": {
+          "description": "The dispatcher session that owns the reservation (10.7).",
+          "type": "string",
+          "minLength": 1
+        },
+        "end_state": {
+          "$ref": "common.schema.json#/$defs/endState"
+        },
+        "request": {
+          "$ref": "page-launch.schema.json"
+        },
+        "project": {
+          "$ref": "common.schema.json#/$defs/projectName"
+        },
+        "decision": {
+          "description": "The page decision that withdrew the launch.",
+          "$ref": "common.schema.json#/$defs/docId"
+        },
+        "via": {
+          "enum": [
+            "ingest",
+            "reserve"
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "transition": {
+                "const": "requested"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "request",
+              "project",
+              "via"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "transition": {
+                "const": "queued"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "dispatcher"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "transition": {
+                "enum": [
+                  "reserved",
+                  "unconfirmed"
+                ]
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "token",
+              "dispatcher"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "transition": {
+                "enum": [
+                  "started",
+                  "orphan",
+                  "orphan_settled"
+                ]
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "token",
+              "session"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "transition": {
+                "const": "ended"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "token",
+              "end_state"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "transition": {
+                "const": "released"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "token"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

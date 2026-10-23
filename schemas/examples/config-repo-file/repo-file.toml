@@ -1,0 +1,13 @@
+# .issue-dashboard.toml
+schema = 1
+areas  = ["kernel", "sdl", "media", "process"]
+docs   = ["CLAUDE.md", "docs/guides/logging-policy.md"]
+
+[launch.lanes]
+capacity  = 3
+workspace = "dev-track claim {branch}"
+release   = "dev-track release --full"
+gate.quick = { run = "scripts/pre-merge-check.sh --quick", minutes = 6 }
+gate.full  = { run = "scripts/pre-merge-check.sh --full",  minutes = 17 }
+land      = "dev-track land"
+process   = ".claude/skills/ways-of-working/SKILL.md"

@@ -1,0 +1,29 @@
+{
+  "seq": 16,
+  "time": "2026-10-23T08:00:00Z",
+  "kind": "outcome",
+  "subject": "L_20261023_080000_ab12",
+  "pred": 0,
+  "distinct": {},
+  "identity": "42cc92530d3be30785f08acfa3933cd72cb02f0b8067d2e8e04a431c1f500376",
+  "data": {
+    "launch": "L_20261023_080000_ab12",
+    "landed": true,
+    "commit": "95c2531bb",
+    "wall_clock_minutes": 74,
+    "gate_runs": [
+      {
+        "level": "quick",
+        "runs": 2
+      },
+      {
+        "level": "full",
+        "runs": 1
+      }
+    ],
+    "findings_fixed": 3,
+    "context_tokens": 182000,
+    "recorded_by": "session",
+    "missing": []
+  }
+}

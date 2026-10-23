@@ -1,0 +1,141 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yuvalrakavy/issue-dashboard/schemas/page-launch.schema.json",
+  "title": "Page document: launches",
+  "description": "A launch request, a not_sent record naming a refused one, or the launch thread's id (5.4). Never changed after it is written.",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "project",
+        "author",
+        "created_at",
+        "kind",
+        "items",
+        "aliases",
+        "recipe",
+        "routing"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "common.schema.json#/$defs/docId"
+        },
+        "project": {
+          "$ref": "common.schema.json#/$defs/projectName"
+        },
+        "author": {
+          "description": "The page's user id of whoever wrote the document (10.5).",
+          "type": "string",
+          "minLength": 1
+        },
+        "created_at": {
+          "$ref": "common.schema.json#/$defs/timestamp"
+        },
+        "kind": {
+          "enum": [
+            "fix",
+            "batch",
+            "review",
+            "triage",
+            "send_upstream",
+            "go_back",
+            "stronger_look",
+            "design"
+          ]
+        },
+        "items": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "common.schema.json#/$defs/nodeId"
+          }
+        },
+        "aliases": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "common.schema.json#/$defs/alias"
+          }
+        },
+        "recipe": {
+          "description": "The launch recipe (7.6) whose pool the launch takes a slot from.",
+          "type": "string",
+          "minLength": 1
+        },
+        "routing": {
+          "$ref": "common.schema.json#/$defs/routing"
+        },
+        "suggested_routing": {
+          "$ref": "common.schema.json#/$defs/routing"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "project",
+        "author",
+        "created_at",
+        "not_sent"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "common.schema.json#/$defs/docId"
+        },
+        "project": {
+          "$ref": "common.schema.json#/$defs/projectName"
+        },
+        "author": {
+          "description": "The page's user id of whoever wrote the document (10.5).",
+          "type": "string",
+          "minLength": 1
+        },
+        "created_at": {
+          "$ref": "common.schema.json#/$defs/timestamp"
+        },
+        "not_sent": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "launch",
+            "error"
+          ],
+          "properties": {
+            "launch": {
+              "$ref": "common.schema.json#/$defs/docId"
+            },
+            "error": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "thread"
+      ],
+      "properties": {
+        "id": {
+          "const": "_thread"
+        },
+        "thread": {
+          "type": "string",
+          "minLength": 1
+        },
+        "replaced_at": {
+          "$ref": "common.schema.json#/$defs/timestamp"
+        }
+      }
+    }
+  ]
+}

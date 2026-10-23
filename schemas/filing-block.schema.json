@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yuvalrakavy/issue-dashboard/schemas/filing-block.schema.json",
+  "title": "The structured filing block",
+  "description": "The TOML block at the end of an issue body (2.6). Unknown keys are kept and reported, so they are allowed here; a block whose known keys are malformed is refused.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "sites",
+    "read_at"
+  ],
+  "properties": {
+    "sites": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^[^:\\s]+:[1-9][0-9]*$"
+      }
+    },
+    "read_at": {
+      "$ref": "common.schema.json#/$defs/commit"
+    },
+    "tier": {
+      "enum": [
+        "T0",
+        "T1",
+        "T2",
+        "T3"
+      ]
+    },
+    "blast": {
+      "type": "string",
+      "minLength": 1
+    },
+    "related": {
+      "type": "array",
+      "items": {
+        "$ref": "common.schema.json#/$defs/alias"
+      }
+    },
+    "kind": {
+      "enum": [
+        "related",
+        "side"
+      ]
+    }
+  }
+}
