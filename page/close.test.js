@@ -64,19 +64,66 @@ test("a close is pending until acked, and the line says so", () => {
   assert.equal(D.describeClose({ reason: "not_planned" }), "close as not planned");
 });
 
-test("the Inbox lists the last 7 days' dashboard closes, newest first, with any pending reopen", () => {
+test("Recently closed lists every issue closed in the window, newest first, Reopen for the dashboard's own close and Dismiss for the rest", () => {
   const dc = (decision, at, undo_allowed) => ({ decision, reason: "completed", at, result: "closed", undo_allowed });
+  const closed = (id, at, more) => issue(Object.assign({ id, alias: "yuvalrakavy/Store#" + id.slice(2), state: "closed", closed_at: at }, more));
   const issues = [
-    issue({ id: "I_1", state: "closed", dashboard_close: dc("D_1", "2026-10-22T08:00:00Z", true) }),
-    issue({ id: "I_2", state: "closed", dashboard_close: dc("D_2", "2026-10-15T08:00:00Z", true) }),
-    issue({ id: "I_3", state: "closed", dashboard_close: dc("D_3", "2026-10-23T07:00:00Z", false) }),
-    issue({ id: "I_4", state: "closed", dashboard_close: null }),
+    closed("I_1", "2026-10-22T08:00:00Z", { dashboard_close: dc("D_1", "2026-10-22T08:00:00Z", true) }),
+    closed("I_2", "2026-10-15T08:00:00Z", { dashboard_close: dc("D_2", "2026-10-15T08:00:00Z", true) }),
+    closed("I_3", "2026-10-23T07:00:00Z", { dashboard_close: dc("D_3", "2026-10-23T07:00:00Z", false) }),
+    closed("I_4", "2026-10-21T09:00:00Z", { state_reason: "not_planned", closed_by: ["yuvalrakavy/Store#40"] }),
+    closed("I_6", "2026-10-16T08:14:06Z"),
+    closed("I_9", "2026-10-16T08:14:04Z"),
     issue({ id: "I_5" }),
+    closed("I_8", "2026-10-22T10:00:00Z", { kind: "pull_request", state: "merged" }),
   ];
   const undo = { id: "D_u", created_at: "2026-10-23T08:10:00Z", action: "undo", target: { decision: "D_1", item: "I_1" } };
-  const r = D.recentCloses(issues, [undo], [], now, 7);
-  assert.deepEqual(r.map((x) => x.issue.id), ["I_3", "I_1"]);
-  assert.equal(r[0].reopening, null);
+  const r = D.recentlyClosed(issues, [undo], [], now, 7);
+  assert.deepEqual(r.map((x) => x.issue.id), ["I_3", "I_1", "I_4", "I_6"], "inside 7 days only, issues only, newest first");
   assert.equal(r[1].reopening.id, "D_u");
-  assert.equal(D.recentCloses(issues, [undo], [{ decision: "D_u", result: "refused" }], now, 7)[1].reopening, null, "an acked undo is no longer pending");
+  assert.equal(r[1].dismissible, false, "a dashboard close being reopened is not dismissed");
+  assert.equal(r[0].dismissible, true, "a dashboard close past its Undo can be dismissed");
+  assert.equal(r[2].dismissible, true);
+  assert.equal(r[2].reason, "not planned");
+  assert.deepEqual(r[2].prs, ["yuvalrakavy/Store#40"]);
+  assert.equal(r[3].reason, null, "no reason when GitHub gave none");
+  const fresh = D.recentlyClosed(issues, [undo], [{ decision: "D_u", result: "refused" }], now, 7);
+  assert.equal(fresh[1].reopening, null, "an acked undo is no longer pending");
+  assert.equal(fresh[1].dismissible, false, "Undo still allowed: Reopen, not Dismiss");
+  assert.deepEqual(D.recentlyClosed(issues, [], [], now, 3).map((x) => x.issue.id), ["I_3", "I_1", "I_4"], "the window is the meta's days");
+});
+
+test("no Dismiss on an open issue, even one the dashboard is closing", () => {
+  const c = { decision: "D_c", reason: "completed", at: "2026-10-23T08:00:00Z", result: "closed", undo_allowed: false };
+  const r = D.recentlyClosed([issue({ dashboard_close: c })], [], [], now, 7);
+  assert.equal(r.length, 1);
+  assert.equal(r[0].dismissible, false);
+  assert.equal(D.dismissed(issue({ dismissed_at: "2026-10-23T08:00:00Z" }), [], []), false, "an open item is never dismissed");
+});
+
+test("a dismissed issue leaves the list at once, comes back on Undo or refusal, and a later close shows anew", () => {
+  const i = issue({ state: "closed", closed_at: "2026-10-22T08:00:00Z" });
+  const f = D.dismissFields(i);
+  const d = D.decisionDoc(f, who, now, () => 0.5);
+  assert.deepEqual(d.target, { item: "I_7", alias: "yuvalrakavy/Store#7" });
+  assert.deepEqual(d.value, { closed_at: "2026-10-22T08:00:00Z" });
+  assert.ok(schema.properties.action.enum.includes("dismiss_closed"));
+  for (const k of Object.keys(d.value)) assert.ok(k in schema.properties.value.properties, "value has no " + k);
+  assert.equal(D.dismissed(i, [], []), false);
+  assert.equal(D.dismissed(i, [d], []), true, "hidden before any cycle acks it");
+  assert.equal(D.recentlyClosed([i], [d], [], now, 7).length, 0);
+  assert.equal(D.dismissed(i, [d], [{ decision: d.id, result: "refused" }]), false, "a refused dismiss shows it again");
+  const u = { id: "D_undo", action: "undo", target: { decision: d.id, item: "I_7" } };
+  assert.equal(D.dismissed(Object.assign({}, i, { dismissed_at: "2026-10-23T08:00:00Z" }), [d, u], []), false, "Undo shows it at once");
+  assert.equal(D.dismissed(i, [d, u], [{ decision: "D_undo", result: "refused" }]), true, "a refused undo leaves it dismissed");
+  assert.equal(D.dismissed(Object.assign({}, i, { dismissed_at: "2026-10-23T08:00:00Z" }), [], []), true, "the tracker's word when the page holds none");
+  const again = Object.assign({}, i, { closed_at: "2026-10-23T07:00:00Z", dismissed_at: null });
+  assert.equal(D.dismissed(again, [d], []), false, "a dismissal of an earlier close does not hide a later one");
+  assert.equal(D.dismissed(Object.assign({}, i, { closed_at: "2026-10-22T08:00:00.000Z" }), [d], []), true, "the same instant in another spelling");
+});
+
+test("Trends still counts a dismissed issue's close", () => {
+  const i = issue({ state: "closed", created_at: "2026-10-01T00:00:00Z", closed_at: "2026-10-22T08:00:00Z", dismissed_at: "2026-10-23T08:00:00Z" });
+  const t = D.trends([i], now, 4, {});
+  assert.equal(t.weeks.reduce((n, w) => n + w.closed, 0), 1);
 });

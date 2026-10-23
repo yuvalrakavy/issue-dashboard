@@ -436,19 +436,50 @@
     return open.length ? open[0].doc : null;
   }
 
-  // The dashboard's closes of the last `days` days, newest first: { issue, close, reopening },
-  // where `reopening` is an unacked undo of that close.
-  function recentCloses(issues, decisions, acks, now, days) {
+  // Whether the owner dismissed this closed item (5.8): the page wrote a dismiss of this very
+  // close that no cycle refused and no undo took back, or, when the page holds none, the tracker
+  // says so (dismissed_at). The page's own decisions win so a Dismiss or its Undo shows at once.
+  function dismissed(issue, decisions, acks) {
+    if (issue.state === "open" || !issue.closed_at) return false;
+    const refused = new Set((acks || []).filter((a) => a.result === "refused").map((a) => a.decision));
+    const undone = new Set((decisions || []).filter((d) => d.action === "undo" && d.target && !refused.has(d.id)).map((d) => d.target.decision));
+    const mine = (decisions || []).filter((d) =>
+      d.action === "dismiss_closed" && d.target && d.target.item === issue.id && d.value && Date.parse(d.value.closed_at) === Date.parse(issue.closed_at));
+    if (mine.length) return mine.some((d) => !undone.has(d.id) && !refused.has(d.id));
+    return Boolean(issue.dismissed_at);
+  }
+
+  const CLOSED_AS = { completed: "completed", not_planned: "not planned", duplicate: "a duplicate" };
+
+  // Recently closed (5.8): every issue closed in the last `days` days that the owner has not
+  // dismissed, newest first: { issue, at, close, reopening, reason, prs, dismissible }. `close` is
+  // the dashboard's own close, whose Reopen stays while Undo is allowed (`reopening`: an unacked
+  // undo of it); any other close can be dismissed.
+  function recentlyClosed(issues, decisions, acks, now, days) {
     const since = now.getTime() - days * 86400000;
     const acked = new Set((acks || []).map((a) => a.decision));
     const out = [];
     for (const i of issues) {
-      const c = i.dashboard_close;
-      if (!c || !(Date.parse(c.at) >= since)) continue;
-      const reopening = (decisions || []).find((d) => d.action === "undo" && d.target && d.target.decision === c.decision && !acked.has(d.id)) || null;
-      out.push({ issue: i, close: c, reopening });
+      const c = i.dashboard_close || null;
+      const at = i.closed_at || (c && c.at);
+      if (i.kind !== "issue" || (i.state === "open" && !c) || !(Date.parse(at) >= since) || dismissed(i, decisions, acks)) continue;
+      const reopening = c ? (decisions || []).find((d) => d.action === "undo" && d.target && d.target.decision === c.decision && !acked.has(d.id)) || null : null;
+      out.push({
+        issue: i,
+        at,
+        close: c,
+        reopening,
+        reason: CLOSED_AS[(c && c.reason) || i.state_reason] || null,
+        prs: i.closed_by || [],
+        dismissible: i.state !== "open" && !!i.closed_at && !(c && (c.undo_allowed || reopening)),
+      });
     }
-    return out.sort((a, b) => cmp(b.close.at, a.close.at));
+    return out.sort((a, b) => cmp(b.at, a.at) || cmp(a.issue.alias, b.issue.alias));
+  }
+
+  // A Dismiss of the close the page shows: bound to its closed_at, so a reopen lapses it (5.8).
+  function dismissFields(issue) {
+    return { action: "dismiss_closed", target: { item: issue.id, alias: issue.alias }, value: { closed_at: issue.closed_at } };
   }
 
   // The app's sessions on an item as the page says them (10.10): running or idle, how long since
@@ -487,7 +518,7 @@
     PRIORITIES, COLLECTIONS, LIST_LIMIT, CLOSE_REASONS, ACK_DAYS,
     loadGeneration, follower, ackHorizon, threadDoc, repoOf, inScope, tiles, inbox, queue, decisionStates, nextRunMinutes,
     trends, launchStates, newId, decisionDoc, launchDoc, notSentDoc, viewDoc, requestDoc, syncFields, syncNote, launch,
-    closable, closeComment, closeFields, describeClose, pendingClose, recentCloses,
+    closable, closeComment, closeFields, describeClose, pendingClose, dismissed, recentlyClosed, dismissFields,
     sessionLines, inProgress, ownerNotice,
   };
   root.IssueDashboard = api;

@@ -386,8 +386,8 @@ appears with its details at once.
 |---|---|
 | canonical type, areas, modifiers | translation (1.3), with untranslated labels listed per repo |
 | priority and its source | the three sources in order (1.5), plus every source's value for `explain` |
-| status | `untriaged` (an axis missing), `needs-decision`, `in-progress`, `blocked` (an open blocker), else `ready`; `umbrella` issues carry `umbrella` instead |
-| sessions working on it | the app's sessions matched to the item (7.2, 10.10 "Session tracking"): exact by launch or by pull request, probable by an issue reference in the title or branch; an item that would be `ready` or `blocked` is `in-progress` while one is matched |
+| status | the state first: a closed issue or pull request is `closed`, a merged pull request `merged`, whatever its labels, blockers or sessions say; an open one is `untriaged` (an axis missing), `needs-decision`, `in-progress`, `blocked` (an open blocker), else `ready`; `umbrella` issues carry `umbrella` instead |
+| sessions working on it | the app's sessions matched to the item (7.2, 10.10 "Session tracking"): exact by launch or by pull request, probable by an issue reference in the title or branch; an open item that would be `ready` or `blocked` is `in-progress` while one is matched |
 | age and idle time | from created and updated times |
 | time-limit breach | idle time against the project's limit for the issue's priority |
 | link graph | native relationships first, text links second, with the source of each edge recorded |
@@ -688,7 +688,7 @@ untriaged, over time limit, open). **Every tile is a link** to the tab and filte
 
 | Tab | Holds | Main actions |
 |---|---|---|
-| **Inbox** | everything that needs the owner, one card per item, oldest first: plans to approve (1.7), decisions, outside pull requests to review (4.4), stale overrides and GitHub-side changes (1.5), starving issues (6.8); then the triage suggestions with their confidence | the card's one main action; a `⋯` menu for the rest; accept or reject suggestions, singly or "accept all at or above a confidence" |
+| **Inbox** | everything that needs the owner, one card per item, oldest first: plans to approve (1.7), decisions, outside pull requests to review (4.4), stale overrides and GitHub-side changes (1.5), starving issues (6.8); then the triage suggestions with their confidence; then **Recently closed** (5.8) | the card's one main action; a `⋯` menu for the rest; accept or reject suggestions, singly or "accept all at or above a confidence"; Reopen or Dismiss a recent close |
 | **Queue** | the next batch on top with its launch sheet; then open issues grouped by priority level; then pull requests and forks that are **not** already in the inbox | launch, set a priority, override, explain |
 | **Trends** | flow, time limits, outside response times, decision accuracy, session outcomes, each splittable by group or repo | change the period, isolate a group |
 
@@ -723,7 +723,7 @@ repeated in the level lists.
   says the comment is published in the owner's name. The card then shows "Closing · applied on
   the next sync" with Undo until the ack. Undo of a close already applied reopens the issue,
   offered only while it is still closed by that close and nobody has commented since; the
-  Inbox lists the last 7 days' dashboard closes for that.
+  Inbox's Recently closed list (5.8) holds it for that.
 - **A session working on an issue shows on it.** A card, a row and Details carry "In
   progress" with each matched session: its title, running or idle, when it was last active,
   and "probably" when the match is by an issue reference rather than exact (10.10). The
@@ -756,7 +756,7 @@ field, never its id, and a page action on it still names the same item.
 | `suggestions` | tracker | one per open suggestion |
 | `plans` | tracker | one per GitHub write plan awaiting approval |
 | `forks`, `metrics` | tracker | chapter 3 and the metrics panel |
-| `decisions` | **page** | one per thing you did: accept, reject, edit, set priority, override, approve a plan |
+| `decisions` | **page** | one per thing you did: accept, reject, edit, set priority, override, approve a plan, close, dismiss a closed item |
 | `views` | **page** | saved views (5.6) |
 | `requests` | **page** | brief previews, on-demand triage and sync requests (7.2, 10.8) |
 | `acks` | tracker | which page decisions each cycle consumed (10.6) |
@@ -871,6 +871,19 @@ label and priority suggestions, never on closes.
 **Closing by hand is not a suggestion.** The owner's own "Close…" (5.2a) is the decision and
 its approval at once: the sheet already shows the reason and the exact comment, so the cycle
 applies it without a further plan. The plans above remain for closes the tracker proposes.
+
+**Recently closed, and dismissing a closed item.** The Inbox ends with every issue closed in
+the last N days (the project's `recently_closed_days`, 7 when unset), newest first. Each
+entry says when and how it was closed (GitHub's reason, or "closed from the dashboard as …"),
+the tracked pull requests whose closing references name it, and its matched sessions. A close
+made from the dashboard keeps its **Reopen** while Undo is allowed (5.2a); every other close
+offers **Dismiss**, which never writes to GitHub: it records a `dismiss_closed` decision naming
+the close it dismisses (the item's `closed_at`), the item leaves the list at once with an
+**Undo** in the toast, and the tracker marks the issue `dismissed_at`. A dismissed item is
+hidden from every list and from Details, but stays in the snapshot, so Trends still counts
+its close. The dismissal holds for that close only: reopened, the item shows again, and a
+later close shows anew. Dismiss is offered on closed issues only; the tracker refuses one on
+an open item, or on a close other than the one the page showed.
 
 ---
 
@@ -1857,14 +1870,28 @@ them rather than refusing.
   tracked by project P") and never reads GitHub. The
   task id comes from the project config's new optional `sync_task`; without it `task` is
   null.
+- *Closed items and Recently closed (Store#403).* The status chain tests the state first, so a
+  closed issue is `closed` and a pull request `merged` or `closed`, never `untriaged`, `blocked`
+  or `ready`; the session lift to `in-progress` applies to open items only (a session matched
+  to a closed issue still shows on it). The issue document gains `state_reason` (GitHub's,
+  lowercased; null for a pull request), `closed_by` (the tracked pull requests whose
+  `closingIssuesReferences` name it, by alias; issues only) and `dismissed_at`. `dismiss_closed`
+  carries `value.closed_at`; ingest refuses it when the item was never read, is open, or was
+  closed at another instant than the one named (compared as instants, not strings); the latest
+  effective dismissal of an item wins, and derive sets `dismissed_at` (the decision's
+  `created_at`) only while the item's `closed_at` is that instant. Undo is the generic one.
+  The page hides an item it holds an unrefused, un-undone dismiss of the shown close for, before
+  any ack, and otherwise follows `dismissed_at`; meta carries `recently_closed_days`. A
+  dashboard close past its Undo window offers Dismiss too, so every closed item can leave the
+  list. Left for a follow-up: the closing commit and who closed it, which need a further GitHub
+  read and re-recorded fixtures; Recently closed lists issues only, not merged pull requests.
 - **Open (for the owner):** found by the gate and left for after landing: an upload abandoned
   for over an hour and resumed after a cleanup leaves documents no marker names, which no later
   cleanup finds; the page's own collections (`decisions`, `launches`, `views`) are read to
   1000 documents with no partial notice; a group names repos by their configured name, so a
   repo renamed on GitHub drops out of its group's scope.
 - **Open (for the owner):** "new" is approximated as open, with no comment by an inside author
-  and no labels; a closed or merged pull request still gets a pull-request status (e.g.
-  `needs-review`); `commits`, `rank` and `score` are empty; the `flow` and history snapshot files
+  and no labels; `commits`, `rank` and `score` are empty; the `flow` and history snapshot files
   are not written yet; suggestions, plans, forks and metrics documents are empty until triage.
 
 ## Claims checked
