@@ -97,7 +97,7 @@ fn owned(doc: &Value, project: &str, owner_id: &str) -> Result<()> {
 
 /// Records a saved view or a request: subject the document id, one event per document. The
 /// same document again is a repeat; a different one under the same id is refused.
-fn record_doc(tx: &mut Tx<'_>, kind: Kind, project: &str, doc: &Value) -> Result<bool> {
+pub(crate) fn record_doc(tx: &mut Tx<'_>, kind: Kind, project: &str, doc: &Value) -> Result<bool> {
     let id = id_of(doc).unwrap_or_default();
     if let Some(e) = ledger::latest(tx.conn(), &id, kind)? {
         if e.data.get("document") == Some(doc) {

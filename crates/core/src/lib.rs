@@ -27,6 +27,7 @@ pub mod root;
 pub mod schema;
 pub mod sessions;
 pub mod snapshot;
+pub mod sync;
 pub mod translate;
 pub mod write;
 

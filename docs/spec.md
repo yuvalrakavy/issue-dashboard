@@ -758,7 +758,7 @@ field, never its id, and a page action on it still names the same item.
 | `forks`, `metrics` | tracker | chapter 3 and the metrics panel |
 | `decisions` | **page** | one per thing you did: accept, reject, edit, set priority, override, approve a plan |
 | `views` | **page** | saved views (5.6) |
-| `requests` | **page** | brief previews and on-demand triage (10.8) |
+| `requests` | **page** | brief previews, on-demand triage and sync requests (7.2, 10.8) |
 | `acks` | tracker | which page decisions each cycle consumed (10.6) |
 | `launches` | **page** | one per launch request; written once and never changed (a refused send is a second document, `not_sent`, naming the first; each launch thread is a thread record of its own) |
 | `launch_status` | tracker | each launch's current transition (10.7) |
@@ -1040,6 +1040,20 @@ the prepared ones (`ArtifactData` accepts a document from a local JSON file, so 
 never passes through the model). If a direct route turns up, the CLI writes the database
 itself and the sync job goes away; nothing else changes.
 
+**Sync now.** A sync request asks for a run sooner than the next tick, for the whole project
+or for one item (`owner/repo#N`). A session that has just closed, relabelled or landed a fix
+for an issue runs `issue-dashboard sync-now --project P --issue owner/repo#N`: it records the
+request in the ledger and prints the project's `sync_task`, the scheduled task's id, and the
+session then runs that task now through the app's scheduled-tasks "run now". A per-item
+request makes the next read of the item's repo read it by node id, whatever the watermark
+says, as it reads an entering item; a global request wakes an ordinary cycle. Requests
+coalesce: a good read of the repo serves every request recorded before its plan was made, so
+ten requests before a run cost one read, a request made while a run is going waits for the
+next run, and a failed read leaves it waiting. An item the project does not track is refused. The page
+writes the same request as a `requests` document of kind `sync` (5.3): "Sync now" in the
+status strip, "Refresh" in an item's `⋯` menu and Details. The page cannot wake the task, so
+in phase 1 the next scheduled run serves it (10.8).
+
 The snapshot never waits on a model; the dashboard is as fresh as the last sync, and shows
 that time (5.5). Suggestions only change when a triage session runs, and show their age.
 
@@ -1190,6 +1204,7 @@ database (7.2).
 | `check` | the config check (1.9) | nothing |
 | `cycle --pages <file>` | the cycle of 10.4: ingest the fetched page documents, observe, derive the outbox | the ledger; `outbox/` |
 | `snapshot [--full]` | the observe step alone (chapter 2), for testing and `doctor` | the ledger |
+| `sync-now [--issue <owner/repo#N>]` | a sync request (7.2): the next run reads the item by node id; prints the scheduled task to run now | the ledger |
 | `plan`, `apply <plan> [--yes]`, `undo <run>` | **phase 2** (10.9): the write engine | the ledger; GitHub |
 | `reserve`, `launch-started`, `launch-ended`, `release` | the launch reservation steps (10.7) | the ledger |
 | `brief --launch <id>` | the brief from its template (7.5) | nothing |
@@ -1490,7 +1505,8 @@ Releasing an unconfirmed reservation is also followed by a `reserve` for the nex
 
 | Work | Woken by |
 |---|---|
-| a cycle | the sync job, every `sync_interval` |
+| a cycle | the sync job, every `sync_interval`; sooner when a session that ran `sync-now` runs the sync task now (7.2) |
+| a page sync request (Sync now, Refresh) | the next scheduled run in phase 1, since the page cannot wake the task; once the dispatcher exists, it runs the sync task when it sees the request |
 | a brief preview | a `requests` document; the next cycle builds the brief (7.5) into the outbox |
 | a launch | the page's `sendToClaude` comment (5.4) |
 | the next queued launch | the app continuing the dispatcher when one of its sessions ends a turn; or a release |
@@ -1820,6 +1836,27 @@ them rather than refusing.
   it already closed. Left open (S1): a close by someone else inside the moment between the
   fresh read and `gh issue close` is recorded as ours, as is a close inside a crash's gap; the
   intent's time is the local clock, compared with GitHub's.
+- *Sync now (after slice 3).* A sync request is a `request` event whose document has
+  `kind: "sync"`: `sync-now` writes it with author `sync-now` and an id `sync-<hash>`; the page
+  writes it to `requests` like any request (owner only, ingested once). With `items` it is a
+  per-item request; without, a global one (an empty `items` is refused by the schema).
+  A request is served by ledger order, never by the clock: the read plan (`snapshot::plan`)
+  notes the last event seq (`requests_upto`) and adds to the by-id reads every item of a
+  request after the seq the project's last good read of the repo served; recording that read
+  good stores `requests_upto` in the derived `served` table (project, repo node, seq; kept at
+  the maximum). So a request recorded while the read fetches, even in the same millisecond
+  as its start, waits for the next read. `served` is derived and not in the backup: a rebuild
+  costs one by-id read of each item ever requested, never a missed request. An item both read
+  in full and requested is read once; a requested item no longer in the repo's set is not
+  read by the incremental read that serves the request, since the daily full read checks what
+  left the set. `sync-now --issue` resolves the alias against the
+  current members of the project's sets, case-insensitively, by the number within the repo
+  named either as the config has it or by its name at its latest read (an unchanged member
+  keeps the alias it was read under, so a rename never strands it), finding the repo through
+  the ledger when `reads` is empty after a rebuild; it refuses anything else (exit 1, "not
+  tracked by project P") and never reads GitHub. The
+  task id comes from the project config's new optional `sync_task`; without it `task` is
+  null.
 - **Open (for the owner):** found by the gate and left for after landing: an upload abandoned
   for over an hour and resumed after a cleanup leaves documents no marker names, which no later
   cleanup finds; the page's own collections (`decisions`, `launches`, `views`) are read to

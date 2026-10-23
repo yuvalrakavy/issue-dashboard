@@ -180,3 +180,34 @@ fn a_sessions_file_without_its_limit_exits_1_and_records_nothing() {
     assert!(String::from_utf8_lossy(&out.stderr).contains("sessions.json"));
     assert!(!t.dir.path().join("outbox").exists());
 }
+
+#[test]
+fn sync_now_records_a_request_and_prints_the_configured_task() {
+    let t = Tracker::new();
+    t.ok(&["snapshot", "--project", "home"]);
+    let global = t.ok(&["sync-now", "--project", "home"]);
+    assert_eq!(global["items"], json!([]), "{global}");
+    assert_eq!(global["task"], Value::Null, "{global}");
+
+    let path = t.dir.path().join("projects/home.toml");
+    let text = fs::read_to_string(&path).unwrap();
+    fs::write(
+        &path,
+        text.replacen("history_days", "sync_task = \"home-sync\"\nhistory_days", 1),
+    )
+    .unwrap();
+    let one = t.ok(&["sync-now", "--project", "home", "--issue", "yuvalrakavy/Store#8"]);
+    assert_eq!(one["items"], json!(["I_kwDONszNXs8AAAABLDRZzA"]), "{one}");
+    assert_eq!(one["task"], "home-sync", "{one}");
+    assert!(one["request"].as_str().unwrap().starts_with("sync-"), "{one}");
+}
+
+#[test]
+fn sync_now_refuses_an_untracked_issue_with_exit_1() {
+    let t = Tracker::new();
+    t.ok(&["snapshot", "--project", "home"]);
+    let out = t.cmd(&["sync-now", "--project", "home", "--issue", "yuvalrakavy/Store#999999"]);
+    assert_eq!(out.status.code(), Some(1));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("not tracked by project home"), "{err}");
+}

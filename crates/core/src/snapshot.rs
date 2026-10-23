@@ -202,7 +202,9 @@ pub struct RepoPlan {
     pub watermark: Option<DateTime<Utc>>,
     /// This project's latest recorded set in the repo.
     pub previous: BTreeSet<String>,
-    /// Members to read by node id whatever the since-lists say (see the module doc).
+    /// Members to read by node id whatever the since-lists say: those a read that another read
+    /// overtook left (see the module doc), and the items of every sync request recorded since the last good read served
+    /// them (crate::sync).
     pub reread: BTreeSet<String>,
     /// Every item in this project's set at any time since its last full read of the repo: a
     /// full read checks each one that is no longer in the set, including those that left at an
@@ -210,6 +212,10 @@ pub struct RepoPlan {
     pub since_full: BTreeSet<String>,
     /// The latest alias of each item in `since_full`, for `item_gone`.
     pub aliases: BTreeMap<String, String>,
+    /// The ledger seq up to which this read, once good, serves the sync requests: the last
+    /// event when the plan was made, so a request recorded while the read runs waits for the
+    /// next one.
+    pub requests_upto: i64,
     /// Every other project and the repo names it is configured to read: the ones that read
     /// this repo (by node id, at record time) keep their members' details current.
     pub other_views: BTreeMap<String, Vec<String>>,
@@ -225,6 +231,8 @@ pub struct Plan {
 /// Plans `project`'s reads from the ledger (a read; no lock is needed).
 pub fn plan(conn: &Connection, config: &ConfigSet, project: &str, now: DateTime<Utc>) -> Result<Plan> {
     let p = config.project(project)?;
+    // The sync requests this plan's reads serve: those recorded so far (crate::sync).
+    let requests_upto = ledger::max_seq(conn)?;
     let mut repos = Vec::new();
     for view in config.views(project)?.into_values() {
         let vh = view_hash(config, &view);
@@ -261,6 +269,8 @@ pub fn plan(conn: &Connection, config: &ConfigSet, project: &str, now: DateTime<
             }
             since_full = sets_since(conn, project, node, state.as_ref().and_then(|s| s.full_seq))?;
             reread = rereads(conn, project, node)?;
+            let served = crate::sync::served(conn, project, node)?;
+            reread.extend(crate::sync::waiting(conn, project, served, requests_upto)?);
             for id in &since_full {
                 if let Some(e) = ledger::latest(conn, id, Kind::Observed)?
                     && let Some(a) = e.data.get("alias").and_then(|a| a.as_str())
@@ -276,6 +286,7 @@ pub fn plan(conn: &Connection, config: &ConfigSet, project: &str, now: DateTime<
             }
         }
         repos.push(RepoPlan {
+            requests_upto,
             other_views,
             view,
             view_hash: vh,
@@ -443,10 +454,12 @@ fn fetch_repo(r: &Reader<'_>, rp: &RepoPlan, history_days: u32, started_at: Date
             items.insert(it.node_id.clone(), it);
         }
     }
-    let mut need: Vec<String> = read_all.iter().cloned().collect();
+    // A set: an item both entering (or read in full) and requested is read once.
+    let mut need: BTreeSet<String> = read_all.iter().cloned().collect();
     need.extend(reread.intersection(&set).cloned());
     need.extend(unchecked.iter().cloned());
     need.retain(|id| !items.contains_key(id));
+    let need: Vec<String> = need.into_iter().collect();
     let mut gone = Vec::new();
     for (id, found) in r.nodes(&need)? {
         match found {
@@ -706,6 +719,7 @@ fn record_repo(tx: &mut Tx<'_>, project: &str, f: &RepoFetch) -> Result<RepoRepo
             full_seq
         ],
     )?;
+    crate::sync::mark_served(tx.conn(), project, &info.node_id, f.plan.requests_upto)?;
     Ok(report)
 }
 

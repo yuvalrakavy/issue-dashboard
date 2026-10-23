@@ -90,8 +90,10 @@ CREATE TABLE IF NOT EXISTS freshness (
 
 /// Not event tables: the read bookkeeping of the snapshot (2.2, 2.5). `watermarks` is the start
 /// of the last complete read of each repo (by node id), shared by every project; `reads` is each
-/// project's last read of each configured repo. Derived and not in the backup: losing them costs
-/// one full read, never a missed change.
+/// project's last read of each configured repo; `served` is, for each project and repo, the
+/// ledger seq up to which a good read served the sync requests (crate::sync). Derived and not in
+/// the backup: losing them costs one full read and one read by id of each requested item, never
+/// a missed change.
 const READS: &str = "
 CREATE TABLE IF NOT EXISTS watermarks (
     repo       TEXT PRIMARY KEY,
@@ -109,6 +111,12 @@ CREATE TABLE IF NOT EXISTS reads (
     full_seq   INTEGER,
     error      TEXT,
     PRIMARY KEY (project, repo)
+);
+CREATE TABLE IF NOT EXISTS served (
+    project    TEXT NOT NULL,
+    repo_node  TEXT NOT NULL,
+    seq        INTEGER NOT NULL,
+    PRIMARY KEY (project, repo_node)
 );
 CREATE TABLE IF NOT EXISTS rereads (
     project    TEXT NOT NULL,
@@ -410,6 +418,15 @@ pub fn events_by_kind(conn: &Connection, kind: Kind) -> Result<Vec<Event>> {
         conn,
         &format!("SELECT {COLUMNS} FROM events WHERE kind = ?1 ORDER BY seq"),
         [kind.as_str()],
+    )
+}
+
+/// Every event of `kind` with a sequence number above `after` and at most `upto`, in order.
+pub fn events_of_kind_between(conn: &Connection, kind: Kind, after: i64, upto: i64) -> Result<Vec<Event>> {
+    query(
+        conn,
+        &format!("SELECT {COLUMNS} FROM events WHERE kind = ?1 AND seq > ?2 AND seq <= ?3 ORDER BY seq"),
+        params![kind.as_str(), after, upto],
     )
 }
 

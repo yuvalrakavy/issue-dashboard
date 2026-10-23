@@ -319,6 +319,16 @@
     return doc;
   }
 
+  // A sync request (7.2, 10.8): for one item, or with no item for the whole project. In phase 1
+  // the page cannot wake the sync job, so the next scheduled run serves it; the note says when.
+  function syncFields(item) {
+    return item ? { kind: "sync", items: [item.id] } : { kind: "sync" };
+  }
+  function syncNote(item, minutes) {
+    const when = minutes ? "within " + minutes + " minute" + (minutes === 1 ? "" : "s") : "at the next sync";
+    return (item ? "Refresh of " + item.alias : "Sync") + " requested: the next run reads it " + when + ".";
+  }
+
   // A thread record (5.4): one per launch thread, written once when the thread starts.
   function threadDoc(thread, who, now, rand) {
     return { id: newId("T", now, rand), project: who.project, author: who.author, created_at: stamp(now), thread };
@@ -476,7 +486,7 @@
   const api = {
     PRIORITIES, COLLECTIONS, LIST_LIMIT, CLOSE_REASONS, ACK_DAYS,
     loadGeneration, follower, ackHorizon, threadDoc, repoOf, inScope, tiles, inbox, queue, decisionStates, nextRunMinutes,
-    trends, launchStates, newId, decisionDoc, launchDoc, notSentDoc, viewDoc, requestDoc, launch,
+    trends, launchStates, newId, decisionDoc, launchDoc, notSentDoc, viewDoc, requestDoc, syncFields, syncNote, launch,
     closable, closeComment, closeFields, describeClose, pendingClose, recentCloses,
     sessionLines, inProgress, ownerNotice,
   };
