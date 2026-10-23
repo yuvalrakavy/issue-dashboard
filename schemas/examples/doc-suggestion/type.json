@@ -1,0 +1,22 @@
+{
+  "item": "I_kwDOAbCdEf5xYz34",
+  "alias": "example-org/server#405",
+  "decision": "type",
+  "answer": "bug",
+  "probabilities": {
+    "bug": 0.91,
+    "todo": 0.07,
+    "decision": 0.01,
+    "docs": 0.01
+  },
+  "backend": "claude",
+  "evaluated": false,
+  "reason": "the body describes a crash on a valid input",
+  "id": "S_triage-20261023_I_kwDOAbCdEf5xYz34_type",
+  "project": "home",
+  "run_id": "triage-20261023",
+  "kind": "type",
+  "made_at": "2026-10-23T06:00:00Z",
+  "confidence": 0.91,
+  "action_label": "Label as bug"
+}

@@ -1,0 +1,6 @@
+sites      = ["server/src/command/delete.rs:212"]
+read_at    = "95c2531bb"
+tier       = "T1"
+blast      = "quick"
+related    = ["example-org/server#401"]
+kind       = "related"

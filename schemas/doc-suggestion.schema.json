@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yuvalrakavy/issue-dashboard/schemas/doc-suggestion.schema.json",
+  "title": "Tracker document: suggestions",
+  "description": "One open triage suggestion (5.8).",
+  "allOf": [
+    {
+      "$ref": "common.schema.json#/$defs/suggestionBody"
+    }
+  ],
+  "required": [
+    "id",
+    "project",
+    "run_id",
+    "kind",
+    "made_at",
+    "confidence"
+  ],
+  "properties": {
+    "id": {
+      "$ref": "common.schema.json#/$defs/docId"
+    },
+    "project": {
+      "$ref": "common.schema.json#/$defs/projectName"
+    },
+    "run_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "kind": {
+      "enum": [
+        "type",
+        "area",
+        "priority",
+        "likely_fixed",
+        "duplicate",
+        "combined"
+      ]
+    },
+    "made_at": {
+      "$ref": "common.schema.json#/$defs/timestamp"
+    },
+    "confidence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "action_label": {
+      "description": "What the main button says (5.2a), e.g. \"Set bug \u00b7 p1\".",
+      "type": "string",
+      "minLength": 1
+    }
+  },
+  "unevaluatedProperties": false
+}

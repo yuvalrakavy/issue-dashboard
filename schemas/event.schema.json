@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yuvalrakavy/issue-dashboard/schemas/event.schema.json",
+  "title": "Ledger event",
+  "description": "Any ledger event (10.3).",
+  "oneOf": [
+    {
+      "$ref": "event-config.schema.json"
+    },
+    {
+      "$ref": "event-observed.schema.json"
+    },
+    {
+      "$ref": "event-item-gone.schema.json"
+    },
+    {
+      "$ref": "event-decided.schema.json"
+    },
+    {
+      "$ref": "event-view-saved.schema.json"
+    },
+    {
+      "$ref": "event-request.schema.json"
+    },
+    {
+      "$ref": "event-suggested.schema.json"
+    },
+    {
+      "$ref": "event-launch.schema.json"
+    },
+    {
+      "$ref": "event-outcome.schema.json"
+    },
+    {
+      "$ref": "event-exported.schema.json"
+    }
+  ]
+}

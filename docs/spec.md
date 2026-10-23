@@ -1476,6 +1476,21 @@ show:
 - **undo** only where a fresh read of the item's full timeline shows no other change to the
   same label or state since the operation.
 
+### 10.10 As built: phase 1
+
+Notes added while building phase 1, for the owner to review. Each is either a choice the spec
+left open or a correction to it.
+
+**Schemas (`schemas/`).** One JSON Schema (draft 2020-12) per event kind, page document,
+tracker document, the filing block and each config layer; `schemas/examples/<schema>/` holds
+valid examples and `bad-*` ones that must be refused, checked by the test suite. Names the
+spec mentions but does not spell, chosen by the build and reversible until something consumes
+them: in the project config `owner_id` (10.5), `time_limits_days` (per priority, 2.3),
+`sync_interval_minutes` (7.2), `routing` (by launch kind, 7.4); the page decision's `action`
+values and the launch document's `kind` values; a launch document names its `recipe`, whose
+pool it takes a slot from. The filing block allows unknown keys, since 2.6 keeps and reports
+them rather than refusing.
+
 ## Claims checked
 
 | Claim | Status | Evidence |

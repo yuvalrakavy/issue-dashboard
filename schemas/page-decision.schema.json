@@ -1,0 +1,269 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yuvalrakavy/issue-dashboard/schemas/page-decision.schema.json",
+  "title": "Page document: decisions",
+  "description": "One thing the owner did on the dashboard (5.3, 5.7). Written once by the page; ingested as a decided event.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "project",
+    "author",
+    "created_at",
+    "action",
+    "target"
+  ],
+  "properties": {
+    "id": {
+      "$ref": "common.schema.json#/$defs/docId"
+    },
+    "project": {
+      "$ref": "common.schema.json#/$defs/projectName"
+    },
+    "author": {
+      "description": "The page's user id of whoever wrote the document (10.5).",
+      "type": "string",
+      "minLength": 1
+    },
+    "created_at": {
+      "$ref": "common.schema.json#/$defs/timestamp"
+    },
+    "action": {
+      "enum": [
+        "accept_suggestion",
+        "dismiss_suggestion",
+        "edit_suggestion",
+        "set_priority",
+        "clear_priority",
+        "set_override",
+        "clear_override",
+        "keep_override",
+        "accept_github_change",
+        "ignore_github_change",
+        "approve_plan",
+        "undo",
+        "cancel_launch",
+        "release_reservation",
+        "settle_orphan"
+      ]
+    },
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "item": {
+          "$ref": "common.schema.json#/$defs/nodeId"
+        },
+        "alias": {
+          "$ref": "common.schema.json#/$defs/alias"
+        },
+        "suggestion": {
+          "$ref": "common.schema.json#/$defs/docId"
+        },
+        "decision": {
+          "description": "The decision an undo names.",
+          "$ref": "common.schema.json#/$defs/docId"
+        },
+        "launch": {
+          "$ref": "common.schema.json#/$defs/docId"
+        },
+        "plan": {
+          "$ref": "common.schema.json#/$defs/docId"
+        },
+        "token": {
+          "$ref": "common.schema.json#/$defs/token"
+        },
+        "session": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "value": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "priority": {
+          "$ref": "common.schema.json#/$defs/priority"
+        },
+        "type": {
+          "$ref": "common.schema.json#/$defs/type"
+        },
+        "areas": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "routing": {
+          "$ref": "common.schema.json#/$defs/routing"
+        }
+      }
+    },
+    "reason": {
+      "description": "The optional one-tap reason (5.7); required for an override (1.5).",
+      "type": "string"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "undo"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "target": {
+            "required": [
+              "decision"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "cancel_launch"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "target": {
+            "required": [
+              "launch"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "enum": [
+              "release_reservation"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "target": {
+            "required": [
+              "launch",
+              "token"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "enum": [
+              "settle_orphan"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "target": {
+            "required": [
+              "launch",
+              "token",
+              "session"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "set_priority"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "value"
+        ],
+        "properties": {
+          "target": {
+            "required": [
+              "item"
+            ]
+          },
+          "value": {
+            "required": [
+              "priority"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "set_override"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "value",
+          "reason"
+        ],
+        "properties": {
+          "target": {
+            "required": [
+              "item"
+            ]
+          },
+          "value": {
+            "required": [
+              "priority"
+            ]
+          },
+          "reason": {
+            "minLength": 1
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "enum": [
+              "accept_suggestion",
+              "dismiss_suggestion",
+              "edit_suggestion"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "target": {
+            "required": [
+              "suggestion"
+            ]
+          }
+        }
+      }
+    }
+  ]
+}

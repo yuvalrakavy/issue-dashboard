@@ -1,0 +1,126 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yuvalrakavy/issue-dashboard/schemas/doc-launch-status.schema.json",
+  "title": "Tracker document: launch_status",
+  "description": "A launch's current transition (10.7), and any orphans recorded alongside it.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "launch",
+    "state",
+    "updated_at",
+    "orphans"
+  ],
+  "properties": {
+    "id": {
+      "$ref": "common.schema.json#/$defs/docId"
+    },
+    "launch": {
+      "$ref": "common.schema.json#/$defs/docId"
+    },
+    "state": {
+      "enum": [
+        "requested",
+        "queued",
+        "reserved",
+        "unconfirmed",
+        "started",
+        "ended",
+        "released",
+        "withdrawn",
+        "not_sent"
+      ]
+    },
+    "token": {
+      "anyOf": [
+        {
+          "$ref": "common.schema.json#/$defs/token"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "session": {
+      "anyOf": [
+        {
+          "type": "string",
+          "minLength": 1
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "dispatcher": {
+      "anyOf": [
+        {
+          "type": "string",
+          "minLength": 1
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "end_state": {
+      "anyOf": [
+        {
+          "$ref": "common.schema.json#/$defs/endState"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "updated_at": {
+      "$ref": "common.schema.json#/$defs/timestamp"
+    },
+    "reserved_at": {
+      "anyOf": [
+        {
+          "$ref": "common.schema.json#/$defs/timestamp"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "orphans": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "token",
+          "session",
+          "reported_at"
+        ],
+        "properties": {
+          "token": {
+            "$ref": "common.schema.json#/$defs/token"
+          },
+          "session": {
+            "type": "string",
+            "minLength": 1
+          },
+          "reported_at": {
+            "$ref": "common.schema.json#/$defs/timestamp"
+          }
+        }
+      }
+    },
+    "needs_attention": {
+      "anyOf": [
+        {
+          "type": "string",
+          "minLength": 1
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  }
+}

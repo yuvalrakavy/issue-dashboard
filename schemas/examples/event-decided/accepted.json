@@ -1,0 +1,29 @@
+{
+  "seq": 5,
+  "time": "2026-10-23T08:00:00Z",
+  "kind": "decided",
+  "subject": "D_20261023_0814_q1w2",
+  "pred": 0,
+  "distinct": {},
+  "identity": "1957a58377d6d0e15168922c44649a776459b091ca47abe7d51d3f09540cf0d1",
+  "data": {
+    "project": "home",
+    "author": "user_01ABCDEF",
+    "accepted": true,
+    "refusal": null,
+    "document": {
+      "id": "D_20261023_0814_q1w2",
+      "project": "home",
+      "author": "user_01ABCDEF",
+      "created_at": "2026-10-23T08:14:00Z",
+      "action": "set_priority",
+      "target": {
+        "item": "I_kwDOAbCdEf5xYz12",
+        "alias": "example-org/server#403"
+      },
+      "value": {
+        "priority": "p1"
+      }
+    }
+  }
+}

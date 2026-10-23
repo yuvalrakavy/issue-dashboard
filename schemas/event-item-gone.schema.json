@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yuvalrakavy/issue-dashboard/schemas/event-item-gone.schema.json",
+  "title": "Ledger event: item_gone",
+  "description": "The daily full read confirmed GitHub no longer returns the item (10.2).",
+  "allOf": [
+    {
+      "$ref": "common.schema.json#/$defs/eventEnvelope"
+    }
+  ],
+  "properties": {
+    "kind": {
+      "const": "item_gone"
+    },
+    "subject": {
+      "$ref": "common.schema.json#/$defs/nodeId"
+    },
+    "distinct": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "read_id"
+      ],
+      "properties": {
+        "read_id": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "data": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "alias",
+        "read_id",
+        "read_at"
+      ],
+      "properties": {
+        "alias": {
+          "anyOf": [
+            {
+              "$ref": "common.schema.json#/$defs/alias"
+            },
+            {
+              "$ref": "common.schema.json#/$defs/repoName"
+            }
+          ]
+        },
+        "read_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "read_at": {
+          "$ref": "common.schema.json#/$defs/timestamp"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,50 @@
+{
+  "id": "I_kwDOAbCdEf5xYz12",
+  "alias": "example-org/server#403",
+  "kind": "issue",
+  "title": "DeleteStore parks in remove_dir_all and the server stops answering",
+  "state": "open",
+  "type": "bug",
+  "areas": [
+    "kernel"
+  ],
+  "modifiers": [],
+  "priority": {
+    "value": "p0",
+    "source": "guess",
+    "label": "p0",
+    "project": null,
+    "override": null,
+    "effective": "p0",
+    "github_shows": null
+  },
+  "status": "ready",
+  "created_at": "2026-10-20T10:00:00Z",
+  "updated_at": "2026-10-22T17:00:00Z",
+  "idle_days": 1,
+  "limit_breached": false,
+  "links": {
+    "blocked_by": [],
+    "blocks": [
+      "example-org/server#405"
+    ],
+    "parent": null,
+    "children": []
+  },
+  "commits": [],
+  "author": "example-owner",
+  "outside": false,
+  "rank": 1,
+  "score": {
+    "cost_of_delay": 24,
+    "value": 16,
+    "time_criticality": 3,
+    "risk_opportunity": 5,
+    "job_size": 3.2,
+    "confidence": 0.8,
+    "score": 6.0
+  },
+  "untranslated_labels": [],
+  "launch": null,
+  "stale": false
+}

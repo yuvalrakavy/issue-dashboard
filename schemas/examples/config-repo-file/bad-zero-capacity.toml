@@ -1,0 +1,6 @@
+[launch.x]
+capacity = 0
+workspace = "w"
+release = "r"
+land = "l"
+gate.quick = { run = "t", minutes = 1 }

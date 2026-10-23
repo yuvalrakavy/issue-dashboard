@@ -1,0 +1,220 @@
+{
+  "seq": 1,
+  "time": "2026-10-23T08:00:00Z",
+  "kind": "config",
+  "subject": "config",
+  "pred": 0,
+  "distinct": {
+    "content_hash": "a456208aed8b14e8064816b60afc1b3fd0c7021555adde7472b205955f24d596"
+  },
+  "identity": "b28435ebfb8985d53e66d64a7afeed75c81d358b74ec7ecf220be08560e84ccd",
+  "data": {
+    "content_hash": "a456208aed8b14e8064816b60afc1b3fd0c7021555adde7472b205955f24d596",
+    "content": {
+      "registry": {
+        "defaults": {
+          "translate": {
+            "type": {
+              "bug": [
+                "bug"
+              ],
+              "todo": [
+                "todo"
+              ],
+              "decision": [
+                "design-question"
+              ],
+              "docs": [
+                "docs"
+              ]
+            },
+            "priority": {
+              "p0": [
+                "p0"
+              ],
+              "p1": [
+                "p1"
+              ],
+              "p2": [
+                "p2"
+              ],
+              "p3": [
+                "p3"
+              ]
+            },
+            "modifier": {
+              "needs_decision": [
+                "needs-decision"
+              ],
+              "in_progress": [
+                "InProgress"
+              ],
+              "self_contained": [
+                "self-contained"
+              ],
+              "partial": [
+                "partial"
+              ],
+              "umbrella": [
+                "umbrella"
+              ]
+            }
+          }
+        },
+        "repo": {
+          "example-org/server": {
+            "local_path": "~/src/server",
+            "launch": "lanes"
+          },
+          "example-org/bridge-a": {
+            "local_path": "~/src/bridge-a",
+            "launch": "worktree-pr",
+            "translate": {
+              "type": {
+                "todo": [
+                  "todo",
+                  "enhancement"
+                ]
+              }
+            }
+          },
+          "upstream-org/engine": {
+            "translate": {
+              "type": {
+                "todo": [
+                  "enhancement",
+                  "new feature"
+                ],
+                "bug": [
+                  "bug",
+                  "regression"
+                ]
+              },
+              "priority": {
+                "p1": [
+                  "priority"
+                ]
+              },
+              "area": {
+                "vm": [
+                  "vm"
+                ]
+              }
+            }
+          }
+        },
+        "groups": {
+          "bridges": [
+            "example-org/bridge-a",
+            "example-org/bridge-b"
+          ]
+        },
+        "launch": {
+          "worktree-pr": {
+            "capacity": 2,
+            "workspace": "git worktree add ../{repo}-{branch} -b {branch}",
+            "release": "git worktree remove ../{repo}-{branch}",
+            "gate": {
+              "quick": {
+                "run": "cargo nextest run",
+                "minutes": 2
+              }
+            },
+            "land": "gh pr create --fill"
+          }
+        },
+        "forks": {
+          "owners": [
+            "example-org"
+          ]
+        },
+        "fork": {
+          "example-org/engine": {
+            "upstream": "upstream-org/engine",
+            "fixes": [
+              "upstream-org/engine#1189"
+            ]
+          }
+        }
+      },
+      "projects": {
+        "home": {
+          "schema": 1,
+          "name": "Example home automation",
+          "dashboard": "https://claude.ai/artifact/00000000-0000-0000-0000-000000000000",
+          "owner_id": "user_01ABCDEF",
+          "maintainers": [
+            "example-owner"
+          ],
+          "history_days": 180,
+          "max_writes_per_run": 10,
+          "time_limits_days": {
+            "p0": 2,
+            "p1": 14,
+            "p2": 60,
+            "p3": 180
+          },
+          "member": [
+            {
+              "repo": "example-org/server",
+              "writes": "everything"
+            },
+            {
+              "repo": "example-org/bridge-a",
+              "writes": "labels"
+            },
+            {
+              "group": "bridges",
+              "exclude": [
+                "example-org/bridge-b"
+              ]
+            },
+            {
+              "repo": "upstream-org/engine",
+              "filter": "author:example-owner",
+              "also": [
+                912,
+                1047
+              ],
+              "read_only": true
+            }
+          ]
+        }
+      },
+      "repo_files": {
+        "example-org/server": {
+          "schema": 1,
+          "areas": [
+            "kernel",
+            "sdl",
+            "media",
+            "process"
+          ],
+          "docs": [
+            "CLAUDE.md",
+            "docs/guides/logging-policy.md"
+          ],
+          "launch": {
+            "lanes": {
+              "capacity": 3,
+              "workspace": "dev-track claim {branch}",
+              "release": "dev-track release --full",
+              "gate": {
+                "quick": {
+                  "run": "scripts/pre-merge-check.sh --quick",
+                  "minutes": 6
+                },
+                "full": {
+                  "run": "scripts/pre-merge-check.sh --full",
+                  "minutes": 17
+                }
+              },
+              "land": "dev-track land",
+              "process": ".claude/skills/ways-of-working/SKILL.md"
+            }
+          }
+        }
+      }
+    }
+  }
+}

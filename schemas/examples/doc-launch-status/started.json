@@ -1,0 +1,19 @@
+{
+  "id": "L_20261023_080000_ab12",
+  "launch": "L_20261023_080000_ab12",
+  "state": "started",
+  "token": "res-0123456789abcdef0123456789abcdef",
+  "session": "local_fix_1",
+  "dispatcher": "local_dispatcher_1",
+  "end_state": null,
+  "updated_at": "2026-10-23T08:21:00Z",
+  "reserved_at": "2026-10-23T08:20:30Z",
+  "orphans": [
+    {
+      "token": "res-0123456789abcdef0123456789abcdef",
+      "session": "local_fix_2",
+      "reported_at": "2026-10-23T08:40:00Z"
+    }
+  ],
+  "needs_attention": null
+}

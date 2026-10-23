@@ -1,0 +1,3 @@
+[repo."example-org/server"]
+local_path = "~/src/server"
+launch_recipe = "lanes"

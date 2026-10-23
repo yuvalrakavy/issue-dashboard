@@ -1,0 +1,14 @@
+{
+  "seq": 18,
+  "time": "2026-10-23T08:00:00Z",
+  "kind": "exported",
+  "subject": "ledger",
+  "pred": 0,
+  "distinct": {
+    "cursor": 17
+  },
+  "identity": "ABC",
+  "data": {
+    "cursor": 17
+  }
+}

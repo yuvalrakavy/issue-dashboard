@@ -1,0 +1,4 @@
+schema = 1
+name = "x"
+[[member]]
+repo = "a/b"

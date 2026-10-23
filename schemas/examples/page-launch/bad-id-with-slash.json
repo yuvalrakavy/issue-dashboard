@@ -1,0 +1,19 @@
+{
+  "id": "L/with/slashes",
+  "project": "home",
+  "author": "user_01ABCDEF",
+  "created_at": "2026-10-23T08:20:00Z",
+  "kind": "fix",
+  "items": [
+    "I_kwDOAbCdEf5xYz12"
+  ],
+  "aliases": [
+    "example-org/server#403"
+  ],
+  "recipe": "lanes",
+  "routing": {
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "reason": "T1, self-contained"
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "id": "V_without_bridges",
+  "project": "home",
+  "author": "user_01ABCDEF",
+  "created_at": "2026-10-23T08:30:00Z",
+  "name": "Without bridges",
+  "include": [],
+  "exclude": [
+    {
+      "group": "bridges",
+      "repo": "example-org/bridge-a"
+    }
+  ]
+}

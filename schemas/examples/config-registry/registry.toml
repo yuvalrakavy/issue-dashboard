@@ -1,0 +1,47 @@
+# <root>/repos.toml
+[defaults.translate]
+type.bug      = ["bug"]
+type.todo     = ["todo"]
+type.decision = ["design-question"]
+type.docs     = ["docs"]
+priority.p0   = ["p0"]
+priority.p1   = ["p1"]
+priority.p2   = ["p2"]
+priority.p3   = ["p3"]
+modifier.needs_decision = ["needs-decision"]
+modifier.in_progress    = ["InProgress"]
+modifier.self_contained = ["self-contained"]
+modifier.partial        = ["partial"]
+modifier.umbrella       = ["umbrella"]
+
+[repo."example-org/server"]
+local_path = "~/src/server"
+launch     = "lanes"
+
+[repo."example-org/bridge-a"]
+local_path     = "~/src/bridge-a"
+launch         = "worktree-pr"
+translate.type.todo = ["todo", "enhancement"]
+
+[repo."upstream-org/engine"]
+translate.type.todo  = ["enhancement", "new feature"]
+translate.type.bug   = ["bug", "regression"]
+translate.priority.p1 = ["priority"]
+translate.area.vm    = ["vm"]
+
+[groups]
+bridges = ["example-org/bridge-a", "example-org/bridge-b"]
+
+[launch.worktree-pr]
+capacity  = 2
+workspace = "git worktree add ../{repo}-{branch} -b {branch}"
+release   = "git worktree remove ../{repo}-{branch}"
+gate.quick = { run = "cargo nextest run", minutes = 2 }
+land      = "gh pr create --fill"
+
+[forks]
+owners = ["example-org"]
+
+[fork."example-org/engine"]
+upstream = "upstream-org/engine"
+fixes    = ["upstream-org/engine#1189"]

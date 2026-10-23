@@ -1,0 +1,10 @@
+{
+  "id": "L_20261023_080001_cd34",
+  "project": "home",
+  "author": "user_01ABCDEF",
+  "created_at": "2026-10-23T08:20:01Z",
+  "not_sent": {
+    "launch": "L_20261023_080000_ab12",
+    "error": "no_session"
+  }
+}

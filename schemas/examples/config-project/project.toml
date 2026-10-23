@@ -1,0 +1,26 @@
+# <root>/projects/home.toml
+schema   = 1
+name     = "Example home automation"
+dashboard = "https://claude.ai/artifact/00000000-0000-0000-0000-000000000000"
+owner_id = "user_01ABCDEF"
+maintainers = ["example-owner"]
+history_days = 180
+max_writes_per_run = 10
+time_limits_days = { p0 = 2, p1 = 14, p2 = 60, p3 = 180 }
+
+[[member]]
+repo = "example-org/server"
+
+[[member]]
+repo   = "example-org/bridge-a"
+writes = "labels"
+
+[[member]]
+group   = "bridges"
+exclude = ["example-org/bridge-b"]
+
+[[member]]
+repo      = "upstream-org/engine"
+filter    = "author:example-owner"
+also      = [912, 1047]
+read_only = true

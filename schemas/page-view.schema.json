@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yuvalrakavy/issue-dashboard/schemas/page-view.schema.json",
+  "title": "Page document: views",
+  "description": "A saved view (5.6): include and exclude by repo and group; exclude wins.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "project",
+    "author",
+    "created_at",
+    "name",
+    "include",
+    "exclude"
+  ],
+  "properties": {
+    "id": {
+      "$ref": "common.schema.json#/$defs/docId"
+    },
+    "project": {
+      "$ref": "common.schema.json#/$defs/projectName"
+    },
+    "author": {
+      "description": "The page's user id of whoever wrote the document (10.5).",
+      "type": "string",
+      "minLength": 1
+    },
+    "created_at": {
+      "$ref": "common.schema.json#/$defs/timestamp"
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "include": {
+      "description": "Empty means every repo.",
+      "type": "array",
+      "items": {
+        "$ref": "common.schema.json#/$defs/scopeEntry"
+      }
+    },
+    "exclude": {
+      "type": "array",
+      "items": {
+        "$ref": "common.schema.json#/$defs/scopeEntry"
+      }
+    }
+  }
+}

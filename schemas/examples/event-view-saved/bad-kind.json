@@ -1,0 +1,25 @@
+{
+  "seq": 7,
+  "time": "2026-10-23T08:00:00Z",
+  "kind": "view",
+  "subject": "V_without_bridges",
+  "pred": 0,
+  "distinct": {},
+  "identity": "dbd0319b0a6ec6526e364d65726c12749d98cd9ae3576645c62097cb10c58aed",
+  "data": {
+    "project": "home",
+    "document": {
+      "id": "V_without_bridges",
+      "project": "home",
+      "author": "user_01ABCDEF",
+      "created_at": "2026-10-23T08:30:00Z",
+      "name": "Without bridges",
+      "include": [],
+      "exclude": [
+        {
+          "group": "bridges"
+        }
+      ]
+    }
+  }
+}

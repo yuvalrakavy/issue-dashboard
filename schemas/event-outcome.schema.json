@@ -1,0 +1,98 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yuvalrakavy/issue-dashboard/schemas/event-outcome.schema.json",
+  "title": "Ledger event: outcome",
+  "description": "A session's outcome record (7.7). Recorded once per launch.",
+  "allOf": [
+    {
+      "$ref": "common.schema.json#/$defs/eventEnvelope"
+    }
+  ],
+  "properties": {
+    "kind": {
+      "const": "outcome"
+    },
+    "subject": {
+      "$ref": "common.schema.json#/$defs/docId"
+    },
+    "distinct": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [],
+      "properties": {}
+    },
+    "data": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "launch",
+        "landed",
+        "recorded_by",
+        "missing"
+      ],
+      "properties": {
+        "launch": {
+          "$ref": "common.schema.json#/$defs/docId"
+        },
+        "landed": {
+          "type": "boolean"
+        },
+        "commit": {
+          "$ref": "common.schema.json#/$defs/commit"
+        },
+        "pull_request": {
+          "type": "string",
+          "format": "uri"
+        },
+        "wall_clock_minutes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "gate_runs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "level",
+              "runs"
+            ],
+            "properties": {
+              "level": {
+                "type": "string",
+                "minLength": 1
+              },
+              "runs": {
+                "type": "integer",
+                "minimum": 1
+              }
+            }
+          }
+        },
+        "findings_fixed": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "context_tokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "recorded_by": {
+          "description": "session, or dispatcher when the session ended without one (7.7).",
+          "enum": [
+            "session",
+            "dispatcher"
+          ]
+        },
+        "missing": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        }
+      }
+    }
+  }
+}

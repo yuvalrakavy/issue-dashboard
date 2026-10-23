@@ -1,0 +1,260 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yuvalrakavy/issue-dashboard/schemas/doc-metrics.schema.json",
+  "title": "Tracker document: metrics",
+  "description": "The Trends tab (5.2). Every ratio carries its base (5.2a): counts, never a bare percentage.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "project",
+    "period_days",
+    "flow",
+    "over_time_limit",
+    "outside",
+    "decision_accuracy",
+    "session_outcomes"
+  ],
+  "properties": {
+    "id": {
+      "$ref": "common.schema.json#/$defs/docId"
+    },
+    "project": {
+      "$ref": "common.schema.json#/$defs/projectName"
+    },
+    "period_days": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "flow": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "week",
+          "opened",
+          "closed_completed",
+          "closed_not_planned",
+          "net"
+        ],
+        "properties": {
+          "week": {
+            "type": "string",
+            "pattern": "^[0-9]{4}-W[0-9]{2}$"
+          },
+          "repo": {
+            "$ref": "common.schema.json#/$defs/repoName"
+          },
+          "group": {
+            "type": "string",
+            "minLength": 1
+          },
+          "opened": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "closed_completed": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "closed_not_planned": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "net": {
+            "type": "integer"
+          }
+        }
+      }
+    },
+    "over_time_limit": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "p0": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "count",
+            "of"
+          ],
+          "properties": {
+            "count": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "of": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        },
+        "p1": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "count",
+            "of"
+          ],
+          "properties": {
+            "count": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "of": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        },
+        "p2": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "count",
+            "of"
+          ],
+          "properties": {
+            "count": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "of": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        },
+        "p3": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "count",
+            "of"
+          ],
+          "properties": {
+            "count": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "of": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        }
+      }
+    },
+    "outside": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "first_response_days",
+        "first_review_days",
+        "opened",
+        "closed"
+      ],
+      "properties": {
+        "first_response_days": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "first_review_days": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "opened": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "closed": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "decision_accuracy": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "decision",
+          "backend",
+          "accepted",
+          "of"
+        ],
+        "properties": {
+          "decision": {
+            "type": "string",
+            "minLength": 1
+          },
+          "backend": {
+            "type": "string",
+            "minLength": 1
+          },
+          "accepted": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "of": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      }
+    },
+    "session_outcomes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "repo",
+          "landed",
+          "of",
+          "estimate_ratio"
+        ],
+        "properties": {
+          "repo": {
+            "$ref": "common.schema.json#/$defs/repoName"
+          },
+          "landed": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "of": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "estimate_ratio": {
+            "anyOf": [
+              {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      }
+    }
+  }
+}

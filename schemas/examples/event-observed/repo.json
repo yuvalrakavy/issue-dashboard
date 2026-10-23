@@ -1,0 +1,29 @@
+{
+  "seq": 3,
+  "time": "2026-10-23T08:00:00Z",
+  "kind": "observed",
+  "subject": "R_kgDOAbCdEf",
+  "pred": 0,
+  "distinct": {
+    "content_hash": "a78bac237b4fa57274764d183309a5f2b596173d3e5f17834c99f77f8debf5f6"
+  },
+  "identity": "1c5461ed58ea2b4a9ae695dc83530d6a64d1cce032ac3a8c9cc7f9a2ed2d3dd0",
+  "data": {
+    "item": "repo",
+    "alias": "example-org/server",
+    "updated_at": "2026-10-22T17:00:00Z",
+    "read_at": "2026-10-23T08:00:00Z",
+    "read_id": "read-20261023T080000Z-server",
+    "content_hash": "a78bac237b4fa57274764d183309a5f2b596173d3e5f17834c99f77f8debf5f6",
+    "content": {
+      "visibility": "public",
+      "viewer_permission": "ADMIN",
+      "labels": [
+        "bug",
+        "todo",
+        "p0"
+      ],
+      "default_branch": "main"
+    }
+  }
+}
