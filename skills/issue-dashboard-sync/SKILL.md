@@ -18,7 +18,7 @@ content never passes through the conversation.
 | `ROOT` | the tracker root (`ISSUE_DASHBOARD_ROOT`) |
 | `PROJECT` | the project's config stem, e.g. `villa-rakavy` |
 | `BIN` | the `issue-dashboard` binary |
-| `WORK` | a fresh, empty scratch directory for this run (never reuse one). Keep its path short: every batch entry repeats it, and a 150-character path costs about 10k output tokens per 50-entry batch |
+| `WORK` | a fresh, empty scratch directory for this run (never reuse one). Keep its path short: every batch entry repeats it, and a 150-character path costs about 10k output tokens per 50-entry batch. **It must not be under `~/.claude`**: `ArtifactData` refuses to save documents (`out_dir`) anywhere in that tree, so step 1 fails there. A short path such as `mktemp -d /tmp/idsync.XXXX` works |
 
 Every step below is one tool call or one command. A step that fails **stops the run**: report
 what failed and the step, and do not retry with different flags or write anything by hand.
