@@ -33,6 +33,10 @@ paste the dashboard's link in your message so it can arm its watch. It reserves 
 the brief and starts the session; when the app will not let it start one from a page comment,
 it shows the session as a card in its own transcript for you to start.
 
+Every session watching the page with auto-replies armed is woken by every launch, so the
+dispatcher should be the only one: a session that republishes the page stops its watch
+afterwards (`ArtifactComments` `watch` with `on: false`).
+
 Recommend closures runs a read-only session over the issues in view. It judges each repo's
 issues by the repo's own campaign skill (`campaign_skill` in the registry, a path in the
 repo's `local_path` checkout), or by `docs/closing-recommendations.md` when the repo has none,

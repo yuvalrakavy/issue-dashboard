@@ -26,6 +26,12 @@ files between the page, the CLI and the app.
    pastes `PAGE` in their message. Arm the watch: `ArtifactComments` `watch` with `url: PAGE`.
    Check the reply says auto-replies armed; if not, tell the owner and stop. A launch comment
    reaches this session only while the watch is armed.
+   **Be the only watcher.** Every session whose watch on `PAGE` has auto-replies armed is
+   woken by every launch comment, and a session that publishes the page arms one. So any
+   other session that publishes or watches the dashboard stops its watch afterwards
+   (`ArtifactComments` `watch` with `on: false`). If one answers or resolves a launch thread
+   first anyway, the launch is still in `launches/`; a second dispatcher is refused by
+   `reserve`, so a launch is never started twice.
 2. Note your own model and effort (`get_session` on yourself). You can start a session only
    at or below them; a launch routed higher is refused (below), never started downgraded.
 3. Settle (below), then wait.
