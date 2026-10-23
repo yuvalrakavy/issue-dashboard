@@ -577,6 +577,294 @@ fn the_recorded_fix_403_session_is_matched_when_store_403_is_tracked() {
     assert!(m.iter().all(|a| a == "yuvalrakavy/Store#403"), "{m:?}");
 }
 
+// ---- the deep gate's mutation pass: behaviour the tests above left unpinned ----
+
+/// A launch of `items` in `project`, reserved and recorded as started by `session`.
+fn launched(t: &TempRoot, project: &str, items: &[&str], session: &str) {
+    t.root
+        .mutate(at(1), |tx| {
+            launch::request(tx, &common::launch_doc("L_9", project, items, "lanes"), Via::Ingest)?;
+            let token = match launch::reserve(tx, "L_9", "disp", &|_| Ok(1))? {
+                Reservation::Reserved { token, .. } => token,
+                other => panic!("{other:?}"),
+            };
+            launch::started(tx, &token, session)
+        })
+        .unwrap();
+}
+
+fn id_of(d: &Value, alias: &str) -> String {
+    by_alias(d, alias)["id"].as_str().unwrap().to_string()
+}
+
+#[test]
+fn the_longest_checkout_holding_the_working_directory_wins() {
+    let t = root();
+    // rhai's checkout lies inside Store's.
+    let path = t.path().join("repos.toml");
+    let text = fs::read_to_string(&path).unwrap();
+    let nested = format!("{STORE_CHECKOUT}/vendor/rhai");
+    let text = text.replace(RHAI_CHECKOUT, &nested);
+    assert!(text.contains(&nested));
+    fs::write(&path, text).unwrap();
+    let (_, d) = run(
+        &t,
+        Some(&list(20, vec![row("s1", "Fix #1193", &format!("{nested}/src"))])),
+        5,
+    );
+    assert_eq!(
+        shown(&d, "rhaiscript/rhai#1193"),
+        vec![("s1".into(), "probable".into(), "title".into())]
+    );
+}
+
+#[test]
+fn a_session_the_launch_and_its_pull_request_both_name_is_shown_once_per_item() {
+    let t = root();
+    let (_, base) = run(&t, None, 0);
+    let pr = id_of(&base, "rhaiscript/rhai#1194");
+    let issue = id_of(&base, "rhaiscript/rhai#1193");
+    launched(&t, "home", &[&pr, &issue], "s1");
+    let mut r = row("s1", "tidy", &format!("{RHAI_CHECKOUT}/x"));
+    r["prNumber"] = json!(1194);
+    let (_, d) = run(&t, Some(&list(20, vec![r])), 5);
+    for a in ["rhaiscript/rhai#1194", "rhaiscript/rhai#1193"] {
+        assert_eq!(
+            shown(&d, a),
+            vec![("s1".into(), "exact".into(), "launch".into())],
+            "{a}"
+        );
+    }
+}
+
+#[test]
+fn a_title_and_a_branch_naming_the_same_item_say_the_title() {
+    let t = root();
+    let (_, base) = run(&t, None, 0);
+    let (alias, n) = ready_store_issue(&base);
+    let mut r = row("s1", &format!("Fix #{n}"), STORE_CHECKOUT);
+    r["branch"] = json!(format!("fix/issue-{n}"));
+    let (_, d) = run(&t, Some(&list(20, vec![r])), 5);
+    assert_eq!(
+        shown(&d, &alias),
+        vec![("s1".into(), "probable".into(), "title".into())]
+    );
+    // A title that names nothing leaves the branch to say it.
+    let mut r = row("s2", "tidy up", STORE_CHECKOUT);
+    r["branch"] = json!(format!("fix/issue-{n}"));
+    let (_, d) = run(&t, Some(&list(20, vec![r])), 10);
+    assert_eq!(
+        shown(&d, &alias),
+        vec![("s2".into(), "probable".into(), "branch".into())]
+    );
+}
+
+#[test]
+fn a_title_and_a_branch_naming_different_items_match_nothing() {
+    let t = root();
+    let (_, base) = run(&t, None, 0);
+    let (_, n) = ready_store_issue(&base);
+    let mut r = row("s1", &format!("Fix #{n}"), STORE_CHECKOUT);
+    r["branch"] = json!(format!("fix/issue-{}", n + 1));
+    let (_, d) = run(&t, Some(&list(20, vec![r])), 5);
+    assert!(matched(&d).is_empty(), "{:?}", matched(&d));
+}
+
+#[test]
+fn another_projects_launch_does_not_make_its_session_exact_here() {
+    let t = root();
+    let (_, base) = run(&t, None, 0);
+    let (alias, _) = ready_store_issue(&base);
+    let item = id_of(&base, &alias);
+    launched(&t, "elsewhere", &[&item], "s1");
+    let (_, d) = run(&t, Some(&list(20, vec![row("s1", "tidy", "/elsewhere")])), 5);
+    assert!(matched(&d).is_empty(), "{:?}", matched(&d));
+}
+
+#[test]
+fn a_launch_whose_items_the_project_does_not_show_does_not_hide_the_titles_reference() {
+    let t = root();
+    let (_, base) = run(&t, None, 0);
+    let (alias, n) = ready_store_issue(&base);
+    launched(&t, "home", &["I_not_in_the_project"], "s1");
+    let (_, d) = run(
+        &t,
+        Some(&list(20, vec![row("s1", &format!("Fix #{n}"), STORE_CHECKOUT)])),
+        5,
+    );
+    assert_eq!(
+        shown(&d, &alias),
+        vec![("s1".into(), "probable".into(), "title".into())]
+    );
+}
+
+#[test]
+fn only_a_ready_or_blocked_issue_becomes_in_progress() {
+    let t = root();
+    // In the fixture Store#78 needs a decision and Store#71 is untriaged.
+    let rows = vec![
+        row("s78", "Fix #78", STORE_CHECKOUT),
+        row("s71", "Fix #71", STORE_CHECKOUT),
+    ];
+    let (_, d) = run(&t, Some(&list(20, rows)), 5);
+    for (a, status) in [
+        ("yuvalrakavy/Store#78", "needs-decision"),
+        ("yuvalrakavy/Store#71", "untriaged"),
+    ] {
+        assert_eq!(by_alias(&d, a)["status"], status, "{a} keeps its status");
+        assert_eq!(by_alias(&d, a)["sessions"].as_array().unwrap().len(), 1, "{a} shows it");
+    }
+}
+
+#[test]
+fn a_missing_session_as_active_as_the_oldest_listed_row_is_gone_from_a_cut_list() {
+    let t = root();
+    let a = row("a", "a", STORE_CHECKOUT);
+    let b = row("b", "b", STORE_CHECKOUT);
+    run(&t, Some(&list(20, vec![a.clone(), b])), 0);
+    // `b` was as active as the one row listed, so a list cut at 1 would have shown either.
+    let (r, _) = run(&t, Some(&list(1, vec![a])), 5);
+    assert_eq!(r.sessions.gone, 1, "{:?}", r.sessions);
+    assert_eq!(events(&t, Kind::SessionGone)[0].subject, "b");
+}
+
+#[test]
+fn a_session_listed_twice_in_one_list_is_recorded_once_from_its_first_row() {
+    let t = root();
+    let (r, _) = run(
+        &t,
+        Some(&list(
+            20,
+            vec![row("s1", "first", STORE_CHECKOUT), row("s1", "second", STORE_CHECKOUT)],
+        )),
+        0,
+    );
+    assert_eq!(r.sessions.seen, 1);
+    let seen = events(&t, Kind::SessionSeen);
+    assert_eq!(seen.len(), 1);
+    assert_eq!(seen[0].data["title"], "first");
+}
+
+#[test]
+fn a_change_of_title_directory_branch_or_pull_request_is_recorded_at_once() {
+    let t = root();
+    let mut r = row("s1", "work", STORE_CHECKOUT);
+    run(&t, Some(&list(20, vec![r.clone()])), 0);
+    let changes: [(&str, Value); 4] = [
+        ("title", json!("other work")),
+        ("cwd", json!("/elsewhere")),
+        ("branch", json!("fix/x")),
+        ("prNumber", json!(7)),
+    ];
+    for (i, (k, v)) in changes.into_iter().enumerate() {
+        r[k] = v;
+        let (rep, _) = run(&t, Some(&list(20, vec![r.clone()])), 5 + i as i64);
+        assert_eq!(rep.sessions.seen, 1, "a change of {k}");
+    }
+}
+
+#[test]
+fn an_idle_session_is_shown_idle_and_equal_activity_orders_by_id() {
+    let t = root();
+    let (_, base) = run(&t, None, 0);
+    let (alias, n) = ready_store_issue(&base);
+    let mut a = row("b_second", &format!("Fix #{n}"), STORE_CHECKOUT);
+    a["isRunning"] = json!(false);
+    let b = row("a_first", &format!("Fix #{n}"), STORE_CHECKOUT);
+    let (_, d) = run(&t, Some(&list(20, vec![a, b])), 5);
+    let s = by_alias(&d, &alias)["sessions"].as_array().unwrap().clone();
+    assert_eq!(s[0]["id"], "a_first");
+    assert_eq!(s[1]["id"], "b_second");
+    assert_eq!(s[0]["running"], true);
+    assert_eq!(s[1]["running"], false);
+}
+
+#[test]
+fn reference_lookalikes_the_first_pass_did_not_try() {
+    let t = root();
+    let (_, base) = run(&t, None, 0);
+    let (alias, n) = ready_store_issue(&base);
+    let lookalikes = [
+        // `issue` with no gap before the number.
+        format!("issue{n}"),
+        // A `#` after word-joining punctuation is not a bare reference.
+        format!("fix-#{n}"),
+        format!("v1.#{n}"),
+        // An owner/repo with a second slash is not a repo reference.
+        format!("a/b/c#{n}"),
+    ];
+    for (i, title) in lookalikes.iter().enumerate() {
+        let (_, d) = run(
+            &t,
+            Some(&list(20, vec![row(&format!("l{i}"), title, STORE_CHECKOUT)])),
+            5 + i as i64,
+        );
+        assert!(matched(&d).is_empty(), "{title} matched {:?}", matched(&d));
+    }
+    // A lookalike beside a real reference leaves the real one alone.
+    let (_, d) = run(
+        &t,
+        Some(&list(
+            20,
+            vec![row("m", &format!("see a/b/c#9 for #{n}"), STORE_CHECKOUT)],
+        )),
+        30,
+    );
+    assert_eq!(shown(&d, &alias).len(), 1);
+}
+
+#[test]
+fn references_are_case_insensitive_where_the_spec_has_words() {
+    let t = root();
+    let (_, base) = run(&t, None, 0);
+    let (alias, n) = ready_store_issue(&base);
+    let cases = [
+        (format!("ISSUE {n}"), None),
+        ("tidy".to_string(), Some(format!("Fix/Issue-{n}"))),
+        ("tidy".to_string(), Some(format!("GH-{n}"))),
+    ];
+    for (i, (title, branch)) in cases.iter().enumerate() {
+        let mut r = row(&format!("c{i}"), title, STORE_CHECKOUT);
+        if let Some(b) = branch {
+            r["branch"] = json!(b);
+        }
+        let (_, d) = run(&t, Some(&list(20, vec![r])), 5 + i as i64);
+        assert_eq!(shown(&d, &alias).len(), 1, "{title} {branch:?}");
+    }
+}
+
+#[test]
+fn a_last_activity_that_is_not_a_time_is_skipped_not_fatal() {
+    let t = root();
+    let mut bad = row("bad", "x", STORE_CHECKOUT);
+    bad["lastActivityAt"] = json!("yesterday");
+    let (r, _) = run(&t, Some(&list(20, vec![bad, row("good", "y", STORE_CHECKOUT)])), 0);
+    assert_eq!((r.sessions.seen, r.sessions.skipped.len()), (1, 1), "{:?}", r.sessions);
+}
+
+#[test]
+fn a_session_already_gone_is_not_recorded_gone_again_by_later_lists() {
+    let t = root();
+    let a = row("a", "a", STORE_CHECKOUT);
+    let mut b = row("b", "b", STORE_CHECKOUT);
+    run(&t, Some(&list(20, vec![a.clone(), b.clone()])), 0);
+    // Gone by absence from a complete list; later complete lists do not say so again.
+    let (first, _) = run(&t, Some(&list(20, vec![a.clone()])), 5);
+    assert_eq!(first.sessions.gone, 1);
+    for m in [10, 15] {
+        let (again, _) = run(&t, Some(&list(20, vec![a.clone()])), m);
+        assert_eq!(again.sessions.gone, 0, "{:?}", again.sessions);
+    }
+    // Gone by archive; the archived row listed again does not say so again either.
+    run(&t, Some(&list(20, vec![a.clone(), b.clone()])), 20);
+    b["isArchived"] = json!(true);
+    let (arch, _) = run(&t, Some(&list(20, vec![a.clone(), b.clone()])), 25);
+    assert_eq!(arch.sessions.gone, 1);
+    let (again, _) = run(&t, Some(&list(20, vec![a, b])), 30);
+    assert_eq!((again.sessions.seen, again.sessions.gone), (0, 0));
+    assert_eq!(events(&t, Kind::SessionGone).len(), 2);
+}
+
 fn run_with(
     t: &TempRoot,
     gh: &issue_dashboard_core::github::Replay,
