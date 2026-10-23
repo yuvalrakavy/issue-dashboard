@@ -164,7 +164,9 @@ impl<'a> Tx<'a> {
         &self.tx
     }
 
-    /// Records an event, or returns the existing one when it is a repeat under `dedupe`.
+    /// Records an event, or returns the existing one when it is a repeat under `dedupe`. Not
+    /// checked against the schemas: for tests of the ledger itself. Modules use
+    /// [`Tx::record_valid`].
     pub fn record(
         &mut self,
         kind: Kind,
@@ -172,6 +174,32 @@ impl<'a> Tx<'a> {
         distinct: Value,
         data: Value,
         dedupe: Dedupe,
+    ) -> Result<Recorded> {
+        self.record_inner(kind, subject, distinct, data, dedupe, false)
+    }
+
+    /// [`Tx::record`], refusing a new event that does not match its kind's schema
+    /// (`schemas/event-<kind>.schema.json`). The check runs BEFORE the insert, so a caller that
+    /// handles the refusal and goes on (as `reserve_next` does) leaves nothing behind.
+    pub fn record_valid(
+        &mut self,
+        kind: Kind,
+        subject: &str,
+        distinct: Value,
+        data: Value,
+        dedupe: Dedupe,
+    ) -> Result<Recorded> {
+        self.record_inner(kind, subject, distinct, data, dedupe, true)
+    }
+
+    fn record_inner(
+        &mut self,
+        kind: Kind,
+        subject: &str,
+        distinct: Value,
+        data: Value,
+        dedupe: Dedupe,
+        validate: bool,
     ) -> Result<Recorded> {
         let latest = latest(&self.tx, subject, kind)?;
         match dedupe {
@@ -197,22 +225,8 @@ impl<'a> Tx<'a> {
         if let Some(e) = by_identity(&self.tx, &identity)? {
             return Ok(Recorded::Repeat(e));
         }
-        self.tx.execute(
-            "INSERT INTO events (time, kind, subject, pred, distinct_json, identity, data)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            params![
-                self.now,
-                kind.as_str(),
-                subject,
-                pred,
-                serde_json::to_string(&distinct)?,
-                identity,
-                serde_json::to_string(&data)?
-            ],
-        )?;
-        let seq = self.tx.last_insert_rowid();
-        Ok(Recorded::New(Event {
-            seq,
+        let event = Event {
+            seq: max_seq(&self.tx)? + 1,
             time: self.now.clone(),
             kind,
             subject: subject.to_string(),
@@ -220,29 +234,29 @@ impl<'a> Tx<'a> {
             distinct,
             identity,
             data,
-        }))
-    }
-
-    /// [`Tx::record`], refusing a new event that does not match its kind's schema
-    /// (`schemas/event-<kind>.schema.json`); the transaction is then rolled back by the caller's
-    /// error. Every module records through this; plain `record` is for tests of the ledger itself.
-    pub fn record_valid(
-        &mut self,
-        kind: Kind,
-        subject: &str,
-        distinct: Value,
-        data: Value,
-        dedupe: Dedupe,
-    ) -> Result<Recorded> {
-        let r = self.record(kind, subject, distinct, data, dedupe)?;
-        if let Recorded::New(e) = &r {
+        };
+        if validate {
             crate::schema::validate(
                 &crate::schema::event_stem(kind),
                 &format!("the {} event for {subject}", kind.as_str()),
-                &serde_json::to_value(e)?,
+                &serde_json::to_value(&event)?,
             )?;
         }
-        Ok(r)
+        self.tx.execute(
+            "INSERT INTO events (seq, time, kind, subject, pred, distinct_json, identity, data)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                event.seq,
+                event.time,
+                kind.as_str(),
+                event.subject,
+                event.pred,
+                serde_json::to_string(&event.distinct)?,
+                event.identity,
+                serde_json::to_string(&event.data)?
+            ],
+        )?;
+        Ok(Recorded::New(event))
     }
 
     pub fn commit(self) -> Result<()> {

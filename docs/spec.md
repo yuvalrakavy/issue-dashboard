@@ -1272,7 +1272,8 @@ value can be recomputed for any point in the log.
 committed to monthly JSON Lines files (`<root>/ledger/2026-10.jsonl`) and fsyncs them, then
 advances an export cursor stored in the ledger. Each line holds one event with its sequence
 number and a checksum of the line. On start, any command first checks the file's tail:
-a final line that does not parse or fails its checksum (a torn write) is cut off, events whose
+a final line that does not parse or fails its checksum (a torn write) is cut off (as built,
+the whole trailing run of such lines, 10.10), events whose
 sequence number is already in the file are not appended again, and events past the cursor are
 exported. So a crash between the append and the cursor update neither loses nor duplicates an
 event. The files are committed to git; `issue-dashboard rebuild` recreates the SQLite file from
@@ -1534,12 +1535,14 @@ them rather than refusing.
   old file as `ledger.sqlite.before-rebuild-<time>` (made unique). The old file is copied, not
   renamed, and the new one is renamed over it, so a crash at any point leaves a `ledger.sqlite`;
   a `-wal` or `-shm` beside the target is removed first, since it belongs to the old database.
-  `rebuild` tolerates a torn final line of the latest file and reports it; a corrupt line
-  anywhere else refuses with its file and line number.
+  `rebuild` tolerates a torn tail by the same rule as the tail repair (the trailing run of bad
+  lines of the latest non-empty file) and reports how many lines it dropped; a corrupt line
+  anywhere else, that is one followed by a good line, refuses with its file and line number. A
+  read that fails (permissions, a failing disk) is an error, never taken for divergence.
 - *Schema version:* the ledger keeps its version in SQLite's `user_version`; a version this build
   does not know is refused.
-- *Validation:* every event a module records is checked against its kind's schema before the
-  transaction commits, and each config layer against its schema when it is loaded, so values
+- *Validation:* every event a module records is checked against its kind's schema before it
+  is inserted, and each config layer against its schema when it is loaded, so values
   serde's types cannot express (a capacity of 0, `exclude` without `group`, an empty session id,
   a launch id outside the document-id pattern) are refused, naming the file or the event.
 - *Time:* a command's time is read once it holds the root lock, and `reserve` loads the config
@@ -1549,6 +1552,10 @@ them rather than refusing.
   the stale one. An unchanged read that is fresher still advances the item's freshness, kept in
   a `freshness` table beside the events (derived, not in the backup); so an older read that
   commits after it is stale too. A change of alias alone (a rename or transfer) is recorded.
+  **Accepted residual (for the owner to confirm):** the freshness of an unchanged read is not in
+  the backup, so after `rebuild` an older read taken before the rebuild and committed after it
+  could be recorded over an unchanged fresher one; the next read records the truth again.
+  Closing it would take an event per unchanged read.
 - *Launches:* 10.3's transition list lacked `withdrawn`, which 10.7's table has; it is added,
   with `orphan_settled`, which frees the slot an orphan holds ("until you settle it", 10.7). A
   recipe's pool is keyed by the recipe's name, across every project and repo using it (for the
@@ -1560,7 +1567,8 @@ them rather than refusing.
   dispatcher and a reservation older than 15 minutes. `unconfirm` records `reserved` →
   `unconfirmed`. A session that reports an orphan again, before or after it is settled, is a
   repeat, and settling twice is a repeat. `reserve --next` skips a queued launch whose recipe can
-  no longer be resolved, and refuses with that reason only when nothing could be reserved.
+  no longer be resolved, and refuses with that reason only when nothing could be reserved, so
+  an unresolvable queued launch is never silent; any other refusal stops it.
   `launch-started` is authorised by the token alone, not by a dispatcher id (the dispatcher holds
   the token); so `unconfirmed` → `started` does not check the owner.
 - *Decisions:* a decision naming another project is refused like a non-owner's, but a refusal

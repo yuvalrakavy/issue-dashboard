@@ -67,9 +67,15 @@ fn sync_dir(dir: &Path) -> Result<()> {
 
 /// A consistent copy of an SQLite database, WAL included. Falls back to copying the files
 /// when SQLite cannot read it (a damaged ledger is still worth keeping).
+///
+/// It first checkpoints the old database's WAL into its main file, so that removing the `-wal`
+/// afterwards (before the new file is renamed into place) loses nothing even if the process
+/// dies in between.
 fn copy_database(from: &Path, to: &Path) -> Result<()> {
-    let vacuumed =
-        rusqlite::Connection::open(from).and_then(|c| c.execute("VACUUM INTO ?1", [to.to_string_lossy()]).map(|_| ()));
+    let vacuumed = rusqlite::Connection::open(from).and_then(|c| {
+        c.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))?;
+        c.execute("VACUUM INTO ?1", [to.to_string_lossy()]).map(|_| ())
+    });
     if vacuumed.is_err() {
         fs::copy(from, to)?;
         for (f, t) in companions(from).into_iter().zip(companions(to)) {
@@ -143,10 +149,10 @@ impl Root {
         let backup = self.backup();
         // Never create an empty ledger beside a backup: that is a lost ledger, which rebuild
         // restores; opening one here would make every later command refuse until --force.
-        if !self.ledger_path().exists()
-            && let Some(last) = backup.last_event()?
-        {
-            return Err(crate::backup::behind(last.seq, 0));
+        // Read-only: a torn tail here is left for rebuild, which tolerates it.
+        if !self.ledger_path().exists() && backup.holds_events()? {
+            let held = backup.read_all().map_or(0, |(events, _)| events.len() as i64);
+            return Err(crate::backup::behind(held, 0));
         }
         let mut ledger = Ledger::open(&self.ledger_path())?;
         backup.catch_up(&mut ledger, &now, &mut |_| Ok(()))?;
@@ -246,7 +252,7 @@ impl Root {
 pub struct RebuildReport {
     pub events: usize,
     pub files: usize,
-    /// A torn final line that was dropped.
+    /// Lines of a torn tail that were dropped.
     pub dropped_tail_lines: usize,
     /// Where the previous `ledger.sqlite` was moved, with `force`.
     pub moved_aside: Option<PathBuf>,

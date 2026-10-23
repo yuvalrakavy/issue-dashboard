@@ -19,7 +19,7 @@ pub enum Error {
         waited: Duration,
     },
 
-    /// A line of the JSON Lines backup that is not a torn final line failed to parse or
+    /// A line of the JSON Lines backup that is not part of a torn tail failed to parse or
     /// verify (10.2).
     #[error("corrupt backup line {}:{line}: {reason}", .file.display())]
     CorruptBackup { file: PathBuf, line: usize, reason: String },

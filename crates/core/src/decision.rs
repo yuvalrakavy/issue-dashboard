@@ -69,6 +69,13 @@ pub fn ingest(tx: &mut Tx<'_>, project: &str, owner_id: &str, doc: &Decision) ->
         document: doc.clone(),
     };
     let distinct = json!({"project": project, "accepted": data.accepted});
+    // The repeat is judged against this project's own latest verdict, not the document's
+    // latest event overall, which may be another project's.
+    if let Some((e, _)) = earlier.iter().rev().find(|(_, d)| d.project == project)
+        && e.distinct == distinct
+    {
+        return Ok(Recorded::Repeat(e.clone()));
+    }
     tx.record_valid(
         Kind::Decided,
         &doc.id,

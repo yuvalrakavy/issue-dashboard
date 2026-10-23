@@ -523,14 +523,17 @@ pub fn reserve_next(
             continue;
         }
         // A launch whose recipe can no longer be resolved must not stop other recipes' queues;
-        // its refusal is returned only when nothing could be reserved.
-        match try_reserve(tx, l, dispatcher, capacity, &all) {
-            Ok(r @ Reservation::Reserved { .. }) => return Ok(Some(r)),
-            Ok(Reservation::Queued { .. }) => {}
-            Err(e @ Error::Refused(_)) => {
+        // that refusal is returned only when nothing could be reserved. It is resolved before
+        // anything is recorded, and any other error propagates.
+        let cap = match capacity(&l.request.recipe) {
+            Ok(cap) => cap,
+            Err(e) => {
                 first_error.get_or_insert(e);
+                continue;
             }
-            Err(e) => return Err(e),
+        };
+        if let r @ Reservation::Reserved { .. } = try_reserve(tx, l, dispatcher, &|_| Ok(cap), &all)? {
+            return Ok(Some(r));
         }
     }
     match first_error {

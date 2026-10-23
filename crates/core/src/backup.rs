@@ -93,8 +93,8 @@ impl Failpoint {
 /// What [`Backup::repair_tail`] did to the latest file.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct TailRepair {
-    /// Bytes cut from the end: an unterminated fragment and/or a final line that failed to
-    /// parse or verify.
+    /// Bytes cut from the end: the trailing lines (an unterminated fragment included) that
+    /// failed to parse or verify.
     pub cut_bytes: u64,
     pub cut_lines: usize,
 }
@@ -233,6 +233,16 @@ impl Backup {
         Ok(report)
     }
 
+    /// Whether any month file has content.
+    pub fn holds_events(&self) -> Result<bool> {
+        for f in self.files()? {
+            if fs::metadata(&f)?.len() > 0 {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
     /// The last event in the backup, after [`Backup::repair_tail`].
     pub fn last_event(&self) -> Result<Option<Event>> {
         for path in self.files()?.iter().rev() {
@@ -280,7 +290,10 @@ impl Backup {
             Ok((events, tail)) if tail.cut_lines == 0 => {
                 events.len() as i64 == last_seq && ledger::events_between(ledger.conn(), 0, last_seq)? == events
             }
-            _ => false,
+            Ok(_) | Err(Error::CorruptBackup { .. }) => false,
+            // A read that failed (permissions, a failing disk) says nothing about the backup's
+            // content; moving it aside on that would be the destructive branch on an error.
+            Err(e) => return Err(e),
         };
         let file_max = if matches {
             last_seq
@@ -386,19 +399,30 @@ impl Backup {
 
     /// Reads and verifies every line of every file: checksum, identity, contiguous sequence
     /// numbers from 1, and each event's predecessor. A corrupt line refuses with its file and
-    /// line number, except an unterminated or unverifiable FINAL line of the LATEST file, which
-    /// is a torn write and is reported in the second value.
+    /// line number, except the torn tail by [`Backup::repair_tail`]'s rule (the trailing run of
+    /// lines that fail to parse or verify in the latest non-empty file), which is reported in
+    /// the second value instead.
     pub fn read_all(&self) -> Result<(Vec<Event>, TailRepair)> {
         let files = self.files()?;
+        let contents: Vec<Vec<u8>> = files.iter().map(fs::read).collect::<std::io::Result<_>>()?;
+        // The torn tail, by the same rule as `repair_tail`: the trailing run of bad lines of the
+        // latest non-empty file.
+        let tail_file = contents.iter().rposition(|c| !c.is_empty());
+        let tail_start = tail_file.map(|fi| {
+            let (lines, _) = split_lines(&contents[fi]);
+            lines.iter().rposition(|l| parse_line(l).is_ok()).map_or(0, |i| i + 1)
+        });
         let mut events: Vec<Event> = Vec::new();
         let mut tail = TailRepair::default();
         let mut last_of: HashMap<(String, Kind), i64> = HashMap::new();
         for (fi, path) in files.iter().enumerate() {
-            let bytes = fs::read(path)?;
-            let (lines, _) = split_lines(&bytes);
-            let last_file = fi + 1 == files.len();
+            let (lines, _) = split_lines(&contents[fi]);
             for (li, line) in lines.iter().enumerate() {
-                let final_line = last_file && li + 1 == lines.len();
+                if Some(fi) == tail_file && Some(li) >= tail_start {
+                    tail.cut_lines += 1;
+                    tail.cut_bytes += line.len() as u64 + 1;
+                    continue;
+                }
                 let corrupt = |reason: String| Error::CorruptBackup {
                     file: path.clone(),
                     line: li + 1,
@@ -406,11 +430,6 @@ impl Backup {
                 };
                 let event = match parse_line(line) {
                     Ok(e) => e,
-                    Err(_) if final_line => {
-                        tail.cut_lines += 1;
-                        tail.cut_bytes += line.len() as u64;
-                        continue;
-                    }
                     Err(reason) => return Err(corrupt(reason)),
                 };
                 let expected = events.last().map_or(1, |e| e.seq + 1);
