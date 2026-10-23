@@ -143,6 +143,9 @@ dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 
 dt { color: var(--muted); } dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
 label.field { display: grid; gap: 4px; font-size: .88rem; color: var(--muted); }
 label.field select, label.field input { min-height: 40px; padding: 6px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); }
+label.field textarea { min-height: 96px; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); resize: vertical; }
+.closes { display: grid; gap: 8px; }
+.closes h2 { font-size: .95rem; color: var(--muted); font-weight: 600; }
 .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; }
 footer .wrap { padding-block: 0 32px; font-size: .82rem; color: var(--muted); display: flex; flex-wrap: wrap; gap: 6px 16px; }
 </style>
@@ -431,7 +434,14 @@ footer .wrap { padding-block: 0 32px; font-size: .82rem; color: var(--muted); di
     if (refused && (!s || refused.doc.created_at > s.doc.created_at)) {
       return h("div", { class: "pending refused" }, "Refused by the tracker: " + describe(refused.doc) + (refused.ack.reason ? " (" + refused.ack.reason + ")" : ""));
     }
-    if (!s) return null;
+    const closing = D.pendingClose(S.decisions, S.acks, i.id);
+    if (closing) {
+      const pendingUndo = Object.values(st.byId).some((x) => x.doc.action === "undo" && x.doc.target.decision === closing.id);
+      return h("div", { class: "pending", role: "status" },
+        h("span", {}, "Closing · " + describe(closing) + " · applied on the next sync"),
+        S.owner && !pendingUndo ? h("button", { class: "btn quiet", onclick: () => undo({ doc: closing }) }, "Undo") : null);
+    }
+    if (!s || s.doc.action === "close") return null;
     const pendingUndo = Object.values(st.byId).find((x) => x.doc.action === "undo" && x.doc.target.decision === s.doc.id);
     if (s.ack) return h("div", { class: "meta" }, h("span", { class: "tag launch" }, "Recorded: " + describe(s.doc) + " · not written to GitHub yet"));
     const n = D.nextRunMinutes(S.meta, new Date());
@@ -447,6 +457,7 @@ footer .wrap { padding-block: 0 32px; font-size: .82rem; color: var(--muted); di
       case "set_override": return "override " + p + (d.reason ? " (“" + d.reason + "”)" : "");
       case "clear_priority": return "clear the priority";
       case "clear_override": return "clear the override";
+      case "close": return D.describeClose((d.value && d.value.close) || {});
       default: return d.action.replace(/_/g, " ");
     }
   }
@@ -498,8 +509,13 @@ footer .wrap { padding-block: 0 32px; font-size: .82rem; color: var(--muted); di
       i.priority && i.priority.project ? h("button", { onclick: () => { S.menu = null; writeDecision({ action: "clear_priority", target: { item: i.id, alias: i.alias } }); } }, "Clear this project's priority") : null,
       i.priority && i.priority.override ? h("button", { onclick: () => { S.menu = null; writeDecision({ action: "clear_override", target: { item: i.id, alias: i.alias } }); } }, "Clear the override") : null,
       h("button", { onclick: () => { S.menu = null; requestTriage(i); } }, "Request triage"),
+      canClose(i) ? h("button", { onclick: () => { S.menu = null; openClose(i); } }, "Close…") : null,
     ].filter(Boolean);
   }
+
+  // Close is the page's one GitHub write (10.0): the owner's, on an open issue in a writable repo,
+  // and not while a close of it is already waiting for the sync.
+  const canClose = (i) => S.owner && D.closable(i, repoInfo(D.repoOf(i.alias))) && !D.pendingClose(S.decisions, S.acks, i.id);
 
   function picker(i) {
     const oc = S.openCard;
@@ -525,7 +541,7 @@ footer .wrap { padding-block: 0 32px; font-size: .82rem; color: var(--muted); di
     if (S.inboxFilter === "untriaged") cards = cards.filter((c) => c.why === "untriaged");
     const pill = (k, label) => h("button", { class: "chip" + (S.inboxFilter === k ? " on" : ""), onclick: () => { S.inboxFilter = k; S.sel = 0; render(); } }, label);
     const head = h("div", { class: "pills" }, pill("all", "All"), pill("waiting", "Waiting on you"), pill("untriaged", "Untriaged"));
-    if (!cards.length) return h("div", { class: "list" }, head, h("div", { class: "note" }, S.inboxFilter === "untriaged" ? "Nothing untriaged." : "Nothing waiting on you."));
+    if (!cards.length) return h("div", { class: "list" }, head, h("div", { class: "note" }, S.inboxFilter === "untriaged" ? "Nothing untriaged." : "Nothing waiting on you."), recentClosesSection());
     return h("div", { class: "list" }, head, cards.map((c) => {
       const i = c.issue;
       const line = decisionLine(i);
@@ -540,6 +556,23 @@ footer .wrap { padding-block: 0 32px; font-size: .82rem; color: var(--muted); di
         line,
         pending ? null : picker(i),
         pending || (S.openCard && S.openCard.id === i.id) ? null : h("div", { class: "actions" }, main, moreMenu(i, ownerExtras(i))));
+    }), recentClosesSection());
+  }
+
+  // The last 7 days' closes from this page, where Undo of an applied close lives (5.2a).
+  function recentClosesSection() {
+    const list = D.recentCloses(scoped(), S.decisions, S.acks, new Date(), 7);
+    if (!list.length) return null;
+    return h("section", { class: "closes" }, h("h2", {}, "Closed from the dashboard · last 7 days"), list.map(({ issue: i, close: c, reopening }) => {
+      const how = c.result === "already_closed" ? "was already closed on GitHub" : "closed as " + (D.CLOSE_REASONS[c.reason] || c.reason);
+      let tail;
+      if (reopening) tail = h("div", { class: "pending", role: "status" }, "Reopening · applied on the next sync");
+      else if (S.owner && c.undo_allowed) tail = h("div", { class: "actions" }, h("button", { class: "btn", onclick: () => writeDecision({ action: "undo", target: { decision: c.decision, item: i.id } }) }, "Reopen"));
+      else if (S.owner) tail = h("div", { class: "sub muted" }, c.result === "already_closed" ? "Not offered: the dashboard did not close it." : "Reopen is no longer offered: the issue changed on GitHub since.");
+      return h("article", { class: "card", "data-id": i.id },
+        h("div", { class: "head" }, h("a", { class: "alias", href: ghUrl(i), target: "_blank", rel: "noopener" }, i.alias), h("span", { class: "title" }, i.title)),
+        h("div", { class: "meta" }, h("span", {}, fmtDay(c.at) + " " + fmtTime(c.at) + " · " + how)),
+        tail);
     }));
   }
 
@@ -688,7 +721,45 @@ footer .wrap { padding-block: 0 32px; font-size: .82rem; color: var(--muted); di
       h("div", { class: "body" }, i.body || "No description."),
       i.body_truncated ? h("div", { class: "sub muted" }, "The description is cut at 8000 characters; the rest is on GitHub.") : null,
       mine.length ? h("div", {}, h("div", { class: "muted" }, "Recent decisions"), h("ul", {}, mine.map((d) => h("li", {}, fmtDay(d.created_at) + " " + fmtTime(d.created_at) + ": " + describe(d))))) : null,
+      canClose(i) ? h("div", { class: "actions" }, h("button", { class: "btn", onclick: () => openClose(i) }, "Close…")) : null,
     );
+  }
+
+  // The close sheet (5.2a): reason, the duplicated issue's number, a comment prefilled per
+  // reason until the owner edits it, and on a public repo who the comment is published as.
+  function openClose(i) {
+    const repo = repoInfo(D.repoOf(i.alias)) || {};
+    let edited = false;
+    const reason = h("select", { "aria-label": "Reason" }, Object.entries(D.CLOSE_REASONS).map(([k, label]) => h("option", { value: k, selected: k === "completed" }, label.replace(/^a /, ""))));
+    const dup = h("input", { inputmode: "numeric", placeholder: "e.g. 12", "aria-label": "Duplicate of issue number" });
+    const dupField = h("label", { class: "field", hidden: true }, "Duplicate of #", dup);
+    const comment = h("textarea", { "aria-label": "Comment", maxlength: "65536", oninput: () => { edited = true; } });
+    const err = h("div", { class: "err", hidden: true, role: "alert" });
+    const refill = () => {
+      dupField.hidden = reason.value !== "duplicate";
+      err.hidden = true;
+      if (!edited) comment.value = D.closeComment(reason.value, dup.value.replace(/^#/, "").trim());
+    };
+    reason.addEventListener("change", refill);
+    dup.addEventListener("input", refill);
+    refill();
+    const go = h("button", { class: "btn primary" }, "Close");
+    go.onclick = () => {
+      const r = D.closeFields(i, reason.value, dup.value, comment.value);
+      if (r.error) { err.textContent = r.error; err.hidden = false; return; }
+      dlg.close();
+      writeDecision(r.fields);
+    };
+    showDialog(
+      h("header", {}, h("div", {}, h("div", { class: "alias" }, i.alias), h("h2", {}, "Close: " + i.title)), closeBtn()),
+      h("label", { class: "field" }, "Reason", reason),
+      dupField,
+      h("label", { class: "field" }, "Comment (posted with the close; empty posts none)", comment),
+      repo.visibility === "public" ? h("div", { class: "phase" }, shortRepo(D.repoOf(i.alias)) + " is public: the comment is published on GitHub in your name.") : null,
+      h("div", { class: "sub muted" }, "The next sync closes it on GitHub. Until then Undo takes it back; after, Reopen is offered while nobody has touched the issue."),
+      err,
+      h("div", { class: "actions" }, go, h("button", { class: "btn quiet", onclick: () => dlg.close() }, "Cancel")));
+    reason.focus();
   }
 
   function openSaveView() {

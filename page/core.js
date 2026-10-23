@@ -315,10 +315,69 @@
     }
   }
 
+  // --- closing (5.2a, 10.10) -------------------------------------------------------------
+
+  const CLOSE_REASONS = { completed: "completed", not_planned: "not planned", duplicate: "a duplicate" };
+  const COMMENT_MAX = 65536;
+
+  // Close is offered only on an open issue in a repo the meta names writable.
+  function closable(issue, repo) {
+    return issue.kind === "issue" && issue.state === "open" && !!repo && !(repo.read_only && repo.read_only.value);
+  }
+
+  function closeComment(reason, duplicateOf) {
+    if (reason === "duplicate") return "Closed from the issue dashboard as a duplicate of #" + (duplicateOf || "N") + ".";
+    if (reason === "not_planned") return "Closed from the issue dashboard: no longer relevant.";
+    return "Closed from the issue dashboard: done.";
+  }
+
+  // The close sheet's fields as a decision's fields, or { error } saying what to fix.
+  function closeFields(issue, reason, duplicateOf, comment) {
+    if (!CLOSE_REASONS[reason]) return { error: "Choose a reason." };
+    const close = { reason, comment: String(comment || "").trim() };
+    if (close.comment.length > COMMENT_MAX) return { error: "The comment is too long for GitHub." };
+    if (reason === "duplicate") {
+      const m = /^#?\s*(\d+)$/.exec(String(duplicateOf || "").trim());
+      const n = m ? Number(m[1]) : 0;
+      if (!Number.isSafeInteger(n) || n < 1) return { error: "Give the number of the issue this duplicates." };
+      if (String(issue.alias).endsWith("#" + n)) return { error: "An issue cannot duplicate itself." };
+      close.duplicate_of = n;
+    }
+    return { fields: { action: "close", target: { item: issue.id, alias: issue.alias }, value: { close } } };
+  }
+
+  function describeClose(c) {
+    return "close as " + (c.reason === "duplicate" ? "a duplicate of #" + c.duplicate_of : CLOSE_REASONS[c.reason] || c.reason);
+  }
+
+  // The item's close decision no cycle has acked and no undo took back, if any.
+  function pendingClose(decisions, acks, item) {
+    const st = decisionStates(decisions, acks);
+    const open = Object.values(st.byId).filter((s) => s.doc.action === "close" && s.doc.target && s.doc.target.item === item && !s.ack && !s.undoneBy);
+    open.sort((a, b) => cmp(b.doc.created_at, a.doc.created_at));
+    return open.length ? open[0].doc : null;
+  }
+
+  // The dashboard's closes of the last `days` days, newest first: { issue, close, reopening },
+  // where `reopening` is an unacked undo of that close.
+  function recentCloses(issues, decisions, acks, now, days) {
+    const since = now.getTime() - days * 86400000;
+    const acked = new Set((acks || []).map((a) => a.decision));
+    const out = [];
+    for (const i of issues) {
+      const c = i.dashboard_close;
+      if (!c || !(Date.parse(c.at) >= since)) continue;
+      const reopening = (decisions || []).find((d) => d.action === "undo" && d.target && d.target.decision === c.decision && !acked.has(d.id)) || null;
+      out.push({ issue: i, close: c, reopening });
+    }
+    return out.sort((a, b) => cmp(b.close.at, a.close.at));
+  }
+
   const api = {
-    PRIORITIES, COLLECTIONS, LIST_LIMIT,
+    PRIORITIES, COLLECTIONS, LIST_LIMIT, CLOSE_REASONS,
     loadGeneration, repoOf, inScope, tiles, inbox, queue, decisionStates, nextRunMinutes,
     trends, launchStates, newId, decisionDoc, launchDoc, notSentDoc, viewDoc, requestDoc, launch,
+    closable, closeComment, closeFields, describeClose, pendingClose, recentCloses,
   };
   root.IssueDashboard = api;
   if (typeof module === "object" && module.exports) module.exports = api;
