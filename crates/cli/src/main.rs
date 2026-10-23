@@ -44,7 +44,7 @@ struct Cli {
 enum Command {
     /// Recreate the SQLite ledger from the JSON Lines backup, verifying every line (10.2).
     Rebuild {
-        /// Replace an existing ledger.sqlite (a copy of it is kept beside).
+        /// Replace an existing ledger.sqlite (it is kept beside, renamed, with its WAL).
         #[arg(long)]
         force: bool,
     },

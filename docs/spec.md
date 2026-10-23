@@ -1531,10 +1531,13 @@ them rather than refusing.
 - *A ledger missing or behind its backup* (a fresh clone, where only the backup is in git; a
   lost file; an older copy restored) is refused, naming `rebuild`, and never opened empty: a
   command that re-exported from it would set the newer history aside.
-- *`rebuild`* refuses when `ledger.sqlite` exists unless `--force`, which keeps a copy of the
-  old file as `ledger.sqlite.before-rebuild-<time>` (made unique). The old file is copied, not
-  renamed, and the new one is renamed over it, so a crash at any point leaves a `ledger.sqlite`;
-  a `-wal` or `-shm` beside the target is removed first, since it belongs to the old database.
+- *`rebuild`* refuses when `ledger.sqlite` exists unless `--force`, which keeps the old file
+  as `ledger.sqlite.before-rebuild-<time>` (made unique). Nothing of the old database is deleted,
+  copied or checkpointed: the main file and any `-wal` / `-shm` beside the target are renamed
+  aside together (main file first), then the new file is renamed in. A crash in between leaves
+  no `ledger.sqlite`, which the next command refuses, naming `rebuild`; a stray WAL is never
+  left beside the new file. (Two earlier shapes, copy-aside with a checkpoint, kept drawing
+  findings in the gate: an incomplete checkpoint, a WAL removed before the rename.)
   `rebuild` tolerates a torn tail by the same rule as the tail repair (the trailing run of bad
   lines of the latest non-empty file) and reports how many lines it dropped; a corrupt line
   anywhere else, that is one followed by a good line, refuses with its file and line number. A

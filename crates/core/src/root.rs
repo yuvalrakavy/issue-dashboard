@@ -65,44 +65,6 @@ fn sync_dir(dir: &Path) -> Result<()> {
     Ok(())
 }
 
-/// A consistent copy of an SQLite database, WAL included. Falls back to copying the files
-/// when SQLite cannot read it (a damaged ledger is still worth keeping).
-///
-/// It first checkpoints the old database's WAL into its main file, so that removing the `-wal`
-/// afterwards (before the new file is renamed into place) loses nothing even if the process
-/// dies in between. SQLite reports a checkpoint a reader blocked as a successful row saying
-/// "busy"; that is refused, since the WAL then still holds committed events. When SQLite cannot
-/// open or checkpoint the file at all, the main file and its WAL are copied together, so the
-/// copy holds everything the old pair did.
-fn copy_database(from: &Path, to: &Path) -> Result<()> {
-    let checkpointed = rusqlite::Connection::open(from).and_then(|c| {
-        let (busy, log, done): (i64, i64, i64) = c.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |r| {
-            Ok((r.get(0)?, r.get(1)?, r.get(2)?))
-        })?;
-        Ok((c, busy != 0 || done < log))
-    });
-    match checkpointed {
-        Ok((_, true)) => {
-            return Err(Error::refused(format!(
-                "{} is in use: a reader keeps its WAL from being checkpointed; retry rebuild when it has finished",
-                from.display()
-            )));
-        }
-        Ok((c, false)) => c.execute("VACUUM INTO ?1", [to.to_string_lossy()]).map(|_| ())?,
-        Err(_) => {
-            fs::copy(from, to)?;
-            for (f, t) in companions(from).into_iter().zip(companions(to)) {
-                if f.exists() {
-                    fs::copy(f, &t)?;
-                    fs::File::open(&t)?.sync_all()?;
-                }
-            }
-        }
-    }
-    fs::File::open(to)?.sync_all()?;
-    Ok(())
-}
-
 impl Root {
     pub fn new(dir: impl Into<PathBuf>, options: Options) -> Root {
         Root {
@@ -195,7 +157,7 @@ impl Root {
     }
 
     /// Recreates `ledger.sqlite` from the backup (10.2), verifying every line. Refuses when
-    /// `ledger.sqlite` exists unless `force`, which keeps a copy of the old file beside it.
+    /// `ledger.sqlite` exists unless `force`, which keeps the old file (and its WAL) beside it, renamed.
     pub fn rebuild(&self, now: DateTime<Utc>, force: bool) -> Result<RebuildReport> {
         let _lock = self.lock()?;
         let stamp = format_time(now);
@@ -225,30 +187,43 @@ impl Root {
             fresh.conn().execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")?;
         }
 
-        // The old ledger is COPIED aside, never renamed away, so at every moment there is a
-        // ledger.sqlite: a crash here leaves the old one in place, and the next command still
-        // works on it.
+        // Nothing of the old database is deleted or rewritten: its main file and whatever
+        // `-wal` / `-shm` lie beside the target are RENAMED aside together, as one openable
+        // set, and only then is the new file renamed in. A crash in between leaves no
+        // ledger.sqlite, which the next command refuses (naming rebuild) rather than opening
+        // empty; a stray WAL is never left beside the new file.
         let mut moved_aside = None;
-        if target.exists() {
+        let old: Vec<PathBuf> = std::iter::once(target.clone())
+            .chain(companions(&target))
+            .filter(|p| p.exists())
+            .collect();
+        if !old.is_empty() {
             let safe: String = stamp
                 .chars()
                 .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
                 .collect();
+            let free = |a: &Path| {
+                std::iter::once(a.to_path_buf())
+                    .chain(companions(a))
+                    .all(|p| !p.exists())
+            };
             let mut aside = self.dir.join(format!("ledger.sqlite.before-rebuild-{safe}"));
             let mut n = 1;
-            while aside.exists() {
+            while !free(&aside) {
                 n += 1;
                 aside = self.dir.join(format!("ledger.sqlite.before-rebuild-{safe}-{n}"));
             }
-            copy_database(&target, &aside)?;
-            moved_aside = Some(aside);
-        }
-        // A WAL left beside the target belongs to the old database; the new file must never
-        // be opened next to it.
-        for p in companions(&target) {
-            if p.exists() {
-                fs::remove_file(p)?;
+            // The main file first: once it is gone, a crash leaves "no ledger", never a main
+            // file separated from its WAL.
+            let pairs = std::iter::once((target.clone(), aside.clone()))
+                .chain(companions(&target).into_iter().zip(companions(&aside)));
+            for (from, to) in pairs {
+                if from.exists() {
+                    fs::rename(&from, &to)?;
+                }
             }
+            sync_dir(&self.dir)?;
+            moved_aside = Some(aside);
         }
         fs::rename(&tmp, &target)?;
         for p in companions(&tmp) {

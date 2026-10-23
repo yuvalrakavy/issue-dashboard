@@ -175,24 +175,52 @@ fn an_unreadable_backup_file_is_an_error_not_a_divergence() {
 // --- round 3 ----------------------------------------------------------------------------------
 
 #[test]
-fn a_forced_rebuild_refuses_while_a_reader_keeps_the_wal_from_being_checkpointed() {
+fn a_forced_rebuild_keeps_the_old_ledger_and_its_uncheckpointed_wal_together() {
     let r = temp_root();
     history(&r.root);
-    // A reader holds an old snapshot; later commits stay in the WAL past its mark.
+    // A reader holds an old snapshot, so later commits stay in the WAL, not the main file.
     let reader = rusqlite::Connection::open(r.root.ledger_path()).unwrap();
-    reader.execute_batch("BEGIN; SELECT COUNT(*) FROM events;").unwrap();
+    reader.execute_batch("BEGIN;").unwrap();
     let _: i64 = reader
         .query_row("SELECT COUNT(*) FROM events", [], |row| row.get(0))
         .unwrap();
     observe_label(&r.root, "e", 10);
     let before = r.root.read(|l| ledger::max_seq(l.conn())).unwrap();
-    let result = r.root.rebuild(t(11), true);
-    assert!(
-        matches!(&result, Err(Error::Refused(m)) if m.contains("in use")),
-        "{result:?}"
-    );
+    let aside = r.root.rebuild(t(11), true).unwrap().moved_aside.unwrap();
     drop(reader);
-    assert_eq!(r.root.read(|l| ledger::max_seq(l.conn())).unwrap(), before);
+    // The set kept aside opens as the old ledger, with every event it had committed.
+    let old = rusqlite::Connection::open(&aside).unwrap();
+    let kept: i64 = old
+        .query_row("SELECT MAX(seq) FROM events", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(kept, before, "events that were only in the WAL were lost");
+}
+
+#[test]
+fn a_rebuild_interrupted_between_its_renames_is_finished_by_the_next_rebuild() {
+    let r = temp_root();
+    history(&r.root);
+    let in_backup = common::backup_lines(&r.root).len();
+    // The state a crash leaves after the main file went aside and before its WAL followed.
+    let wal = format!("{}-wal", r.root.ledger_path().display());
+    fs::write(&wal, b"the old database's WAL").unwrap();
+    fs::rename(
+        r.root.ledger_path(),
+        r.path().join("ledger.sqlite.before-rebuild-crashed"),
+    )
+    .unwrap();
+    let err = r.root.mutate(t(10), |_| Ok(())).unwrap_err();
+    assert!(matches!(&err, Error::Refused(m) if m.contains("rebuild")), "{err}");
+    let report = r.root.rebuild(t(11), false).unwrap();
+    let kept = report.moved_aside.expect("the stray WAL was not kept aside");
+    assert!(
+        std::path::Path::new(&format!("{}-wal", kept.display())).exists(),
+        "the old WAL was deleted"
+    );
+    assert_eq!(
+        r.root.read(|l| ledger::events_after(l.conn(), 0)).unwrap().len(),
+        in_backup
+    );
 }
 
 #[cfg(unix)]
