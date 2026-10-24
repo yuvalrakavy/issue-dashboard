@@ -47,7 +47,7 @@
     "projectName": {
       "description": "A project's config file stem (<root>/projects/<project>.toml).",
       "type": "string",
-      "pattern": "^[a-z0-9][a-z0-9_-]*$"
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"
     },
     "type": {
       "enum": [

@@ -8,7 +8,7 @@ const path = require("node:path");
 const D = require("./core.js");
 
 const schema = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "schemas", "page-request.schema.json"), "utf8"));
-const who = { project: "villa-rakavy", author: "user_1" };
+const who = { project: "VillaRakavy", author: "user_1" };
 const now = new Date("2026-10-23T18:12:05.123Z");
 const issue = { id: "I_403", alias: "yuvalrakavy/Store#403" };
 

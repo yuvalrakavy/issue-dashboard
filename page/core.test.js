@@ -272,7 +272,7 @@ function shapeOf(file, doc, branch) {
   assert.ok(doc.id.length <= 128);
 }
 
-const who = { project: "villa-rakavy", author: "user_1" };
+const who = { project: "VillaRakavy", author: "user_1" };
 const now = new Date("2026-10-23T08:14:05.123Z");
 
 test("page ids are prefix_date_time_rand and every written document fits its schema", () => {
