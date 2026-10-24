@@ -384,6 +384,18 @@ pub fn request(tx: &mut Tx<'_>, doc: &LaunchRequest, via: Via) -> Result<Moved> 
     if doc.items.is_empty() {
         return Err(Error::refused(format!("launch {} names no items", doc.id)));
     }
+    if doc.items.len() != doc.aliases.len() {
+        return Err(Error::refused(format!(
+            "launch {} names {} items and {} aliases; each item has its alias",
+            doc.id,
+            doc.items.len(),
+            doc.aliases.len()
+        )));
+    }
+    let mut seen = std::collections::HashSet::new();
+    if let Some(dup) = doc.items.iter().find(|i| !seen.insert(*i)) {
+        return Err(Error::refused(format!("launch {} names {dup} twice", doc.id)));
+    }
     let mut data = LaunchData::new(Transition::Requested);
     data.request = Some(doc.clone());
     data.project = Some(doc.project.clone());

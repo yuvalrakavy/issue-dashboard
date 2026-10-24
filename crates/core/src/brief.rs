@@ -72,6 +72,10 @@ struct Issue {
     number: u64,
     content: Value,
     inside: bool,
+    /// The author and association the issue is classified by: `ghost` and `NONE` when read
+    /// without them.
+    author: String,
+    association: String,
 }
 
 impl Issue {
@@ -128,8 +132,7 @@ impl Builder {
 
     /// An issue's title and body: a tracker header naming the author, then the fenced text.
     fn quote(&mut self, issue: &Issue, with_body: bool) {
-        let author = issue.s("author");
-        let association = issue.s("author_association");
+        let (author, association) = (&issue.author, &issue.association);
         if issue.inside {
             self.tracker(format!(
                 "Written by {author} ({association}, inside author), quoted as written:"
@@ -195,6 +198,8 @@ fn issue(conn: &Connection, config: &ConfigSet, maintainers: &[String], id: &str
         repo: registry_name(config, &repo),
         number,
         inside: INSIDE.contains(&association) || maintainers.iter().any(|m| m == author),
+        author: author.to_string(),
+        association: association.to_string(),
         content: o.content,
     })
 }

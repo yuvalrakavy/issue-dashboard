@@ -961,7 +961,7 @@ fn each_kind_of_suggestion_becomes_a_document_with_what_was_recorded() {
     let related = tr.air[1].clone();
     launched(&tr.t, "R1", &s);
     // The issues of the likely_fixed and of the batch were read again under their repo's new
-    // name since the launch was made (the batch whole: see the ignored test for a mixed one).
+    // name since the launch was made (the batch whole; a mixed one has its own test).
     let new0 = in_renamed_repo(&s[0].1);
     let new_batch: Vec<String> = s[3..6].iter().map(|i| in_renamed_repo(&i.1)).collect();
     reobserved(&tr.t, &s[0].0, Some(&new0), |_| {});
@@ -1067,12 +1067,11 @@ fn each_kind_of_suggestion_becomes_a_document_with_what_was_recorded() {
     }
 }
 
-/// FINDING (production, not fixed here): `suggest::record` judges "one repo" by the repo part of
+/// `suggest::record` once judged "one repo" by the repo part of
 /// each member's last-observed alias, and an item keeps the name it was last read under (see
 /// `sync::tracked`), so after a repo rename a batch of one repo whose members were read at
-/// different times is refused as spanning two repos.
+/// different times was refused as spanning two repos.
 #[test]
-#[ignore = "production: a batch across a repo rename is refused as spanning two repos"]
 fn a_batch_of_one_repo_is_not_refused_because_some_members_were_read_under_its_old_name() {
     let tr = tracked();
     let s = tr.open[..2].to_vec();
@@ -1555,7 +1554,7 @@ fn a_recommend_brief_classifies_each_author_leaves_out_bodies_and_titles_itself(
             assert_eq!(quote.source, Source::Outside, "{login}");
             let want_header = format!("Written by {login} ({association}, outside author). {outside_rule}");
             if i == 5 || i == 6 {
-                // Classified as NONE / ghost; the header's wording is the ignored test's concern.
+                // Classified as NONE / ghost; the header's wording has its own test.
                 assert!(
                     header.starts_with("Written by ") && header.contains(", outside author). "),
                     "{header}"
@@ -1580,7 +1579,6 @@ fn a_recommend_brief_classifies_each_author_leaves_out_bodies_and_titles_itself(
 }
 
 #[test]
-#[ignore = "production: an issue read without author_association or author is classified NONE/ghost but its header prints them empty, 'Written by  (, outside author)'"]
 fn a_header_names_the_defaults_used_for_a_missing_author_and_association() {
     let tr = tracked();
     let items = tr.open[..1].to_vec();
@@ -2090,4 +2088,56 @@ fn docs_come_from_the_repos_own_file_before_its_registry_entry() {
     let t = fixture_root();
     with_checkout(&t, RHAI, "rhai", "docs = [\"docs/engine.md\"]");
     assert_eq!(ConfigSet::load(t.path()).unwrap().docs_for(RHAI), ["docs/engine.md"]);
+}
+
+#[test]
+fn a_launch_names_each_item_once_with_its_alias() {
+    let t = fixture_root();
+    let mut short = recommend_doc("LA", &[("I_a", "o/r#1"), ("I_b", "o/r#2")]);
+    short.aliases.push("o/r#3".into());
+    assert!(refused(request_and_reserve(&t, &short)).contains("2 items and 3 aliases"));
+    let twice = recommend_doc("LB", &[("I_a", "o/r#1"), ("I_a", "o/r#1")]);
+    assert!(refused(request_and_reserve(&t, &twice)).contains("names I_a twice"));
+}
+
+#[test]
+fn a_dismissed_batch_is_the_same_batch_in_any_order_and_returns_when_any_member_changes() {
+    let sw = Switch::new();
+    let tr = tracked_with(&sw.gh());
+    let (a, b) = (tr.open[0].clone(), tr.open[1].clone());
+    let r1 = launched(&tr.t, "R1", &[a.clone(), b.clone()]);
+    record(
+        &tr.t,
+        "R1",
+        json!({"suggestions": [batch_of(&[&a.1, &b.1], "the scheduler", "one fix")]}),
+    )
+    .unwrap();
+    finish(&tr.t, &r1, "S-1");
+    let d = outbox(&run_in(&tr.t, "home", &sw.gh(), &Pages::default(), 10));
+    let first = id_of(cards(&d, "batch")[0]);
+    let decisions = vec![dismiss("dec-1", &first, &a.0)];
+    let d = outbox(&run_in(&tr.t, "home", &sw.gh(), &pages_of(&decisions), 20));
+    assert!(cards(&d, "batch").is_empty());
+
+    // A later run lists the same members the other way round: still the dismissed batch.
+    launched(&tr.t, "R2", &[b.clone(), a.clone()]);
+    record(
+        &tr.t,
+        "R2",
+        json!({"suggestions": [batch_of(&[&b.1, &a.1], "the scheduler", "one fix")]}),
+    )
+    .unwrap();
+    let d = outbox(&run_in(&tr.t, "home", &sw.gh(), &pages_of(&decisions), 30));
+    assert!(cards(&d, "batch").is_empty(), "{:#}", d["suggestions"]);
+
+    // The member that is neither first nor the key changes: the batch returns.
+    let other = if a.0 < b.0 { b.0.clone() } else { a.0.clone() };
+    sw.set(move |_, v| {
+        v.map(|mut v| {
+            touched(&mut v, &other, "Retitled", "2026-10-23T23:00:00Z");
+            v
+        })
+    });
+    let d = outbox(&run_in(&tr.t, "home", &sw.gh(), &pages_of(&decisions), 60 * 24));
+    assert_eq!(cards(&d, "batch").len(), 1, "{:#}", d["suggestions"]);
 }

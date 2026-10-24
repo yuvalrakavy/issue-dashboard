@@ -143,7 +143,10 @@ impl Check<'_> {
             self.fail(format!("{alias} is not in launch {}", l.id));
             return Ok(None);
         };
-        let id = l.request.items[pos].clone();
+        let Some(id) = l.request.items.get(pos).cloned() else {
+            self.fail(format!("launch {} names {alias} without its item", l.id));
+            return Ok(None);
+        };
         match ledger::latest(self.conn, &id, Kind::Observed)? {
             None => {
                 self.fail(format!("{alias} has never been read"));
@@ -223,13 +226,18 @@ pub fn record(tx: &mut Tx<'_>, config: &ConfigSet, launch_id: &str, input: &Inpu
                     members.push(found);
                 }
             }
+            // By the aliases the batch names (the launch's): an item keeps the name it was last
+            // read under, so after a repo rename its members' observed names may differ.
             let repo = |a: &str| a.rsplit_once('#').map(|(r, _)| r.to_ascii_lowercase());
-            if members.windows(2).any(|w| repo(&w[0].1) != repo(&w[1].1)) {
+            if e.members.windows(2).any(|w| repo(&w[0]) != repo(&w[1])) {
                 c.fail(format!("{what}: a batch's members are in one repo"));
             }
             if members.len() == e.members.len() && members.len() >= 2 {
+                // The subject (what a dismissal is keyed by) is the same whatever order the
+                // members are listed in; the card still leads with the first.
+                let subject = members.iter().map(|m| m.0.clone()).min().expect("two or more members");
                 pending.push(Pending {
-                    subject: members[0].0.clone(),
+                    subject,
                     decision: kind,
                     body: json!({
                         "item": members[0].0,
@@ -424,9 +432,17 @@ pub fn documents(conn: &Connection, project: &str) -> Result<Vec<Value>> {
 
     let mut out = Vec::new();
     for ((subject, decision), e) in latest {
-        let Some((seen_at, open, _)) = observed(conn, &subject)? else {
+        let Some((mut seen_at, open, _)) = observed(conn, &subject)? else {
             continue;
         };
+        if decision == "batch" {
+            // A dismissed batch returns when any of its members changes.
+            for m in e.data["suggestion"]["members"].as_array().into_iter().flatten() {
+                if let Some((seq, _, _)) = observed(conn, m.as_str().unwrap_or_default())? {
+                    seen_at = seen_at.max(seq);
+                }
+            }
+        }
         if dismissed
             .get(&(subject.clone(), decision.clone()))
             .is_some_and(|d| seen_at < *d)
