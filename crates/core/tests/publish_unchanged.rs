@@ -14,7 +14,7 @@ use common::*;
 use issue_dashboard_core::cycle::{self, CycleReport};
 use issue_dashboard_core::docs::Priority;
 use issue_dashboard_core::ingest::Pages;
-use issue_dashboard_core::publish::{self, Active};
+use issue_dashboard_core::publish::{self, Active, Heartbeat};
 use serde_json::{Value, json};
 
 fn run(t: &TempRoot, p: &Pages, minutes: i64) -> CycleReport {
@@ -42,6 +42,15 @@ fn two_quiet_cycles() -> (Value, Value) {
     let a = doc(&run(&t, &no_pages(), 0));
     let b = doc(&run(&t, &no_pages(), 10));
     (a, b)
+}
+
+/// `meta/heartbeat` as read at `version`, written by a quiet run of sequence 1: older than
+/// every outbox here, so it only pins.
+fn beat(version: u64) -> Heartbeat {
+    Heartbeat {
+        doc: json!({"schema": 1, "project": "home", "generation": "gen-1", "sequence": 1, "synced_at": "2026-01-01T00:00:00Z", "repos": []}),
+        version,
+    }
 }
 
 /// `meta/active` as the page holds it after `outbox` was published.
@@ -278,7 +287,8 @@ fn an_unchanged_outbox_writes_no_generation_and_a_heartbeat_pinned_to_the_versio
     let (a, b) = two_quiet_cycles();
     let active = published(&a, 7);
     let out = tempfile::tempdir().unwrap();
-    let s = publish::plan_with_heartbeat(&b, Some(&active), Some(3), &BTreeMap::new(), now(), out.path()).unwrap();
+    let s =
+        publish::plan_with_heartbeat(&b, Some(&active), Some(&beat(3)), &BTreeMap::new(), now(), out.path()).unwrap();
     assert_eq!(s["decision"], "unchanged", "{s}");
     assert_eq!(
         s["generation"], a["meta"]["generation"],
@@ -340,7 +350,8 @@ fn a_generation_published_before_fingerprints_or_with_another_one_is_published_i
     other.meta["fingerprint"] = json!("f".repeat(64));
     for (what, active) in [("no fingerprint", old), ("another fingerprint", other)] {
         let out = tempfile::tempdir().unwrap();
-        let s = publish::plan_with_heartbeat(&b, Some(&active), Some(3), &BTreeMap::new(), now(), out.path()).unwrap();
+        let s = publish::plan_with_heartbeat(&b, Some(&active), Some(&beat(3)), &BTreeMap::new(), now(), out.path())
+            .unwrap();
         assert_eq!(s["decision"], "publish", "{what}: {s}");
         assert!(s.get("heartbeat").is_none(), "{what}: a publish writes no heartbeat");
         assert!(!out.path().join("docs/meta/heartbeat.json").exists());
@@ -353,7 +364,8 @@ fn a_stop_still_wins_over_unchanged() {
     let active = published(&b, 7);
     let out = tempfile::tempdir().unwrap();
     // `a` is older than the active generation and has its content: still a stop.
-    let s = publish::plan_with_heartbeat(&a, Some(&active), Some(3), &BTreeMap::new(), now(), out.path()).unwrap();
+    let s =
+        publish::plan_with_heartbeat(&a, Some(&active), Some(&beat(3)), &BTreeMap::new(), now(), out.path()).unwrap();
     assert_eq!(s["decision"], "stop", "{s}");
     assert!(s.get("heartbeat").is_none());
 }
@@ -370,13 +382,14 @@ fn unchanged_is_decided_before_the_refusal_of_a_generation_name_started_before()
         json!({"generation": g, "sequence": b["sequence"], "project": b["project"], "created_at": now().to_rfc3339()}),
     )]);
     let out = tempfile::tempdir().unwrap();
-    let s = publish::plan_with_heartbeat(&b, Some(&published(&a, 7)), Some(3), &markers, now(), out.path()).unwrap();
+    let s =
+        publish::plan_with_heartbeat(&b, Some(&published(&a, 7)), Some(&beat(3)), &markers, now(), out.path()).unwrap();
     assert_eq!(s["decision"], "unchanged", "{s}");
 
     let mut other = published(&a, 7);
     other.meta["fingerprint"] = json!("f".repeat(64));
     let out = tempfile::tempdir().unwrap();
-    let e = publish::plan_with_heartbeat(&b, Some(&other), Some(3), &markers, now(), out.path());
+    let e = publish::plan_with_heartbeat(&b, Some(&other), Some(&beat(3)), &markers, now(), out.path());
     assert!(e.is_err(), "a changed outbox under a used name is still refused: {e:?}");
 }
 
@@ -387,10 +400,68 @@ fn a_heartbeat_that_fails_its_schema_is_refused_and_not_written() {
     let mut active = published(&a, 7);
     active.meta.as_object_mut().unwrap().remove("generation");
     let out = tempfile::tempdir().unwrap();
-    let e = publish::plan_with_heartbeat(&b, Some(&active), Some(3), &BTreeMap::new(), now(), out.path());
+    let e = publish::plan_with_heartbeat(&b, Some(&active), Some(&beat(3)), &BTreeMap::new(), now(), out.path());
     assert!(e.is_err(), "{e:?}");
     assert!(!out.path().join("docs/meta/heartbeat.json").exists());
     assert!(!out.path().join("plan.json").exists());
+}
+
+/// `b` with its content changed and its sequence set to `seq`: a run whose cycle came after
+/// `a` and before `b`.
+fn between(b: &Value, seq: i64) -> Value {
+    let mut c = b.clone();
+    c["sequence"] = json!(seq);
+    c["meta"]["sequence"] = json!(seq);
+    c["meta"]["generation"] = json!(format!("gen-{seq}"));
+    c["issues"][0]["title"] = json!("read while a repo was failing");
+    c
+}
+
+#[test]
+fn an_outbox_older_than_the_last_quiet_run_is_a_stop() {
+    // Overlapping runs: a quiet run (sequence of `b`) confirmed the active generation and wrote
+    // its heartbeat, while a slower run whose cycle came before it still holds a changed outbox.
+    // Publishing that outbox would show older state than the page has already confirmed.
+    let (a, b) = two_quiet_cycles();
+    let active = published(&a, 7);
+    let older = a["sequence"].as_i64().unwrap() + 1;
+    assert!(older < b["sequence"].as_i64().unwrap());
+    let confirmed = Heartbeat {
+        doc: json!({"schema": 1, "project": b["project"], "generation": a["meta"]["generation"], "sequence": b["sequence"], "synced_at": b["meta"]["taken_at"], "repos": []}),
+        version: 4,
+    };
+    for (what, outbox) in [
+        ("a changed outbox", between(&b, older)),
+        ("the quiet run's own outbox", b.clone()),
+    ] {
+        let out = tempfile::tempdir().unwrap();
+        let s = publish::plan_with_heartbeat(
+            &outbox,
+            Some(&active),
+            Some(&confirmed),
+            &BTreeMap::new(),
+            now(),
+            out.path(),
+        )
+        .unwrap();
+        assert_eq!(s["decision"], "stop", "{what}: {s}");
+        assert!(s.get("heartbeat").is_none() && s.get("switch").is_none(), "{what}: {s}");
+        assert!(!out.path().join("switch.json").exists(), "{what}");
+        assert!(!out.path().join("docs/meta/heartbeat.json").exists(), "{what}");
+    }
+    // A newer changed outbox still publishes.
+    let newer = between(&b, b["sequence"].as_i64().unwrap() + 1);
+    let out = tempfile::tempdir().unwrap();
+    let s = publish::plan_with_heartbeat(
+        &newer,
+        Some(&active),
+        Some(&confirmed),
+        &BTreeMap::new(),
+        now(),
+        out.path(),
+    )
+    .unwrap();
+    assert_eq!(s["decision"], "publish", "{s}");
 }
 
 #[test]
@@ -398,7 +469,7 @@ fn cleanup_refuses_an_unchanged_plan() {
     let (a, b) = two_quiet_cycles();
     let active = published(&a, 7);
     let out = tempfile::tempdir().unwrap();
-    publish::plan_with_heartbeat(&b, Some(&active), Some(3), &BTreeMap::new(), now(), out.path()).unwrap();
+    publish::plan_with_heartbeat(&b, Some(&active), Some(&beat(3)), &BTreeMap::new(), now(), out.path()).unwrap();
     let e = publish::cleanup(
         &out.path().join("plan.json"),
         &out.path().join("listing"),

@@ -199,6 +199,12 @@
     };
   }
 
+  // One repo's entry as an item row shows it: the generation's, with the read time and mode
+  // of a heartbeat that counts (`synced`), so a row never says "stale" from an older read.
+  function syncedRepo(meta, heartbeat, repo) {
+    return synced(meta, heartbeat).repos.find((r) => r.repo === repo);
+  }
+
   // Minutes until the next sync run applies a decision, from the last sync's age (the newer
   // of the generation and `heartbeat`) and the configured interval; null when overdue.
   function nextRunMinutes(meta, now, heartbeat) {
@@ -650,7 +656,7 @@
 
   const api = {
     PRIORITIES, COLLECTIONS, LIST_LIMIT, CLOSE_REASONS, ACK_DAYS,
-    loadGeneration, follower, ackHorizon, threadDoc, repoOf, inScope, tiles, inbox, queue, decisionStates, synced, nextRunMinutes,
+    loadGeneration, follower, ackHorizon, threadDoc, repoOf, inScope, tiles, inbox, queue, decisionStates, synced, syncedRepo, nextRunMinutes,
     trends, launchStates, newId, decisionDoc, launchDoc, notSentDoc, viewDoc, requestDoc, syncFields, syncNote, launch,
     closable, closeComment, closeFields, describeClose, pendingClose, dismissed, recentlyClosed, dismissFields,
     sessionLines, inProgress, ownerNotice,

@@ -22,8 +22,9 @@ content never passes through the conversation.
 | `BIN` | the `issue-dashboard` binary |
 | `WORK` | a fresh, empty scratch directory for this run (never reuse one). Keep its path short: every batch entry repeats it, and a 150-character path costs about 10k output tokens per 50-entry batch. **It must not be under `~/.claude`**: `ArtifactData` refuses to save documents (`out_dir`) anywhere in that tree, so step 1 fails there. A short path such as `mktemp -d /tmp/idsync.XXXX` works |
 
-Every step below is one tool call or one command. A step that fails **stops the run**: report
-what failed and the step, and do not retry with different flags or write anything by hand.
+Every call or command a step names must succeed before the next. One that fails **stops the
+run** (except where a step says a refusal is a success): report what failed and the step, and
+do not retry with different flags or write anything by hand.
 The next scheduled run starts fresh, and every step is safe to repeat.
 
 ## Steps
@@ -53,14 +54,16 @@ The next scheduled run starts fresh, and every step is safe to repeat.
    - `ArtifactData` `list` with `collection: meta`, `query: {limit: 1000}` and
      `out_dir: WORK/active`. The reply gives each document's `version`: note `active`'s and
      `heartbeat`'s. No `active` means a first publish; no `heartbeat` means none was written yet.
+     The documents themselves are saved as `WORK/active/meta/active.json` and
+     `WORK/active/meta/heartbeat.json`.
    - `ArtifactData` `list` with `collection: gens`, `query: {limit: 1000}` and
      `out_dir: WORK/markers`, following `next_cursor`.
 5. **Plan the publish:**
-   `BIN publish-plan --outbox <outbox> --active WORK/active/meta/active.json --active-version <active's version> --heartbeat-version <heartbeat's version> --markers WORK/markers --out WORK/plan`.
-   Leave out `--active` and `--active-version` on a first publish, and `--heartbeat-version`
-   when there is no heartbeat. It prints JSON; act on its `decision`:
-   - `stop`: the page already shows a newer generation. Report the reason and end the run, a
-     success.
+   `BIN publish-plan --outbox <outbox> --active WORK/active/meta/active.json --active-version <active's version> --heartbeat WORK/active/meta/heartbeat.json --heartbeat-version <heartbeat's version> --markers WORK/markers --out WORK/plan`.
+   Leave out `--active` and `--active-version` on a first publish, and `--heartbeat` and
+   `--heartbeat-version` when there is no heartbeat. It prints JSON; act on its `decision`:
+   - `stop`: the page already shows a newer generation, or a newer quiet run confirmed it.
+     Report the reason and end the run, a success.
    - `unchanged`: the page already shows this content. Run `ArtifactData` `batch` with
      `url: PAGE` and `writes` set to the printed `heartbeat` array, verbatim (it is pinned to the
      heartbeat's version). A `version_mismatch` means another run wrote it first: a success.

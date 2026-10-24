@@ -1071,8 +1071,8 @@ instead: no generation, no switch, no cleanup. Any real change still publishes i
 tools; no route from a plain program to it is known (**unverified**: it is the first probe
 of the build). So the CLI never touches the database: it reads and writes files, and the
 sync job, the smallest possible session, carries those files to and from the database. Its
-whole work is two tool calls: one read of the unconsumed page documents, one batch write of
-the prepared ones (`ArtifactData` accepts a document from a local JSON file, so the content
+whole work is carrying files: reads of the unconsumed page documents, batch writes of the
+prepared ones (`ArtifactData` accepts a document from a local JSON file, so the content
 never passes through the model). If a direct route turns up, the CLI writes the database
 itself and the sync job goes away; nothing else changes.
 
@@ -1496,8 +1496,9 @@ An outbox is larger than one database batch can carry (a batch holds at most 50 
 so it is published as an **immutable generation** and switched on by one pinned write:
 
 1. read the `meta` document, which names the active generation, its sequence and its
-   fingerprint, and the `heartbeat` document's version;
-2. if the outbox's sequence is not greater, stop: a newer one is already published;
+   fingerprint, and the `heartbeat` document with its version;
+2. if the outbox's sequence is not greater than the active generation's, or than the last quiet
+   run's (the heartbeat's), stop: a newer run already published or confirmed the page;
 3. if the outbox's fingerprint equals the active generation's, write only `heartbeat`, pinned
    to the version read in step 1, and stop: the page already shows this content;
 4. write the outbox's documents under `gen-<seq>/…`, in as many batches as needed; nothing
@@ -1522,7 +1523,10 @@ generation, which the page ignores.
 
 The page reads only the generation `meta` names, so it never sees half an outbox. Two
 overlapping syncs cannot both switch: the second's pinned write in step 5 fails because the
-first changed `meta`, and an older outbox is stopped at step 2 or step 5.
+first changed `meta`, and an older outbox is stopped at step 2 or step 5. A quiet run changes
+no `meta`, which is why step 2 also reads the heartbeat's sequence; one window stays open (an
+older run that read the page before a quiet run's heartbeat and switches after it), recorded
+in 10.10.
 
 **Cleanup keeps the previous generation.** Step 6 deletes only generations older than the one
 that was active before the switch, so a page that read `meta` just before the switch can still
@@ -1864,7 +1868,15 @@ under the old name are skipped by ingest as another project's. There is no renam
   run cleans nothing, so an abandoned generation waits for the next real publish. The skill reads
   `meta/active` and `meta/heartbeat` with one `list` of the `meta` collection, whose reply gives
   each document's version, and wraps the saved `list_sessions` file with `jq` instead of
-  retyping it.
+  retyping it. *From the gate (depth reader):* a quiet run moves no generation, so an older
+  run's changed outbox could pass the stop check and switch over a newer confirmed state; the
+  stop check now also takes the heartbeat's sequence (`publish-plan --heartbeat <file>`, read
+  from the same `meta` listing). **Open:** an older run that read the page before a quiet run's
+  heartbeat and switches after it still switches; closing that needs the switch to fail on an
+  intervening heartbeat write, i.e. one batch pinning both documents, and whether an
+  `ArtifactData` batch applies all-or-nothing is unverified. The page shows the older state
+  until the next run, which publishes again. An item row's repo read time and its stale tag
+  come from the heartbeat too (`syncedRepo`), not only the status strip.
 - *Closing from the page (slice 3, 10.0's exception).* A `close` decision carries
   `value.close = {reason: completed | not_planned | duplicate, duplicate_of, comment}`. The cycle
   gains a write step between ingest and observe, so the same cycle's read and outbox already

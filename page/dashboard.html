@@ -284,7 +284,7 @@ footer .wrap { padding-block: 0 32px; font-size: .82rem; color: var(--muted); di
   const scoped = () => S.issues.filter((i) => D.inScope(D.repoOf(i.alias), S.scope, groups()));
   // What the lists show: a dismissed closed item leaves them all, while Trends still counts it (5.8).
   const shown = () => scoped().filter((i) => !D.dismissed(i, S.decisions, S.acks));
-  const repoInfo = (repo) => ((S.meta && S.meta.repos) || []).find((r) => r.repo === repo);
+  const repoInfo = (repo) => D.syncedRepo(S.meta, S.heartbeat, repo);
 
   function urgentHidden() {
     if (!S.scope) return [];
@@ -541,7 +541,7 @@ footer .wrap { padding-block: 0 32px; font-size: .82rem; color: var(--muted); di
       h("span", {}, "idle " + (i.idle_days || 0) + " d"),
       i.limit_breached ? h("span", { class: "tag over" }, "over time limit") : null,
       i.outside ? h("span", { class: "tag outside" }, "outside") : null,
-      (i.stale || (repo && repo.stale)) ? h("span", { class: "tag stale" }, "read " + fmtTime(repo ? repo.read_at : S.meta.taken_at) + ", stale") : null,
+      (i.stale || (repo && repo.stale)) ? h("span", { class: "tag stale" }, "read " + fmtTime(repo ? repo.read_at : D.synced(S.meta, S.heartbeat).at) + ", stale") : null,
       launchTag(i, states),
     );
   }

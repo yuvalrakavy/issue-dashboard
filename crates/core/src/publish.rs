@@ -58,6 +58,13 @@ pub struct Active {
     pub version: u64,
 }
 
+/// `meta/heartbeat` as the skill read it: the last quiet run's document and its version.
+#[derive(Debug, Clone)]
+pub struct Heartbeat {
+    pub doc: Value,
+    pub version: u64,
+}
+
 /// One `ArtifactData` batch entry.
 #[derive(Debug, Clone, Serialize)]
 struct Write {
@@ -224,17 +231,18 @@ fn unchanged(outbox: &Value, active: &Active, seq: i64, heartbeat_version: Optio
 
 /// Plans the publish of `outbox` into `out`: the documents, the batches, the switch and the
 /// generations to clean once the switch has succeeded. An outbox no newer than the active
-/// generation is a stop that writes nothing; one with the active generation's fingerprint is
-/// `unchanged`, which writes only `meta/heartbeat` (pinned to `heartbeat_version`, the version
-/// the skill read); a generation name already used is refused.
+/// generation, or than the quiet run that wrote `heartbeat`, is a stop that writes nothing; one
+/// with the active generation's fingerprint is `unchanged`, which writes only `meta/heartbeat`
+/// (pinned to the version the skill read); a generation name already used is refused.
 pub fn plan_with_heartbeat(
     outbox: &Value,
     active: Option<&Active>,
-    heartbeat_version: Option<u64>,
+    heartbeat: Option<&Heartbeat>,
     markers: &BTreeMap<String, Value>,
     now: DateTime<Utc>,
     out: &Path,
 ) -> Result<Value> {
+    let heartbeat_version = heartbeat.map(|h| h.version);
     let seq = sequence_of(outbox).ok_or_else(|| Error::refused("the outbox has no sequence"))?;
     let generation = format!("gen-{seq}");
     let meta = outbox
@@ -248,6 +256,14 @@ pub fn plan_with_heartbeat(
         return Ok(json!({
             "decision": "stop",
             "reason": format!("gen-{a} is active and {generation} is not newer: this outbox is older than what the page shows"),
+        }));
+    }
+    // A quiet run moves no generation, so the last one's sequence counts as well: an outbox
+    // older than it would show older state than the page has already confirmed.
+    if let Some(q) = heartbeat.and_then(|h| sequence_of(&h.doc)).filter(|q| *q >= seq) {
+        return Ok(json!({
+            "decision": "stop",
+            "reason": format!("a quiet run of sequence {q} already confirmed the page and {generation} is not newer: this outbox is older than what the page shows"),
         }));
     }
     let print = fingerprint(outbox);

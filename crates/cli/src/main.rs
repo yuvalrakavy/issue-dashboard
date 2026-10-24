@@ -172,8 +172,11 @@ enum Command {
         /// The `out_dir` of a listing of the `gens` collection.
         #[arg(long)]
         markers: Option<PathBuf>,
-        /// The version of `meta/heartbeat` as read; absent when there is none yet.
-        #[arg(long)]
+        /// `meta/heartbeat` as read (the same listing as `--active`); absent when there is none yet.
+        #[arg(long, requires = "heartbeat_version")]
+        heartbeat: Option<PathBuf>,
+        /// The version that read returned.
+        #[arg(long, requires = "heartbeat")]
         heartbeat_version: Option<u64>,
         #[arg(long)]
         out: PathBuf,
@@ -373,10 +376,18 @@ fn run_sync(command: &Command, now: DateTime<Utc>) -> anyhow::Result<Option<Valu
             active,
             active_version,
             markers,
+            heartbeat,
             heartbeat_version,
             out,
         } => {
             let outbox = read_json(outbox)?;
+            let heartbeat = match (heartbeat, heartbeat_version) {
+                (Some(path), Some(version)) => Some(publish::Heartbeat {
+                    doc: read_json(path)?,
+                    version: *version,
+                }),
+                _ => None,
+            };
             let active = match (active, active_version) {
                 (Some(path), Some(version)) => Some(Active {
                     meta: read_json(path)?,
@@ -398,7 +409,7 @@ fn run_sync(command: &Command, now: DateTime<Utc>) -> anyhow::Result<Option<Valu
                     }
                 }
             }
-            publish::plan_with_heartbeat(&outbox, active.as_ref(), *heartbeat_version, &found, now, out)?
+            publish::plan_with_heartbeat(&outbox, active.as_ref(), heartbeat.as_ref(), &found, now, out)?
         }
         Command::CleanupPlan { plan, listing, out } => publish::cleanup(plan, listing, out)?,
         _ => return Ok(None),

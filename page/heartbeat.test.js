@@ -65,6 +65,16 @@ test("a heartbeat at the generation's own time is not newer: the generation's re
   assert.deepEqual(s.repos, meta.repos);
 });
 
+test("an item row's repo carries the heartbeat's read, and the generation's without one", () => {
+  assert.equal(D.syncedRepo(meta, beat(), "o/a").read_at, "2026-10-23T08:20:00Z");
+  assert.equal(D.syncedRepo(meta, beat(), "o/a").read, "full");
+  assert.equal(D.syncedRepo(meta, beat(), "o/b").stale, true, "what the heartbeat does not name stays");
+  assert.equal(D.syncedRepo(meta, beat({ generation: "gen-39" }), "o/a").read_at, "2026-10-23T08:00:00Z");
+  assert.equal(D.syncedRepo(meta, null, "o/a").read_at, "2026-10-23T08:00:00Z");
+  assert.equal(D.syncedRepo(meta, beat(), "o/zz"), undefined);
+  assert.equal(D.syncedRepo(null, beat(), "o/a"), undefined);
+});
+
 test("the next run is counted from the newer sync time", () => {
   const now = new Date("2026-10-23T08:21:00Z");
   assert.equal(D.nextRunMinutes(meta, now), null, "from the generation alone the run is overdue");
