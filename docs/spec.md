@@ -928,23 +928,33 @@ The sum of three terms, each on the relative scale 1, 2, 3, 5, 8, 13:
 Severity, reach and detectability come from the decision seam (7.1), with your corrections
 (5.7) taking precedence.
 
-**Exact terms (proposed defaults, for the owner to confirm; all in the project config):**
+**Exact terms (defaults approved by the owner 2026-10-24; all in the project config):**
 severity is 1, 3, 8 or 13 (cosmetic, degraded, wrong result, data loss or a hang); reach is
 1, 2, 3 or 5 (one corner, one subsystem, most of the project, all of it), raised one step
 when outside demand passes `demand_threshold` (default 3 distinct outside people); **value =
 severity + reach**. Time criticality is 1 below half the time limit, 3 past half, 8 past the
 limit, 13 with a milestone due within 7 days. Risk and opportunity is the sum of the values
 of the open issues it unblocks, capped at 13, plus 3 for a defect class handled together,
-plus 3 when the failure is silent.
+plus 3 when the failure is silent. A hang scores as high as data loss: no scenario, however
+rare, may hang the system.
 
 ### 6.3 Job size
 
-Effort (S = 1, M = 3, L = 8) plus **gate cost**, which comes from the repo's launch recipe:
-each recipe declares the cost of its gate levels (Store's quick gate and full gate cost very
-differently), and the issue's blast radius picks the level. The two are put in one unit by
-counting **one point per 10 gate minutes** (`gate_minutes_per_point`, proposed default 10).
-In a batch the gate cost is paid once, so each member's share of it is divided by the batch
-size.
+Effort plus **gate cost**, both in one unit: **wall-clock time, one point per 15 minutes**
+(`gate_minutes_per_point`, default 15). Effort is S = 1 (about 15 minutes), M = 3 (about
+45) or L = 8 (about two hours). Gate cost comes from the repo's launch recipe: each recipe
+declares the minutes of its gate levels (Store's quick gate and full gate cost very
+differently), and the issue's blast radius picks the level, so Store's 6-minute quick gate
+is 0.4 points and its 17-minute full gate about 1.1. In a batch the gate cost is paid once,
+so each member's share of it is divided by the batch size. The recorded outcomes (6.8)
+correct both estimates per repo.
+
+**Worked example (Store, 2026-10-24).** Store#376, home down after a restart (p1 bug):
+value 13 (a hang) + 2 (the dev loop) = 15, time criticality 3 (past half of 14 days), cost
+of delay 18; job size M 3 + full gate 1.1 = 4.1; confidence 0.9 × 0.8 (unchecked) = 0.72;
+**score 3.2**. Store#410, back to rhai 1.27.0 (p2 todo): value 1 + 3 = 4, time criticality
+1, cost of delay 5; job size S 1 + full gate 1.1 = 2.1; confidence 0.9; **score 2.1**. The
+two never compete (different levels); they show the scale.
 
 ### 6.4 Confidence
 
@@ -1025,15 +1035,26 @@ Two rules:
 1. **Probabilities are never trusted on a vendor's word.** Each backend is evaluated per
    decision on the project's own history: the labelled open issues and the closed ones,
    with the owner's priority overrides as further ground truth. The evaluation measures
-   accuracy and **calibration** (when it says 80 %, is it right about 80 % of the time). A
-   backend is used for a decision only where it passes (proposed default: at least 50
-   labelled examples held out from any tuning, accuracy at least 85 %, and expected
-   calibration error at most 0.10), so one backend may win "type" and
-   lose "duplicate". **Cold start:** until a decision has 50 labelled examples, the default
-   backend (Claude) answers it unevaluated; its suggestions are marked "unevaluated" and are
-   never included in "apply all at or above a confidence". For decisions with no ground truth
-   in labels (duplicates, "is this fixed"), the examples come from your accepts and dismissals
-   (5.7) alone.
+   accuracy and **calibration** (when it says 80 %, is it right about 80 % of the time).
+   There are **two bars** (defaults approved by the owner 2026-10-24), so one backend may
+   win "type" and lose "duplicate":
+
+   | Bar | Needs | Unlocks |
+   |---|---|---|
+   | **Evaluated** | at least 50 labelled examples held out from any tuning, and expected calibration error at most 0.10 | its suggestions are shown marked "evaluated"; a calibrated backend's stated confidence can be trusted even when its accuracy is middling, and that confidence is what each card shows |
+   | **Bulk** | the evaluated bar, plus accuracy at least 85 % | its suggestions may be included in "apply all at or above a confidence", the one place an error is applied unread |
+
+   **Cold start:** until a decision has 50 labelled examples, the default backend (Claude)
+   answers it unevaluated; its suggestions are marked "unevaluated" and are never included
+   in "apply all at or above a confidence". For decisions with no ground truth in labels
+   (duplicates, "is this fixed"), the examples come from your accepts and dismissals (5.7)
+   alone; Recommend closures (5.8) produces exactly that data.
+
+   **Labels set in a bulk review are tagged.** Labels you approved as a batch (such as the
+   priorities set in the 2026-10-23 review, drafted by Claude) count as ground truth, but
+   carry their provenance, so an evaluation can be re-run without them if they skew the
+   result. As of 2026-10-24, type and priority already have enough examples in Store alone;
+   area (eleven choices in Store) may stay unevaluated for a while.
 2. **Backends are configuration, and so is who may see what.** The tracker-wide config picks
    a backend per decision. Each repo has a data policy naming the backends allowed to see
    its issue text; for a private repo, every external backend is off until the owner
