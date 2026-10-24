@@ -19,7 +19,7 @@ files between the page, the CLI and the app.
 | `BIN` | the `issue-dashboard` binary |
 | `REPO` | the issue-dashboard checkout whose `page/` is the current build |
 | `ME` | this session's id (`local_…`), from `mcp__ccd_session_mgmt__get_session` on itself |
-| `WORK` | a scratch directory **outside `~/.claude`** (`ArtifactData` refuses to save there), e.g. `mktemp -d /tmp/iddisp.XXXX` |
+| `WORK` | a scratch directory inside the session's own folder, REPO: `mkdir -p REPO/.work && mktemp -d REPO/.work/dispatch.XXXX` (`/.work/` is gitignored). Not `/tmp`: in auto mode every `ArtifactData` save outside the working folder asks the owner, once per launch. Not under `~/.claude`: `ArtifactData` refuses to save there |
 
 ## Starting
 
