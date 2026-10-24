@@ -74,3 +74,23 @@ Template:
 - unconsolidated: 3
 - improve: any ingest of an external list gets a test table row "one element malformed, the
   rest fine": the S3 was a whole-list validation where a per-element one was meant.
+
+## 2026-10-24 phase 1 slice 4: the dispatcher and Recommend closures (T2)
+- time: implement ~40%, tests and harness ~30%, gates and fixes ~30%; friction ~1 h (the
+  preview launcher stuck at starting; the exclamation-mark shell hook).
+- catches: self-review=2 (release refuses inside 15 min, so the routing check moved before
+  reserve; reserve has no closed-issue check, so the skill re-reads issues) gate=round 1: 3 S3 +
+  4 S2 (Codex), round 2: 2 S1 user=0 post-merge=n/a. Biggest: the page's optimistic dismissal never
+  handed back to the tracker, so a lifted suggestion stayed hidden.
+- DG=n/a IG=51 post-merge=n/a
+- friction: page/controls.py printed RED for every mutant because its temp tree lacked a file one
+  test reads (GUARDED: an identity copy must pass first); preview_start hung (UNGUARDED: use a
+  background http.server plus Playwright for static pages).
+- tier-call: right.
+- delegation: mutation finder Sonnet high (90 min); Rust test author Sonnet high (30 min, 36 rows,
+  2 production bugs); depth Codex (1 min of model time, 7 findings, all real); confirming Sonnet
+  medium (0 S2+).
+- unconsolidated: 4
+- improve: a negative-control harness always runs an unmutated copy first and must see it GREEN;
+  and any page-side optimistic state gets a test-table row "after the tracker consumed it, does
+  the page defer?" (the S3 was optimism that never ended).
