@@ -145,7 +145,7 @@ Rules:
 ### 1.4 A project's view of a repo
 
 ```toml
-# <root>/projects/villa-rakavy.toml
+# <root>/projects/VillaRakavy.toml
 schema = 1
 name   = "Villa Rakavy home automation"
 dashboard = "https://claude.ai/artifact/…"
@@ -1594,7 +1594,12 @@ values and the launch document's `kind` values; a launch document names its `rec
 pool it takes a slot from. The filing block allows unknown keys, since 2.6 keeps and reports
 them rather than refusing. A project's name (its config file stem) is letters, digits, `_` and
 `-`, starting with a letter or digit; capitals are allowed (**owner, 2026-10-24**: the first
-project is `VillaRakavy`).
+project is `VillaRakavy`). It was first `villa-rakavy`; the installation's root was renamed
+by a one-off rewrite of the tracker's own project fields in the backup (the page documents a
+`decided` or `request` event embeds stay as written), then `rebuild`, carrying the read tables
+(`reads`, `rereads`, `served`, `watermarks`, `freshness`) over from the old database, since
+`rebuild` restores only events. Page documents written
+under the old name are skipped by ingest as another project's. There is no rename command.
 
 **The ledger (`crates/core`).**
 

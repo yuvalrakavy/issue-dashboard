@@ -9,7 +9,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const D = require("./core.js");
 
-const who = { project: "villa-rakavy", author: "user_1" };
+const who = { project: "VillaRakavy", author: "user_1" };
 const now = new Date("2026-10-23T08:14:05.123Z");
 const fields = { kind: "fix", items: ["I_1"], aliases: ["yuvalrakavy/Store#1"], recipe: "default", routing: { model: "m", effort: "medium" } };
 

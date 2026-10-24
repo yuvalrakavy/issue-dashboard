@@ -6,11 +6,11 @@ const assert = require("node:assert/strict");
 const D = require("./core.js");
 
 test("a pending owner_id asks the owner to set theirs, with the exact config line", () => {
-  const n = D.ownerNotice({ project: "villa-rakavy", owner_id: null }, "u_abc", true);
+  const n = D.ownerNotice({ project: "VillaRakavy", owner_id: null }, "u_abc", true);
   assert.equal(n.kind, "pending");
   assert.equal(n.id, "u_abc");
   assert.equal(n.line, 'owner_id = "u_abc"');
-  assert.equal(n.file, "projects/villa-rakavy.toml");
+  assert.equal(n.file, "projects/VillaRakavy.toml");
 });
 
 test("an owner_id that is someone else's says so", () => {

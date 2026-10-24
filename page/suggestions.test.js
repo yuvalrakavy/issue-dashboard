@@ -8,14 +8,14 @@ const path = require("node:path");
 const D = require("./core.js");
 
 const schema = (n) => JSON.parse(fs.readFileSync(path.join(__dirname, "..", "schemas", n + ".schema.json"), "utf8"));
-const who = { project: "villa-rakavy", author: "user_1" };
+const who = { project: "VillaRakavy", author: "user_1" };
 const now = new Date("2026-10-24T08:00:00Z");
 const STORE = "yuvalrakavy/Store";
 const issue = (n, more) => Object.assign({ id: "I_" + n, alias: STORE + "#" + n, kind: "issue", state: "open", title: "t" + n }, more);
 const repo = (more) => Object.assign({ repo: STORE, read_only: { value: false, why: null }, visibility: "public", recipe: "worktree-pr", campaign_skill: true }, more);
 const repoFor = (r) => (r === STORE ? repo() : r === "yuvalrakavy/ro" ? repo({ repo: r, read_only: { value: true, why: "declared" } }) : undefined);
 const sg = (kind, n, more) => Object.assign({
-  id: "sg-" + kind + n, project: "villa-rakavy", run_id: "L1", kind, made_at: "2026-10-23T10:00:00Z", confidence: 0.8,
+  id: "sg-" + kind + n, project: "VillaRakavy", run_id: "L1", kind, made_at: "2026-10-23T10:00:00Z", confidence: 0.8,
   item: "I_" + n, alias: STORE + "#" + n, decision: kind, answer: true, probabilities: { true: 0.8, false: 0.2 },
   backend: "recommend_closures", evaluated: false, reason: "r",
 }, more);

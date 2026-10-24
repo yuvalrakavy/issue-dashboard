@@ -12,7 +12,7 @@ just closed, relabelled or landed a fix for an issue the dashboard tracks, ask f
 to show now instead:
 
 ```bash
-issue-dashboard --root ~/.claude/issue-dashboard/root sync-now --project villa-rakavy --issue yuvalrakavy/Store#403
+issue-dashboard --root ~/.claude/issue-dashboard/root sync-now --project VillaRakavy --issue yuvalrakavy/Store#403
 ```
 
 It records the request and prints the project's sync task (`task`). Run that task now with

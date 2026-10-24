@@ -16,7 +16,7 @@ content never passes through the conversation.
 |---|---|
 | `PAGE` | the dashboard's artifact URL (the project's `dashboard` in its config, else ask) |
 | `ROOT` | the tracker root (`ISSUE_DASHBOARD_ROOT`) |
-| `PROJECT` | the project's config stem, e.g. `villa-rakavy` |
+| `PROJECT` | the project's config stem, e.g. `VillaRakavy` |
 | `BIN` | the `issue-dashboard` binary |
 | `WORK` | a fresh, empty scratch directory for this run (never reuse one). Keep its path short: every batch entry repeats it, and a 150-character path costs about 10k output tokens per 50-entry batch. **It must not be under `~/.claude`**: `ArtifactData` refuses to save documents (`out_dir`) anywhere in that tree, so step 1 fails there. A short path such as `mktemp -d /tmp/idsync.XXXX` works |
 

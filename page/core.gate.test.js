@@ -25,7 +25,7 @@ function issue(n, more) {
   );
 }
 
-const who = { project: "villa-rakavy", author: "user_1" };
+const who = { project: "VillaRakavy", author: "user_1" };
 const rand = () => 0.5;
 const jan = new Date("2026-01-05T03:04:05.678Z");
 
@@ -89,7 +89,7 @@ test("a decision document carries exactly the fields it was given", () => {
   const f = { action: "set_priority", target: { item: "I_1", alias: "a/b#1" }, value: { priority: "p1" }, reason: "why" };
   assert.deepEqual(D.decisionDoc(f, who, jan, rand), {
     id: "D_20260105_030405_" + D.newId("D", jan, rand).slice(-8),
-    project: "villa-rakavy",
+    project: "VillaRakavy",
     author: "user_1",
     created_at: "2026-01-05T03:04:05Z",
     action: "set_priority",
@@ -108,12 +108,12 @@ test("a launch document and its not_sent twin carry their fields", () => {
   assert.match(l.id, /^L_20260105_030405_/);
   assert.deepEqual(
     { ...l, id: null },
-    { id: null, project: "villa-rakavy", author: "user_1", created_at: "2026-01-05T03:04:05Z", ...f },
+    { id: null, project: "VillaRakavy", author: "user_1", created_at: "2026-01-05T03:04:05Z", ...f },
   );
   const n = D.notSentDoc("L_1", "rate_limited", who, jan, rand);
   assert.match(n.id, /^L_20260105_030405_/);
   assert.deepEqual(n.not_sent, { launch: "L_1", error: "rate_limited" });
-  assert.deepEqual([n.project, n.author, n.created_at], ["villa-rakavy", "user_1", "2026-01-05T03:04:05Z"]);
+  assert.deepEqual([n.project, n.author, n.created_at], ["VillaRakavy", "user_1", "2026-01-05T03:04:05Z"]);
   assert.equal(D.notSentDoc("L_1", undefined, who, jan, rand).not_sent.error, "upstream_error");
   assert.equal(D.notSentDoc("L_1", "", who, jan, rand).not_sent.error, "upstream_error");
 });
@@ -125,7 +125,7 @@ test("a view document keeps its name and scope, an unset side being an empty lis
   assert.deepEqual([v.name, v.include, v.exclude], ["Without bridges", [], [{ group: "bridges" }]]);
   const w = D.viewDoc("Only Store", { include: [{ repo: "yuvalrakavy/Store" }] }, who, jan, rand);
   assert.deepEqual([w.include, w.exclude], [[{ repo: "yuvalrakavy/Store" }], []]);
-  assert.deepEqual([v.project, v.author, v.created_at], ["villa-rakavy", "user_1", "2026-01-05T03:04:05Z"]);
+  assert.deepEqual([v.project, v.author, v.created_at], ["VillaRakavy", "user_1", "2026-01-05T03:04:05Z"]);
 });
 
 // Kills: request items/launch optional fields dropped or always written; kind lost.
@@ -135,7 +135,7 @@ test("a request document carries its kind and only the targets it was given", ()
   assert.deepEqual([a.kind, a.items, "launch" in a], ["triage", ["I_1"], false]);
   const b = D.requestDoc({ kind: "relaunch", launch: "L_1" }, who, jan, rand);
   assert.deepEqual([b.kind, b.launch, "items" in b], ["relaunch", "L_1", false]);
-  assert.deepEqual([a.project, a.author, a.created_at], ["villa-rakavy", "user_1", "2026-01-05T03:04:05Z"]);
+  assert.deepEqual([a.project, a.author, a.created_at], ["VillaRakavy", "user_1", "2026-01-05T03:04:05Z"]);
 });
 
 // --- trends ------------------------------------------------------------------------------
@@ -344,7 +344,7 @@ test("a thread record is written when a thread starts, and only then", async () 
   await D.launch(deps(first, comments(null)), fields);
   // now() is read for the launch document (0), then for the thread record (1 minute later).
   assert.deepEqual(records(first), [["launches/T_20261023_080100_i0000000",
-    { id: "T_20261023_080100_i0000000", project: "villa-rakavy", author: "user_1", created_at: "2026-10-23T08:01:00Z", thread: "thr_new" }]]);
+    { id: "T_20261023_080100_i0000000", project: "VillaRakavy", author: "user_1", created_at: "2026-10-23T08:01:00Z", thread: "thr_new" }]]);
   tick = 0;
   const replaced = fakeDb({ "launches/_thread": { id: "_thread", thread: "thr_old" } });
   await D.launch(deps(replaced, comments("thr_old")), fields);
