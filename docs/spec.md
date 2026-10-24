@@ -819,11 +819,13 @@ mqtt_dali" is `exclude = [repo yuvalrakavy/mqtt_dali]`; "only the PD libraries" 
   row, since they do not change which repos are in scope.
 - Views can be saved by name ("Save view" beside the view chip) and switched from the chip. The project config names the
   default view; saved views are page-owned documents (`views`, 5.3).
-- **Isolate** is a one-step view: every repo name and group name on the page has an
-  "isolate" action that shows only that repo or group, with every panel, tile and metric
-  aggregated over it alone ("Bridges: 2 open, 0 over time limit, first response 2.1 days").
-  The view chip in the status strip becomes "Isolated: Bridges ✕", and its ✕ returns to the
-  view you came from.
+- **Isolate** is a one-step view that shows only one repo or group, with every panel, tile and
+  metric aggregated over it alone ("Bridges: 2 open, 0 over time limit, first response 2.1
+  days"). The status strip's **Show** drop-down is its main control: **Show: [All repos ▾]**
+  lists All repos, then the groups, then the repos alphabetically, each with its open count
+  ("Store (68)"); picking an entry isolates it, and All repos shows every repo. An issue's ⋯
+  menu and the Trends tables also isolate, and the drop-down follows. When a saved view is
+  in force the drop-down shows it as its first entry ("View: Store only").
   An isolated scope can be saved as a view like any other.
 - The metrics panel can also break any metric down by group, so groups can be compared side
   by side without isolating each in turn.
@@ -2045,6 +2047,12 @@ under the old name are skipped by ingest as another project's. There is no renam
   model or effort needs the owner's approval in the app. A republish counts only a page the
   session has read whole, so the dispatcher reads it once at start (about 70 KB). There is no
   read-only `check` command yet (1.9); the sync run is the configuration check.
+- *The Show drop-down (2026-10-24, owner-directed).* 5.6's Isolate gets its main control in
+  the status strip (`showOptions`, `showChoice` in `core.js`). 5.6's Include and Exclude scope
+  pills and the repo-name menu were never built, and stay unbuilt by the owner's decision
+  of 2026-10-24: Isolate covers the need. A saved view can still hold include and exclude
+  lists. With the ✕ chip gone, choosing All repos shows every repo rather than returning to
+  the view you isolated from; pick that view again from Saved views.
 - **Open (for the owner):** found by the gate and left for after landing: an upload abandoned
   for over an hour and resumed after a cleanup leaves documents no marker names, which no later
   cleanup finds; the page's own collections (`decisions`, `launches`, `views`) are read to

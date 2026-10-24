@@ -36,6 +36,11 @@ MUTANTS = [
     ("heartbeat of another generation ignored", "heartbeat.generation === meta.generation && ", ""),
     ("heartbeat older than the generation ignored", "|| at > Date.parse(meta.taken_at));", "|| true);"),
     ("heartbeat moves each repo's read", "(reads.has(r.repo) ?", "(false ?"),
+    ("show counts only open issues", 'if (i.state === "open") open[repoOf(i.alias)]', 'if (true) open[repoOf(i.alias)]'),
+    ("show tells shared short names apart", "(shared.has(short(r)) ? r : short(r))", "short(r)"),
+    ("show selects the isolated entry", 'if (scope && !scopeName && one) selected', 'if (false) selected'),
+    ("show marks a saved view", 'scopeName ? "View: " + scopeName : "Custom view"', '"Custom view"'),
+    ("show ignores a scope with excludes", "scope && !(scope.exclude && scope.exclude.length) && ", "scope && "),
     ("next run counts from the heartbeat", "Date.parse(synced(meta, heartbeat).at)", "Date.parse(meta && meta.taken_at)"),
 ]
 

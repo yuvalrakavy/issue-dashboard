@@ -93,6 +93,40 @@
     return !(view.include && view.include.length) || hits(view.include);
   }
 
+  // The status strip's Show drop-down (5.6): All, then groups, then repos, each with its open
+  // count. Picking an entry isolates it; a scope that is not one repo or group (a saved view)
+  // is shown as its own first entry.
+  function showOptions(meta, issues, scope, scopeName) {
+    const repos = ((meta && meta.repos) || []).map((r) => r.repo);
+    const groups = (meta && meta.groups) || {};
+    const open = {};
+    for (const i of issues || []) if (i.state === "open") open[repoOf(i.alias)] = (open[repoOf(i.alias)] || 0) + 1;
+    const count = (list) => list.reduce((n, r) => n + (open[r] || 0), 0);
+    const short = (r) => r.split("/").pop();
+    const shared = new Set(repos.filter((r, k) => repos.findIndex((o) => short(o) === short(r)) !== k).map(short));
+    const name = (r) => (shared.has(short(r)) ? r : short(r));
+    const byName = (a, b) => name(a).toLowerCase().localeCompare(name(b).toLowerCase());
+
+    const options = [{ value: "all", label: "All repos" }];
+    for (const g of Object.keys(groups).sort()) options.push({ value: "group:" + g, label: g + " (" + count(groups[g]) + ")", heading: "Groups" });
+    for (const r of repos.slice().sort(byName)) options.push({ value: "repo:" + r, label: name(r) + " (" + count([r]) + ")", heading: "Repos" });
+
+    const one = scope && !(scope.exclude && scope.exclude.length) && scope.include && scope.include.length === 1 ? scope.include[0] : null;
+    let selected = "all";
+    if (scope && !scopeName && one) selected = one.repo ? "repo:" + one.repo : "group:" + one.group;
+    else if (scope) {
+      selected = "view";
+      options.unshift({ value: "view", label: scopeName ? "View: " + scopeName : "Custom view" });
+    }
+    return { selected, options };
+  }
+
+  function showChoice(value) {
+    if (value === "all") return { kind: "all" };
+    const m = /^(repo|group):(.+)$/.exec(String(value));
+    return m ? { kind: m[1], name: m[2] } : null;
+  }
+
   const isOpen = (i) => i.state === "open";
   const waiting = (i) => i.status === "needs-decision" || (i.status === "needs-review" && i.outside === true);
   const untriaged = (i) => i.status === "untriaged" || i.status === "new";
@@ -657,7 +691,7 @@
 
   const api = {
     PRIORITIES, COLLECTIONS, LIST_LIMIT, CLOSE_REASONS, ACK_DAYS,
-    loadGeneration, follower, ackHorizon, threadDoc, repoOf, inScope, tiles, inbox, queue, decisionStates, synced, syncedRepo, nextRunMinutes,
+    loadGeneration, follower, ackHorizon, threadDoc, repoOf, inScope, showOptions, showChoice, tiles, inbox, queue, decisionStates, synced, syncedRepo, nextRunMinutes,
     trends, launchStates, newId, decisionDoc, launchDoc, notSentDoc, viewDoc, requestDoc, syncFields, syncNote, launch,
     closable, closeComment, closeFields, describeClose, pendingClose, dismissed, recentlyClosed, dismissFields,
     sessionLines, inProgress, ownerNotice,

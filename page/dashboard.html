@@ -213,7 +213,7 @@ footer .wrap { padding-block: 0 32px; font-size: .82rem; color: var(--muted); di
     load: null, meta: null, heartbeat: null, issues: [], acks: [], statuses: [], suggestions: [],
     decisions: [], launches: [], views: [],
     tab: "inbox", inboxFilter: "all", queueFilter: "all", text: "",
-    scope: null, scopeName: null, savedScope: null,
+    scope: null, scopeName: null,
     openCard: null, menu: null, sel: 0, error: null, weeks: 8,
   };
 
@@ -369,17 +369,9 @@ footer .wrap { padding-block: 0 32px; font-size: .82rem; color: var(--muted); di
   }
 
   function isolate(kind, name) {
-    if (!S.scope || S.scopeName) S.savedScope = { scope: S.scope, name: S.scopeName };
     S.scope = { include: [kind === "group" ? { group: name } : { repo: name }], exclude: [] };
     S.scopeName = null;
     S.menu = null;
-    render();
-  }
-  function clearScope() {
-    const back = S.savedScope;
-    S.scope = back ? back.scope : null;
-    S.scopeName = back ? back.name : null;
-    S.savedScope = null;
     render();
   }
 
@@ -424,17 +416,25 @@ footer .wrap { padding-block: 0 32px; font-size: .82rem; color: var(--muted); di
     $("name").textContent = (S.meta && S.meta.name) || "Issue board";
     const scope = $("scope");
     scope.replaceChildren();
-    if (S.scope) {
-      const label = S.scopeName ? "View: " + S.scopeName : "Isolated: " + scopeSentence(S.scope);
-      scope.append(h("span", { class: "chip on" }, label, h("button", { class: "btn quiet", style: "min-height:28px;padding:0 4px", "aria-label": "Clear the view", onclick: clearScope }, "✕")));
-      if (!S.scopeName && S.owner) scope.append(" ", h("button", { class: "chip", onclick: () => openSaveView() }, "Save view"));
-    } else {
-      scope.append(h("span", { class: "chip" }, "All repos"));
-    }
+    // Show (5.6): picking an entry isolates it; All repos clears the scope.
+    const show = D.showOptions(S.meta, S.issues, S.scope, S.scopeName);
+    const opt = (o) => h("option", { value: o.value, selected: o.value === show.selected }, o.label);
+    const headed = (name) => show.options.filter((o) => o.heading === name);
+    const pick = h("select", { class: "chip" + (S.scope ? " on" : ""), "aria-label": "Show repos", onchange: (e) => {
+      const c = D.showChoice(e.target.value);
+      if (!c) return;
+      if (c.kind === "all") { S.scope = null; S.scopeName = null; render(); }
+      else isolate(c.kind, c.name);
+    } },
+      show.options.filter((o) => !o.heading).map(opt),
+      ["Groups", "Repos"].map((g) => (headed(g).length ? h("optgroup", { label: g }, headed(g).map(opt)) : null)));
+    pick.value = show.selected;
+    scope.append(h("label", { class: "muted" }, "Show: ", pick));
+    if (S.scope && !S.scopeName && S.owner) scope.append(" ", h("button", { class: "chip", onclick: () => openSaveView() }, "Save view"));
     if (S.views.length) {
       const sel = h("select", { class: "chip", "aria-label": "Saved views", onchange: (e) => {
         const v = S.views.find((x) => x.id === e.target.value);
-        if (v) { S.scope = { include: v.include, exclude: v.exclude }; S.scopeName = v.name; S.savedScope = null; render(); }
+        if (v) { S.scope = { include: v.include, exclude: v.exclude }; S.scopeName = v.name; render(); }
       } }, h("option", { value: "" }, "Saved views…"), S.views.map((v) => h("option", { value: v.id }, v.name)));
       scope.append(" ", sel);
     }
@@ -450,7 +450,7 @@ footer .wrap { padding-block: 0 32px; font-size: .82rem; color: var(--muted); di
     }
 
     const hid = urgentHidden();
-    $("hidden").replaceChildren(...(hid.length ? [h("div", { class: "hiddenline" }, "Hidden by this view: " + hid.join(", "), h("button", { class: "btn quiet", onclick: () => { S.scope = null; S.scopeName = null; S.savedScope = null; render(); } }, "Show all"))] : []));
+    $("hidden").replaceChildren(...(hid.length ? [h("div", { class: "hiddenline" }, "Hidden by this view: " + hid.join(", "), h("button", { class: "btn quiet", onclick: () => { S.scope = null; S.scopeName = null; render(); } }, "Show all"))] : []));
 
     const t = D.tiles(scoped());
     const tile = (n, label, go, hot) => h("button", { class: "tile" + (hot && n > 0 ? " hot" : ""), onclick: go }, h("span", { class: "n" }, String(n)), h("span", { class: "l" }, label));
