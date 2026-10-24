@@ -1592,7 +1592,9 @@ them: in the project config `owner_id` (10.5), `time_limits_days` (per priority,
 `sync_interval_minutes` (7.2), `routing` (by launch kind, 7.4); the page decision's `action`
 values and the launch document's `kind` values; a launch document names its `recipe`, whose
 pool it takes a slot from. The filing block allows unknown keys, since 2.6 keeps and reports
-them rather than refusing.
+them rather than refusing. A project's name (its config file stem) is letters, digits, `_` and
+`-`, starting with a letter or digit; capitals are allowed (**owner, 2026-10-24**: the first
+project is `VillaRakavy`).
 
 **The ledger (`crates/core`).**
 
