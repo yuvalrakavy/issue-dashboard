@@ -27,24 +27,42 @@ MUTANTS = [
     ("launch needs a recipe", "if (!repo || !repo.recipe) return", "if (false) return"),
     ("batch is one repo", "if (new Set(issues.map((i) => repoOf(i.alias))).size !== 1) return", "if (false) return"),
     ("recommend only closable", "const items = issues.filter((i) => closable(i, repoFor(repoOf(i.alias))));", "const items = issues;"),
+    ("dismissal hides a batch", "if (gone.has(s.id)) continue;", 'if (gone.has(s.id) && s.kind !== "batch") continue;'),
+    ("dismissal hides a left-open entry", "if (gone.has(s.id)) continue;", 'if (gone.has(s.id) && s.kind !== "left_out") continue;'),
+    ("dismissal names item and alias", "target: { suggestion: s.id, item: s.item, alias: s.alias }", "target: { suggestion: s.id }"),
+    ("duplicate with no other says so", '(other || "another issue")', "other"),
+    ("recommend carries routing", "recipe: READ_ONLY_RECIPE,\n        routing,", "recipe: READ_ONLY_RECIPE,\n        routing: null,"),
 ]
 
 src = open(os.path.join(REPO, "page/core.js")).read()
+
+
+def run(code):
+    """Run every page test against `code` as core.js in a copy of the tree's layout."""
+    root = tempfile.mkdtemp()
+    d = os.path.join(root, "page"); os.mkdir(d)
+    for shared in ("schemas", "crates"):
+        os.symlink(os.path.join(REPO, shared), os.path.join(root, shared))
+    for t in os.listdir(os.path.join(REPO, "page")):
+        if t.endswith(".test.js"):
+            shutil.copy(os.path.join(REPO, "page", t), d)
+    open(os.path.join(d, "core.js"), "w").write(code)
+    r = subprocess.run(["node", "--test"], cwd=d, capture_output=True, text=True)
+    fails = [l for l in r.stdout.splitlines() if l.startswith("\u2139 fail")]
+    return r.returncode != 0, (fails[0] if fails else r.stderr[-200:])
+
+
+# The unmutated copy must pass, or every RED below proves nothing.
+red, why = run(src)
+if red:
+    print("IDENTITY RED  " + why); sys.exit(1)
+print("GREEN  identity")
 bad = 0
 for name, old, new in MUTANTS:
     n = src.count(old)
     if n != 1:
         print(f"SITE?  {name}: found {n} times"); bad += 1; continue
-    root = tempfile.mkdtemp()
-    d = os.path.join(root, "page"); os.mkdir(d)
-    os.symlink(os.path.join(REPO, "schemas"), os.path.join(root, "schemas"))
-    for t in os.listdir(os.path.join(REPO, "page")):
-        if t.endswith(".test.js"):
-            shutil.copy(os.path.join(REPO, "page", t), d)
-    open(os.path.join(d, "core.js"), "w").write(src.replace(old, new))
-    r = subprocess.run(["node", "--test"], cwd=d, capture_output=True, text=True)
-    fails = [l for l in r.stdout.splitlines() if l.startswith("ℹ fail")]
-    red = r.returncode != 0
-    print(("RED    " if red else "GREEN  ") + name + "  " + (fails[0] if fails else r.stderr[-200:]))
+    red, why = run(src.replace(old, new))
+    print(("RED    " if red else "GREEN  ") + name + "  " + why)
     bad += 0 if red else 1
 sys.exit(1 if bad else 0)

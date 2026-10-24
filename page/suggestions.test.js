@@ -122,4 +122,21 @@ test("Recommend closures covers every closable issue in view, read-only", () => 
   assert.equal(r.fields.recipe, "read-only");
   assert.ok(schema("page-launch").oneOf[0].properties.kind.enum.includes("recommend_closures"));
   assert.match(D.recommendFields([issue(2, { state: "closed" })], repoFor, routing).error, /No open issue/);
+  assert.deepEqual(D.recommendFields([issue(1)], repoFor, routing).fields.routing, routing);
+});
+
+test("Dismiss hides a batch and a left-open entry too, and names the item and alias", () => {
+  const b = sg("batch", 1, { members: ["I_1", "I_2"], member_aliases: [STORE + "#1", STORE + "#2"], surface: "mqtt" });
+  const l = sg("left_out", 3, { why: "keep_open" });
+  const issues = [issue(1), issue(2), issue(3)];
+  const db = D.decisionDoc(D.dismissSuggestionFields(b), who, now, () => 0.5);
+  const dl = D.decisionDoc(D.dismissSuggestionFields(l), who, now, () => 0.6);
+  assert.equal(D.suggestionCards([b, l], issues, [], []).cards.length, 1);
+  assert.deepEqual(D.suggestionCards([b, l], issues, [db], []).cards, []);
+  assert.deepEqual(D.suggestionCards([b, l], issues, [dl], []).leftOut, []);
+  assert.deepEqual(D.dismissSuggestionFields(l).target, { suggestion: "sg-left_out3", item: "I_3", alias: STORE + "#3" });
+});
+
+test("a duplicate with no other issue named closes as not planned, saying so", () => {
+  assert.deepEqual(D.closePrefill(sg("duplicate", 7)), { reason: "not_planned", comment: "Closed from the issue dashboard as a duplicate of another issue." });
 });
