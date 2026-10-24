@@ -210,7 +210,7 @@ footer .wrap { padding-block: 0 32px; font-size: .82rem; color: var(--muted); di
   const S = {
     db: null, comments: null, user: null,
     owner: false, viewer: null,
-    load: null, meta: null, issues: [], acks: [], statuses: [], suggestions: [],
+    load: null, meta: null, heartbeat: null, issues: [], acks: [], statuses: [], suggestions: [],
     decisions: [], launches: [], views: [],
     tab: "inbox", inboxFilter: "all", queueFilter: "all", text: "",
     scope: null, scopeName: null, savedScope: null,
@@ -243,14 +243,16 @@ footer .wrap { padding-block: 0 32px; font-size: .82rem; color: var(--muted); di
     S.viewer = S.user ? await S.user.id().catch(() => null) : null;
     S.comments = await claude.use("comments");
     await reload();
-    // One subscription each: the active generation, and the two page collections whose
-    // state a card shows. Each runs once; a snapshot only re-renders. A generation announced
-    // while one loads is loaded after it (D.follower).
+    // One subscription each: the active generation, the heartbeat a run that changed nothing
+    // writes (D.synced), and the two page collections whose state a card shows. Each runs
+    // once; a snapshot only re-renders. A generation announced while one loads is loaded
+    // after it (D.follower).
     const follow = D.follower(reload);
     S.db.doc("meta/active").onSnapshot((snap) => {
       const g = snap.exists ? (snap.data() || {}).generation : null;
       if (S.load && g && g !== S.load.generation) follow();
     }, () => {});
+    S.db.doc("meta/heartbeat").onSnapshot((snap) => { S.heartbeat = snap.exists ? snap.data() : null; render(); }, () => {});
     S.db.collection("decisions").limit(1000).onSnapshot((q) => { S.decisions = q.docs.map((d) => d.data()); render(); }, () => {});
     S.db.collection("launches").limit(1000).onSnapshot((q) => { S.launches = q.docs.map((d) => d.data()); render(); }, () => {});
     S.db.collection("views").limit(1000).get().then((q) => { S.views = q.docs.map((d) => d.data()); render(); }, () => {});
@@ -440,9 +442,10 @@ footer .wrap { padding-block: 0 32px; font-size: .82rem; color: var(--muted); di
     const fresh = $("fresh");
     $("syncnow").hidden = !S.owner;
     if (S.meta) {
-      const repos = S.meta.repos || [];
+      const sync = D.synced(S.meta, S.heartbeat);
+      const repos = sync.repos;
       const stale = repos.filter((r) => r.stale || r.error).map((r) => shortRepo(r.repo) + (r.error ? " error" : " stale"));
-      fresh.replaceChildren("All repos read " + fmtTime(S.meta.taken_at), stale.length ? h("b", {}, " · " + stale.join(" · ")) : " · none stale", " · " + repos.length + " repos ▾");
+      fresh.replaceChildren("All repos read " + fmtTime(sync.at), stale.length ? h("b", {}, " · " + stale.join(" · ")) : " · none stale", " · " + repos.length + " repos ▾");
       $("repotimes").replaceChildren(...repos.map((r) => h("span", {}, h("span", { class: "mono" }, shortRepo(r.repo)), " ", r.read_at ? fmtTime(r.read_at) : "never", r.stale ? h("span", { class: "tag stale" }, "stale") : "", r.error ? h("span", { class: "tag over" }, String(r.error)) : "", r.read_only && r.read_only.value ? h("span", { class: "muted" }, " read-only") : "")));
     }
 
@@ -500,7 +503,7 @@ footer .wrap { padding-block: 0 32px; font-size: .82rem; color: var(--muted); di
     if (!s || s.doc.action === "close") return null;
     const pendingUndo = Object.values(st.byId).find((x) => x.doc.action === "undo" && x.doc.target.decision === s.doc.id);
     if (s.ack) return h("div", { class: "meta" }, h("span", { class: "tag launch" }, "Recorded: " + describe(s.doc) + " · not written to GitHub yet"));
-    const n = D.nextRunMinutes(S.meta, new Date());
+    const n = D.nextRunMinutes(S.meta, new Date(), S.heartbeat);
     return h("div", { class: "pending", role: "status" },
       h("span", {}, "Decided: " + describe(s.doc) + " · applied on the next run" + (n ? " (in " + n + " min)" : "") + " · not written to GitHub yet"),
       S.owner && !pendingUndo ? h("button", { class: "btn quiet", onclick: () => undo(s) }, "Undo") : null);

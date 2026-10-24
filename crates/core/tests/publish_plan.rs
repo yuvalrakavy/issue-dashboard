@@ -125,7 +125,10 @@ fn a_first_publish_writes_the_marker_first_then_every_document_in_bounded_batche
         (Some("meta"), Some("active"))
     );
     assert_eq!(sw.get("if_version"), None, "nothing to pin on a first publish");
-    assert_eq!(read(sw["file_path"].as_str().unwrap()), outbox["meta"]);
+    // The outbox's meta, plus the fingerprint the next run compares its outbox with.
+    let mut switched = outbox["meta"].clone();
+    switched["fingerprint"] = json!(publish::fingerprint(&outbox));
+    assert_eq!(read(sw["file_path"].as_str().unwrap()), switched);
     assert_eq!(s["clean"], json!([]));
 }
 

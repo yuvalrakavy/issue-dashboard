@@ -24,6 +24,7 @@ pub const SCHEMAS: &[(&str, &str)] = schemas![
     "config-repo-file",
     "doc-acks",
     "doc-fork",
+    "doc-heartbeat",
     "doc-issue",
     "doc-launch-status",
     "doc-meta",

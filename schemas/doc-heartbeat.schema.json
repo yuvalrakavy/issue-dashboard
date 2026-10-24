@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yuvalrakavy/issue-dashboard/schemas/doc-heartbeat.schema.json",
+  "title": "Tracker document: meta/heartbeat",
+  "description": "Written by a sync run whose outbox had the active generation's content (10.6): no generation is published, and this names the generation the run confirmed, when it ran, and what the fingerprint leaves out (each repo's read time and mode). The page shows it only while it names the active generation and is newer than it.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "project",
+    "generation",
+    "sequence",
+    "synced_at",
+    "repos"
+  ],
+  "properties": {
+    "schema": {
+      "const": 1
+    },
+    "project": {
+      "$ref": "common.schema.json#/$defs/projectName"
+    },
+    "generation": {
+      "description": "The active generation the run found unchanged.",
+      "type": "string",
+      "pattern": "^gen-[1-9][0-9]*$"
+    },
+    "sequence": {
+      "description": "The run's own cycle: its outbox's sequence.",
+      "type": "integer",
+      "minimum": 1
+    },
+    "synced_at": {
+      "description": "The run's outbox's taken_at.",
+      "$ref": "common.schema.json#/$defs/timestamp"
+    },
+    "repos": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "repo",
+          "read_at",
+          "read"
+        ],
+        "properties": {
+          "repo": {
+            "$ref": "common.schema.json#/$defs/repoName"
+          },
+          "read_at": {
+            "anyOf": [
+              {
+                "$ref": "common.schema.json#/$defs/timestamp"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "read": {
+            "enum": [
+              "full",
+              "incremental"
+            ]
+          }
+        }
+      }
+    }
+  }
+}

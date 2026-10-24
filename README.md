@@ -24,6 +24,10 @@ next. An issue the project does not track is refused.
 From the page, "Sync now" in the status strip and "Refresh" in an item's `⋯` menu and Details
 ask the same; the page cannot wake the task, so the next scheduled run serves them.
 
+A run that finds nothing changed (no issue moved, no decision or launch arrived) does not
+republish the page's data: `publish-plan` says `unchanged`, and the run writes only a small
+heartbeat, from which the page's "All repos read" time comes. Any real change publishes in full.
+
 ## The dispatcher
 
 Launch…, Launch batch… and Recommend closures… on the page post a launch to whatever Claude

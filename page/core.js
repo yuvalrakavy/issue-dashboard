@@ -180,11 +180,30 @@
     return { byId, latestFor };
   }
 
-  // Minutes until the next sync run applies a decision, from the generation's age and the
-  // configured interval; null when the run is already overdue.
-  function nextRunMinutes(meta, now) {
+  // When the tracker last synced, and each repo's read: a run that found the active
+  // generation's content unchanged writes only `meta/heartbeat` (10.6), so the newer of the
+  // two counts. A heartbeat for another generation (a slow run's, overtaken by a publish) or
+  // older than the generation is ignored. Returns { at, repos }: meta.repos with each repo's
+  // read_at and read from the heartbeat when it counts.
+  function synced(meta, heartbeat) {
+    if (!meta) return { at: null, repos: [] };
+    const repos = meta.repos || [];
+    const at = Date.parse(heartbeat && heartbeat.synced_at);
+    const counts = !!heartbeat && heartbeat.generation === meta.generation && !Number.isNaN(at) &&
+      (Number.isNaN(Date.parse(meta.taken_at)) || at > Date.parse(meta.taken_at));
+    if (!counts) return { at: meta.taken_at, repos };
+    const reads = new Map((heartbeat.repos || []).map((r) => [r.repo, r]));
+    return {
+      at: heartbeat.synced_at,
+      repos: repos.map((r) => (reads.has(r.repo) ? Object.assign({}, r, { read_at: reads.get(r.repo).read_at, read: reads.get(r.repo).read }) : r)),
+    };
+  }
+
+  // Minutes until the next sync run applies a decision, from the last sync's age (the newer
+  // of the generation and `heartbeat`) and the configured interval; null when overdue.
+  function nextRunMinutes(meta, now, heartbeat) {
     const interval = (meta && meta.sync_interval_minutes) || 5;
-    const taken = Date.parse(meta && meta.taken_at);
+    const taken = Date.parse(synced(meta, heartbeat).at);
     if (Number.isNaN(taken)) return null;
     const left = interval - (now.getTime() - taken) / 60000;
     return left <= 0 ? null : Math.max(1, Math.ceil(left));
@@ -631,7 +650,7 @@
 
   const api = {
     PRIORITIES, COLLECTIONS, LIST_LIMIT, CLOSE_REASONS, ACK_DAYS,
-    loadGeneration, follower, ackHorizon, threadDoc, repoOf, inScope, tiles, inbox, queue, decisionStates, nextRunMinutes,
+    loadGeneration, follower, ackHorizon, threadDoc, repoOf, inScope, tiles, inbox, queue, decisionStates, synced, nextRunMinutes,
     trends, launchStates, newId, decisionDoc, launchDoc, notSentDoc, viewDoc, requestDoc, syncFields, syncNote, launch,
     closable, closeComment, closeFields, describeClose, pendingClose, dismissed, recentlyClosed, dismissFields,
     sessionLines, inProgress, ownerNotice,

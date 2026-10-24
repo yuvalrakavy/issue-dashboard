@@ -220,6 +220,11 @@
       "type": "integer",
       "minimum": 1
     },
+    "fingerprint": {
+      "description": "Set by the publish on meta/active: the sha256 of the outbox's content without its per-run fields (10.6). A run whose outbox has the same one writes only meta/heartbeat. Absent on a generation published before fingerprints, which the next run publishes in full.",
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
     "owner_id": {
       "description": "The project's configured owner_id: only that page user's documents are accepted (10.5). Null while none is set, or while it is the placeholder u_pending.",
       "type": [

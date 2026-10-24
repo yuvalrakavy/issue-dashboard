@@ -33,6 +33,10 @@ MUTANTS = [
     ("dismissal names item and alias", "target: { suggestion: s.id, item: s.item, alias: s.alias }", "target: { suggestion: s.id }"),
     ("duplicate with no other says so", '(other || "another issue")', "other"),
     ("recommend carries routing", "recipe: READ_ONLY_RECIPE,\n        routing,", "recipe: READ_ONLY_RECIPE,\n        routing: null,"),
+    ("heartbeat of another generation ignored", "heartbeat.generation === meta.generation && ", ""),
+    ("heartbeat older than the generation ignored", "|| at > Date.parse(meta.taken_at));", "|| true);"),
+    ("heartbeat moves each repo's read", "(reads.has(r.repo) ?", "(false ?"),
+    ("next run counts from the heartbeat", "Date.parse(synced(meta, heartbeat).at)", "Date.parse(meta && meta.taken_at)"),
 ]
 
 src = open(os.path.join(REPO, "page/core.js")).read()

@@ -39,5 +39,6 @@
   ],
   "dispatcher_seen_at": "2026-10-23T07:58:00Z",
   "default_view": null,
-  "owner_id": "user_owner"
+  "owner_id": "user_owner",
+  "fingerprint": "6f16a22a00e5e17ef3c19845078f602352dc9fcca7db5c39a339d692e189112a"
 }
