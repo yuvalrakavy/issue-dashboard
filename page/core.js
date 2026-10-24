@@ -200,7 +200,8 @@
   }
 
   // One repo's entry as an item row shows it: the generation's, with the read time and mode
-  // of a heartbeat that counts (`synced`), so a row never says "stale" from an older read.
+  // of a heartbeat that counts (`synced`), so the row's read time is the latest run's. `stale`
+  // and `error` stay the generation's: they are content, so a quiet run agrees with them.
   function syncedRepo(meta, heartbeat, repo) {
     return synced(meta, heartbeat).repos.find((r) => r.repo === repo);
   }
