@@ -11,6 +11,7 @@ use anyhow::Context;
 use chrono::{DateTime, Utc};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use issue_dashboard_core::backup::Failpoint;
+use issue_dashboard_core::brief;
 use issue_dashboard_core::config::ConfigSet;
 use issue_dashboard_core::cycle;
 use issue_dashboard_core::docs::LaunchRequest;
@@ -22,9 +23,10 @@ use issue_dashboard_core::publish::{self, Active};
 use issue_dashboard_core::read;
 use issue_dashboard_core::root::{Options, parse_time};
 use issue_dashboard_core::sessions::SessionList;
+use issue_dashboard_core::suggest;
 use issue_dashboard_core::sync;
 use issue_dashboard_core::write::{GhIssues, IssueWriter};
-use issue_dashboard_core::{Error, Root};
+use issue_dashboard_core::{Error, Kind, Root, ledger};
 use serde_json::{Value, json};
 
 /// Test seams, read from the environment and not shown in --help: a fixed clock, a simulated
@@ -99,6 +101,25 @@ enum Command {
     },
     /// Record a launched session's outcome (7.7).
     RecordOutcome(OutcomeArgs),
+    /// The brief of a launch (7.5): its session title (with the token once reserved), its
+    /// text, and every piece of the text with its source.
+    Brief {
+        #[arg(long)]
+        launch: String,
+    },
+    /// Record a recommender's suggestions (5.8) from a JSON file; the whole file is refused
+    /// if any entry is.
+    RecordSuggestions {
+        #[arg(long)]
+        launch: String,
+        file: PathBuf,
+    },
+    /// The launches the ledger knows, for the dispatcher to settle against its session list.
+    Launches {
+        /// Only those holding a slot (reserved, unconfirmed or started) or queued.
+        #[arg(long)]
+        live: bool,
+    },
     /// One cycle of a project (10.4): ingest the page documents, read GitHub, and write the
     /// project's outbox.
     Cycle {
@@ -315,6 +336,16 @@ fn outcome_of(a: &OutcomeArgs) -> Result<Outcome, Error> {
     })
 }
 
+/// A path as one shell word, for the commands a brief hands a session.
+fn shell_word(p: &std::path::Path) -> String {
+    let s = p.display().to_string();
+    if s.bytes().all(|b| b.is_ascii_alphanumeric() || b"/._-~".contains(&b)) {
+        s
+    } else {
+        format!("'{}'", s.replace('\'', r"'\''"))
+    }
+}
+
 /// The sync helpers: files in, files out, no tracker root.
 fn run_sync(command: &Command, now: DateTime<Utc>) -> anyhow::Result<Option<Value>> {
     let read_json = |path: &PathBuf| -> anyhow::Result<Value> {
@@ -385,6 +416,9 @@ fn run(cli: Cli) -> anyhow::Result<Value> {
         Command::Release { .. } => "release",
         Command::Unconfirm { .. } => "unconfirm",
         Command::RecordOutcome(_) => "record-outcome",
+        Command::Brief { .. } => "brief",
+        Command::RecordSuggestions { .. } => "record-suggestions",
+        Command::Launches { .. } => "launches",
         Command::Cycle { .. } => "cycle",
         Command::Snapshot { .. } => "snapshot",
         Command::SyncNow { .. } => "sync-now",
@@ -426,7 +460,7 @@ fn run(cli: Cli) -> anyhow::Result<Value> {
                 // Read under the lock (local files only), so a config recorded here is never
                 // older than one another command recorded while this one waited.
                 let config = ConfigSet::load(&dir)?;
-                let capacity = |recipe: &str| config.recipe(recipe).map(|r| r.capacity);
+                let capacity = |recipe: &str| config.capacity(recipe);
                 config.record(tx)?;
                 if a.next {
                     return Ok(serde_json::to_value(launch::reserve_next(
@@ -437,6 +471,14 @@ fn run(cli: Cli) -> anyhow::Result<Value> {
                 }
                 let id = match &request {
                     Some(doc) => {
+                        // 7.3 step 1: only the owner's launch documents are acted on.
+                        let owner = &config.project(&doc.project)?.owner_id;
+                        if &doc.author != owner {
+                            return Err(Error::refused(format!(
+                                "launch {}: author {} is not project {}'s owner_id",
+                                doc.id, doc.author, doc.project
+                            )));
+                        }
                         launch::request(tx, doc, Via::Reserve)?;
                         // A cancel ingested before this launch was requested takes effect now,
                         // or did on an earlier try of this command: either way it is withdrawn.
@@ -491,6 +533,47 @@ fn run(cli: Cli) -> anyhow::Result<Value> {
             let o = outcome_of(&a)?;
             let r = root.mutate_with_clock(now, |tx| outcome::record(tx, &o))?;
             json!({"launch": o.launch, "seq": r.event().seq, "repeat": !r.is_new(), "missing": o.missing})
+        }
+        Command::Brief { launch } => {
+            let config = ConfigSet::load(&dir)?;
+            let cli = format!("{} --root {}", shell_word(&std::env::current_exe()?), shell_word(&dir));
+            serde_json::to_value(root.read(|l| brief::brief_with(l.conn(), &config, &launch, &cli))?)?
+        }
+        Command::RecordSuggestions { launch, file } => {
+            let text = std::fs::read_to_string(&file).with_context(|| file.display().to_string())?;
+            let input: suggest::Input = serde_json::from_str(&text)
+                .map_err(|e| Error::refused(format!("{}: not a suggestions file: {e}", file.display())))?;
+            serde_json::to_value(root.mutate_with_clock(now, |tx| {
+                let config = ConfigSet::load(&dir)?;
+                suggest::record(tx, &config, &launch, &input)
+            })?)?
+        }
+        Command::Launches { live } => {
+            let rows = root.read(|l| {
+                let mut out = Vec::new();
+                for x in launch::all(l.conn())? {
+                    if live && !(x.state.holds() || x.state == launch::State::Queued) {
+                        continue;
+                    }
+                    let outcome = ledger::latest(l.conn(), &x.id, Kind::Outcome)?.is_some();
+                    out.push(json!({
+                        "id": x.id,
+                        "project": x.request.project,
+                        "kind": x.request.kind,
+                        "aliases": x.request.aliases,
+                        "recipe": x.request.recipe,
+                        "routing": x.request.routing,
+                        "state": x.state,
+                        "token": x.token,
+                        "dispatcher": x.dispatcher,
+                        "session": x.session,
+                        "reserved_at": x.reserved_at,
+                        "outcome": outcome,
+                    }));
+                }
+                Ok(out)
+            })?;
+            json!({"launches": rows})
         }
         Command::Cycle {
             project,

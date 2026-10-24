@@ -862,6 +862,19 @@ the kind:
 | likely fixed | "Check and close…" | starts a short check that the fix is present on the default branch; if it holds, a plan to close the issue with a comment naming the commit goes to the Inbox for approval |
 | duplicate | "Close as duplicate…" | a plan to close the issue as a duplicate, linking the other, goes to the Inbox for approval |
 | combined (type and priority together) | "Set bug · p1" | both, as the rows above |
+| obsolete | "Close as not planned…" | the close sheet, prefilled with reason not planned |
+| batch (≥2 issues of one repo sharing a surface) | "Launch batch…" | the launch sheet for one session that closes them together, with one gate (7.6) |
+| left out (needs design, blocked, keep open) | none | listed under the run's cards with its reason; Dismiss only |
+
+**Closing recommendations** (phase 1). "Recommend closures…" on the Queue launches a
+read-only session (`recommend_closures`, 7.5) over every open issue in view that the page can
+close. It records likely fixed, duplicate, obsolete, batch and left-out suggestions with
+`record-suggestions`, and nothing else. Until phase 2's plans exist, a close the tracker
+proposes opens the owner's own close sheet, prefilled (the commit for likely fixed, the other
+issue for a duplicate; a duplicate in another repo closes as not planned, naming it in the
+comment): the owner's Close on that sheet is the approval, as for a hand close. A dismissal
+hides that issue's suggestion of that kind, from every later run, until a newer observation
+of the issue.
 
 **The rule behind the table:** accepting a label change is approval enough to write it;
 anything that closes an issue or posts a comment is visible to others and harder to undo, so
@@ -1104,6 +1117,13 @@ event; chapter 10):
    `issue-dashboard launch-ended --token … --state landed|stopped|failed` (which also
    releases the slot), then `reserve` for the next queued launch.
 
+**When the app refuses the start.** A launch comment is not the owner's own words, so the app
+may refuse `start_session` with `user_asked`. The dispatcher then proposes the same session as
+a card in its own transcript (`own_initiative`, same title with the token, same model and
+effort) and replies "Ready: start it in the dispatcher session". It records nothing more: the
+next settle finds the started session by the token in its title and records `launch-started`.
+The procedure is the `issue-dashboard-dispatcher` skill.
+
 ### 7.4 Routing
 
 The project config holds a routing table; the defaults follow the `ways-of-working` model
@@ -1150,6 +1170,15 @@ material like any other outside text. Its sections:
    repo's own process rules if it has them (Store's `ways-of-working`).
 6. **Out of scope**: side problems get filed, not fixed.
 7. **Reporting back**: the outcome record to write when it lands (7.7).
+
+**The recommend brief** (`recommend_closures`, 5.8) has its own template: the read-only rules
+(never close, label, comment or push; record only with `record-suggestions`); the generic
+closing procedure (`docs/closing-recommendations.md`) when some repo has no campaign skill;
+per repo, its campaign skill's path (the registry's `campaign_skill`, a path in the repo's
+`local_path` checkout), or a note that the file is missing and the generic procedure applies;
+then each issue's alias and title, fenced under its author, inside or outside; and the JSON
+the session writes. The skill named is the repo's own way of deciding what can close and what
+closes together; the tracker names it in config and never in code.
 
 ### 7.6 Launch recipes
 
@@ -1886,6 +1915,23 @@ them rather than refusing.
   dashboard close past its Undo window offers Dismiss too, so every closed item can leave the
   list. Left for a follow-up: the closing commit and who closed it, which need a further GitHub
   read and re-recorded fixtures; Recently closed lists issues only, not merged pull requests.
+- *The dispatcher and closing recommendations (after slice 3).* `brief`, `record-suggestions`
+  and `launches [--live]` join the CLI; `reserve --request` refuses a document not written by
+  the project's `owner_id`. A `recommend_closures` launch holds no item, so a fix of the same
+  issue is never blocked by it, and takes a slot of the `read-only` recipe, whose capacity is 1
+  unless the registry defines it. The registry gains `defaults.launch` (the recipe Launch…
+  uses) and per repo `campaign_skill`, refused without `local_path`; `meta.repos[]` carries
+  each repo's `recipe` (null when none: Launch… is then off with that reason) and whether it
+  has a campaign skill. `record-suggestions` checks the whole file and records nothing if any
+  entry is wrong (not in the launch, closed, a likely fixed without its commit, a duplicate
+  without the other issue or of itself, a batch of fewer than two or across repos or without a
+  surface, an issue in two batches, a confidence outside 0-1, no reason); recording the same
+  file again is a repeat. Suggestions are `suggested` events keyed by run, kind and subject;
+  the outbox keeps the latest per issue and kind, drops closed issues (and a batch's closed
+  members, and a batch left with one), and hides one dismissed until a newer observation.
+  Model routing (owner, 2026-10-24): the recommender on Opus 5.5 at medium, editable on the
+  sheet; the dispatcher on the strongest model at high effort, in auto mode. **Residual:** the
+  recommender runs as the owner, whose `gh` login can close an issue; only its brief forbids it.
 - **Open (for the owner):** found by the gate and left for after landing: an upload abandoned
   for over an hour and resumed after a cleanup leaves documents no marker names, which no later
   cleanup finds; the page's own collections (`decisions`, `launches`, `views`) are read to

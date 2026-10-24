@@ -226,7 +226,10 @@
             "duplicate",
             "support_question",
             "instructs_agent",
-            "routing"
+            "routing",
+            "obsolete",
+            "batch",
+            "left_out"
           ]
         },
         "answer": {
@@ -267,6 +270,39 @@
         "commit": {
           "description": "The fixing commit, for likely_fixed.",
           "$ref": "#/$defs/commit"
+        },
+        "related_alias": {
+          "description": "The other item's alias, for duplicate.",
+          "$ref": "#/$defs/alias"
+        },
+        "members": {
+          "description": "A batch's members (5.8): issues of one repo closed together, with one gate.",
+          "type": "array",
+          "minItems": 2,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/nodeId"
+          }
+        },
+        "member_aliases": {
+          "type": "array",
+          "minItems": 2,
+          "items": {
+            "$ref": "#/$defs/alias"
+          }
+        },
+        "surface": {
+          "description": "What a batch's members share: the code they touch.",
+          "type": "string",
+          "minLength": 1
+        },
+        "why": {
+          "description": "Why a recommender left an issue out of every close and batch.",
+          "enum": [
+            "needs_design",
+            "blocked",
+            "keep_open"
+          ]
         }
       }
     },

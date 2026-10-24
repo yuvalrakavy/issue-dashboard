@@ -384,6 +384,18 @@ pub fn request(tx: &mut Tx<'_>, doc: &LaunchRequest, via: Via) -> Result<Moved> 
     if doc.items.is_empty() {
         return Err(Error::refused(format!("launch {} names no items", doc.id)));
     }
+    if doc.items.len() != doc.aliases.len() {
+        return Err(Error::refused(format!(
+            "launch {} names {} items and {} aliases; each item has its alias",
+            doc.id,
+            doc.items.len(),
+            doc.aliases.len()
+        )));
+    }
+    let mut seen = std::collections::HashSet::new();
+    if let Some(dup) = doc.items.iter().find(|i| !seen.insert(*i)) {
+        return Err(Error::refused(format!("launch {} names {dup} twice", doc.id)));
+    }
     let mut data = LaunchData::new(Transition::Requested);
     data.request = Some(doc.clone());
     data.project = Some(doc.project.clone());
@@ -396,9 +408,16 @@ pub fn request(tx: &mut Tx<'_>, doc: &LaunchRequest, via: Via) -> Result<Moved> 
     })
 }
 
-/// An item of `l` held by another launch, with that launch.
+/// An item of `l` held by another launch, with that launch. A launch whose kind holds no
+/// items (a read-only recommender) neither blocks nor is blocked.
 fn held_item<'a>(l: &'a Launch, all: &'a [Launch]) -> Option<(&'a str, &'a Launch)> {
-    all.iter().filter(|o| o.id != l.id && o.state.holds()).find_map(|o| {
+    if !l.request.kind.holds_items() {
+        return None;
+    }
+    let mut holders = all
+        .iter()
+        .filter(|o| o.id != l.id && o.state.holds() && o.request.kind.holds_items());
+    holders.find_map(|o| {
         l.request
             .items
             .iter()

@@ -533,12 +533,109 @@
     return Object.assign({ kind: "mismatch", configured: meta.owner_id }, out);
   }
 
+  // --- closing recommendations (5.8) ----------------------------------------------------
+
+  // The page's dismissals still in force: not refused, not cancelled, and not undone.
+  // The suggestions the page hides before a cycle has seen their dismissal. Once a cycle has
+  // consumed it (any ack), the tracker's documents are the word: it leaves an applied one out
+  // until the issue changes, then shows it again under the same id.
+  function dismissedSuggestions(decisions, acks, horizon) {
+    const st = decisionStates(decisions, acks, horizon);
+    const out = new Set();
+    for (const s of Object.values(st.byId)) {
+      const d = s.doc;
+      if (d.action !== "dismiss_suggestion" || !d.target || !d.target.suggestion) continue;
+      if (s.ack || s.undoneBy || s.settled) continue;
+      out.add(d.target.suggestion);
+    }
+    return out;
+  }
+
+  // The recommendations the Inbox shows for `issues` (the list in view): each card's issue (a
+  // batch's first member), its open members, and the issues a run left open with why. A
+  // suggestion the page has dismissed leaves at once; one about an issue not in view, or
+  // closed since, is not shown; a batch with fewer than two members still open is not either.
+  function suggestionCards(suggestions, issues, decisions, acks, horizon) {
+    const byId = new Map(issues.filter(isOpen).map((i) => [i.id, i]));
+    const gone = dismissedSuggestions(decisions, acks, horizon);
+    const cards = [];
+    const leftOut = [];
+    for (const s of suggestions || []) {
+      if (gone.has(s.id)) continue;
+      if (s.kind === "batch") {
+        const members = (s.members || []).map((m) => byId.get(m)).filter(Boolean);
+        if (members.length < 2) continue;
+        cards.push({ s, issue: members[0], members });
+        continue;
+      }
+      const issue = byId.get(s.item);
+      if (!issue) continue;
+      if (s.kind === "left_out") leftOut.push({ s, issue });
+      else if (["likely_fixed", "duplicate", "obsolete"].includes(s.kind)) cards.push({ s, issue, members: [issue] });
+    }
+    const order = (a, b) => cmp(a.s.made_at, b.s.made_at) || cmp(a.issue.alias, b.issue.alias);
+    return { cards: cards.sort(order), leftOut: leftOut.sort(order) };
+  }
+
+  function dismissSuggestionFields(s) {
+    return { action: "dismiss_suggestion", target: { suggestion: s.id, item: s.item, alias: s.alias } };
+  }
+
+  // What the close sheet opens with for a suggestion: the owner's Close is the approval.
+  // A duplicate in another repo cannot be closed as one by number, so it closes as not planned
+  // with the other issue named in the comment.
+  function closePrefill(s) {
+    if (s.kind === "likely_fixed") return { reason: "completed", comment: "Closed from the issue dashboard: fixed by " + s.commit + "." };
+    if (s.kind === "obsolete") return { reason: "not_planned" };
+    if (s.kind === "duplicate") {
+      const other = String(s.related_alias || "");
+      if (other && repoOf(other) === repoOf(s.alias)) return { reason: "duplicate", duplicateOf: other.split("#")[1] };
+      return { reason: "not_planned", comment: "Closed from the issue dashboard as a duplicate of " + (other || "another issue") + "." };
+    }
+    return null;
+  }
+
+  // A launch of a fix (one issue) or a batch (several of one repo) through its repo's recipe
+  // (7.6), or { error } when the repo has none or the issues span repos.
+  function fixLaunchFields(issues, repo, routing) {
+    if (!issues.length) return { error: "Nothing to launch." };
+    if (new Set(issues.map((i) => repoOf(i.alias))).size !== 1) return { error: "A batch is one repo's issues." };
+    if (!repo || !repo.recipe) return { error: repoOf(issues[0].alias) + " has no launch recipe in the tracker's config." };
+    return {
+      fields: {
+        kind: issues.length > 1 ? "batch" : "fix",
+        items: issues.map((i) => i.id),
+        aliases: issues.map((i) => i.alias),
+        recipe: repo.recipe,
+        routing,
+      },
+    };
+  }
+
+  const READ_ONLY_RECIPE = "read-only";
+
+  // Recommend closures (5.8) over the issues in view: every open issue of a writable repo.
+  function recommendFields(issues, repoFor, routing) {
+    const items = issues.filter((i) => closable(i, repoFor(repoOf(i.alias))));
+    if (!items.length) return { error: "No open issue in view can be closed from here." };
+    return {
+      fields: {
+        kind: "recommend_closures",
+        items: items.map((i) => i.id),
+        aliases: items.map((i) => i.alias),
+        recipe: READ_ONLY_RECIPE,
+        routing,
+      },
+    };
+  }
+
   const api = {
     PRIORITIES, COLLECTIONS, LIST_LIMIT, CLOSE_REASONS, ACK_DAYS,
     loadGeneration, follower, ackHorizon, threadDoc, repoOf, inScope, tiles, inbox, queue, decisionStates, nextRunMinutes,
     trends, launchStates, newId, decisionDoc, launchDoc, notSentDoc, viewDoc, requestDoc, syncFields, syncNote, launch,
     closable, closeComment, closeFields, describeClose, pendingClose, dismissed, recentlyClosed, dismissFields,
     sessionLines, inProgress, ownerNotice,
+    dismissedSuggestions, suggestionCards, dismissSuggestionFields, closePrefill, fixLaunchFields, recommendFields, READ_ONLY_RECIPE,
   };
   root.IssueDashboard = api;
   if (typeof module === "object" && module.exports) module.exports = api;

@@ -1,8 +1,9 @@
 //! Derive (10.4 step 3, 10.6): the tracker documents of one project, built from one read
 //! transaction of the ledger, and written as `<root>/outbox/<project>/<seq>.json`.
 //!
-//! Phase 1 derives `meta`, `issues`, `acks` and `launch_status`; `suggestions`, `plans`,
-//! `forks` and `metrics` are written empty until the steps that produce them exist. Every
+//! Phase 1 derives `meta`, `issues`, `acks`, `launch_status` and `suggestions` (a
+//! recommender's, [`suggest`]); `plans`, `forks` and `metrics` are written empty until the
+//! steps that produce them exist. Every
 //! document is checked against its schema before the file is written.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -26,6 +27,7 @@ use crate::root::{format_time, parse_time};
 use crate::schema;
 use crate::sessions;
 use crate::snapshot::{self, DEFAULT_HISTORY_DAYS};
+use crate::suggest;
 use crate::translate::Translation;
 use crate::write;
 use crate::{Error, Result};
@@ -43,7 +45,7 @@ pub const ACK_DAYS: i64 = 30;
 pub const PENDING_OWNER: &str = "u_pending";
 
 /// Inside authors by association (4.1).
-const INSIDE: [&str; 3] = ["OWNER", "MEMBER", "COLLABORATOR"];
+pub(crate) const INSIDE: [&str; 3] = ["OWNER", "MEMBER", "COLLABORATOR"];
 
 /// One cycle's tracker documents, by collection.
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -579,7 +581,10 @@ pub fn derive(
     let mut issues = Vec::new();
     let mut seen = BTreeSet::new();
     for view in config.views(project)?.into_values() {
-        let (meta, node, stale) = repo_meta(conn, project, &view, sync_minutes, taken_at)?;
+        let (mut meta, node, stale) = repo_meta(conn, project, &view, sync_minutes, taken_at)?;
+        // What the page's Launch and Recommend closures need to know about the repo.
+        meta["recipe"] = json!(config.recipe_name_for(&view.repo));
+        meta["campaign_skill"] = json!(config.campaign_skill(&view.repo).is_some());
         repos.push(meta);
         let Some(node) = node else { continue };
         let Some((_, members)) = snapshot::membership(conn, project, &node)? else {
@@ -650,7 +655,7 @@ pub fn derive(
         issues,
         acks: acks(conn, project, taken_at)?,
         launch_status: launch_status(conn, project)?,
-        suggestions: Vec::new(),
+        suggestions: suggest::documents(conn, project)?,
         plans: Vec::new(),
         forks: Vec::new(),
         metrics: Vec::new(),
@@ -666,6 +671,7 @@ pub fn validate(out: &Outbox) -> Result<()> {
         ("doc-issue", &out.issues),
         ("doc-acks", &out.acks),
         ("doc-launch-status", &out.launch_status),
+        ("doc-suggestion", &out.suggestions),
     ] {
         for d in docs {
             schema::validate(stem, &format!("{stem} {}", d["id"]), d)?;

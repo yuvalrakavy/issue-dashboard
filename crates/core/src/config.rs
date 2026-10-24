@@ -102,6 +102,9 @@ pub struct Recipe {
 pub struct Defaults {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub translate: Option<Translate>,
+    /// The recipe a repo's launches use when its entry names none (7.6).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub launch: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -116,6 +119,10 @@ pub struct RepoEntry {
     pub translate: Option<Translate>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub docs: Option<Vec<String>>,
+    /// The repo's own way to triage and batch closures, relative to `local_path`; a
+    /// recommender applies it (5.8). Without one it follows the generic procedure.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub campaign_skill: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -307,6 +314,16 @@ impl ConfigSet {
             });
         }
         let registry: Registry = parse_layer(&registry_path, "config-registry")?;
+        if let Some((repo, _)) = registry
+            .repo
+            .iter()
+            .find(|(_, e)| e.campaign_skill.is_some() && e.local_path.is_none())
+        {
+            return Err(Error::Config {
+                file: registry_path,
+                reason: format!("{repo}: campaign_skill is a path in the repo's checkout, so it needs local_path"),
+            });
+        }
 
         let mut projects = BTreeMap::new();
         let dir = root.join("projects");
@@ -353,6 +370,53 @@ impl ConfigSet {
             json!({"content_hash": hash, "content": content}),
             Dedupe::Latest,
         )
+    }
+
+    /// The size of the pool of the recipe named `name`. The built-in read-only pool
+    /// ([`READ_ONLY_RECIPE`]) has one slot unless a recipe of that name says otherwise.
+    pub fn capacity(&self, name: &str) -> Result<u32> {
+        match self.recipe(name) {
+            Ok(r) => Ok(r.capacity),
+            Err(Error::Refused(_)) if name == READ_ONLY_RECIPE && !self.defines_recipe(name) => Ok(1),
+            Err(e) => Err(e),
+        }
+    }
+
+    fn defines_recipe(&self, name: &str) -> bool {
+        self.registry.launch.contains_key(name) || self.repo_files.values().any(|f| f.launch.contains_key(name))
+    }
+
+    /// The recipe a repo's launches use: its entry's, else the registry default.
+    pub fn recipe_name_for(&self, repo: &str) -> Option<&str> {
+        self.registry
+            .repo
+            .get(repo)
+            .and_then(|e| e.launch.as_deref())
+            .or_else(|| self.registry.defaults.as_ref().and_then(|d| d.launch.as_deref()))
+    }
+
+    /// The docs to name in a brief for `repo` (7.5): its repo file's, else its entry's.
+    pub fn docs_for(&self, repo: &str) -> Vec<String> {
+        self.repo_files
+            .get(repo)
+            .and_then(|f| f.docs.clone())
+            .or_else(|| self.registry.repo.get(repo).and_then(|e| e.docs.clone()))
+            .unwrap_or_default()
+    }
+
+    /// The repo's local checkout, if the registry names one.
+    pub fn local_path(&self, repo: &str) -> Option<PathBuf> {
+        self.registry
+            .repo
+            .get(repo)
+            .and_then(|e| e.local_path.as_deref())
+            .map(expand_home)
+    }
+
+    /// The repo's campaign skill as a full path in its checkout, if one is configured.
+    pub fn campaign_skill(&self, repo: &str) -> Option<PathBuf> {
+        let skill = self.registry.repo.get(repo)?.campaign_skill.as_deref()?;
+        Some(self.local_path(repo)?.join(skill))
     }
 
     /// The recipe named `name`: from the registry or a repo file. Two different definitions
@@ -462,6 +526,9 @@ impl ConfigSet {
         Ok(out)
     }
 }
+
+/// The pool a read-only launch (a recommender) takes its slot from (10.7).
+pub const READ_ONLY_RECIPE: &str = "read-only";
 
 /// Expands a leading `~/` to the home directory.
 pub fn expand_home(path: &str) -> PathBuf {
