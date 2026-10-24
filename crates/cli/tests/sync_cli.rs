@@ -24,7 +24,7 @@ fn outbox(dir: &Path, seq: i64) -> String {
         "project": "home",
         "sequence": seq,
         "taken_at": "2026-10-23T08:00:00Z",
-        "meta": {"generation": format!("gen-{seq}"), "sequence": seq},
+        "meta": {"generation": format!("gen-{seq}"), "sequence": seq, "taken_at": "2026-10-23T08:00:00Z", "repos": []},
         "issues": [{"id": "I_1", "title": "one"}],
         "acks": [], "launch_status": [], "suggestions": [], "plans": [], "forks": [], "metrics": [],
     });
@@ -127,4 +127,56 @@ fn pages_writes_the_file_cycle_reads() {
         p,
         json!({"decisions": [{"id": "D_1"}], "launches": [], "views": [], "requests": []})
     );
+}
+
+#[test]
+fn publish_plan_says_unchanged_and_pins_the_heartbeat_to_its_version() {
+    let d = tempfile::tempdir().unwrap();
+    let first = stdout(&run(&[
+        "publish-plan",
+        "--outbox",
+        &outbox(d.path(), 7),
+        "--out",
+        d.path().join("p7").to_str().unwrap(),
+    ]));
+    assert_eq!(first["decision"], "publish");
+    // The page now holds the switch's meta/active, fingerprint and all.
+    let active = d.path().join("p7/docs/meta/active.json");
+    // `meta/heartbeat` as read: the quiet run of `sequence`, at `version`.
+    let plan = |heartbeat: Option<(i64, &str)>, out: &str| {
+        let mut args = vec![
+            "publish-plan".to_string(),
+            "--outbox".into(),
+            outbox(d.path(), 8),
+            "--active".into(),
+            active.display().to_string(),
+            "--active-version".into(),
+            "4".into(),
+            "--out".into(),
+            d.path().join(out).display().to_string(),
+        ];
+        if let Some((sequence, v)) = heartbeat {
+            let file = d.path().join(format!("{out}-heartbeat.json"));
+            let doc = json!({"schema": 1, "project": "home", "generation": "gen-7", "sequence": sequence,
+                "synced_at": "2026-10-23T08:00:00Z", "repos": []});
+            std::fs::write(&file, doc.to_string()).unwrap();
+            args.extend([
+                "--heartbeat".to_string(),
+                file.display().to_string(),
+                "--heartbeat-version".into(),
+                v.to_string(),
+            ]);
+        }
+        stdout(&run(&args.iter().map(String::as_str).collect::<Vec<_>>()))
+    };
+    // A quiet run newer than this outbox already confirmed the page: a stop.
+    let s = plan(Some((9, "12")), "p8c");
+    assert_eq!(s["decision"], "stop", "{s}");
+    let s = plan(Some((7, "12")), "p8");
+    assert_eq!(s["decision"], "unchanged", "{s}");
+    assert_eq!(s["generation"], "gen-7");
+    assert_eq!(s["heartbeat"][0]["doc_id"], "heartbeat");
+    assert_eq!(s["heartbeat"][0]["if_version"], json!(12));
+    let s = plan(None, "p8b");
+    assert_eq!(s["heartbeat"][0].get("if_version"), None);
 }

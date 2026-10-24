@@ -158,11 +158,12 @@ enum Command {
     },
     /// The sync job (7.2): plan the publish of an outbox as a generation of page documents:
     /// batch files of `ArtifactData` writes, a switch of `meta/active` pinned to the version
-    /// read, and the generations to clean afterwards. Needs no root.
+    /// read, and the generations to clean afterwards; or, when the outbox has the active
+    /// generation's fingerprint, `unchanged` and one `meta/heartbeat` write. Needs no root.
     PublishPlan {
         #[arg(long)]
         outbox: PathBuf,
-        /// `meta/active` as read (`get` with `out_dir`); absent before the first publish.
+        /// `meta/active` as read (`list` or `get` with `out_dir`); absent before the first publish.
         #[arg(long, requires = "active_version")]
         active: Option<PathBuf>,
         /// The version that read returned.
@@ -171,6 +172,12 @@ enum Command {
         /// The `out_dir` of a listing of the `gens` collection.
         #[arg(long)]
         markers: Option<PathBuf>,
+        /// `meta/heartbeat` as read (the same listing as `--active`); absent when there is none yet.
+        #[arg(long, requires = "heartbeat_version")]
+        heartbeat: Option<PathBuf>,
+        /// The version that read returned.
+        #[arg(long, requires = "heartbeat")]
+        heartbeat_version: Option<u64>,
         #[arg(long)]
         out: PathBuf,
     },
@@ -369,9 +376,18 @@ fn run_sync(command: &Command, now: DateTime<Utc>) -> anyhow::Result<Option<Valu
             active,
             active_version,
             markers,
+            heartbeat,
+            heartbeat_version,
             out,
         } => {
             let outbox = read_json(outbox)?;
+            let heartbeat = match (heartbeat, heartbeat_version) {
+                (Some(path), Some(version)) => Some(publish::Heartbeat {
+                    doc: read_json(path)?,
+                    version: *version,
+                }),
+                _ => None,
+            };
             let active = match (active, active_version) {
                 (Some(path), Some(version)) => Some(Active {
                     meta: read_json(path)?,
@@ -393,7 +409,7 @@ fn run_sync(command: &Command, now: DateTime<Utc>) -> anyhow::Result<Option<Valu
                     }
                 }
             }
-            publish::plan(&outbox, active.as_ref(), &found, now, out)?
+            publish::plan_with_heartbeat(&outbox, active.as_ref(), heartbeat.as_ref(), &found, now, out)?
         }
         Command::CleanupPlan { plan, listing, out } => publish::cleanup(plan, listing, out)?,
         _ => return Ok(None),

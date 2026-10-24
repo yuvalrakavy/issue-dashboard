@@ -1,12 +1,14 @@
 ---
 name: issue-dashboard-sync
-description: Use when running the issue-dashboard sync job (spec 7.2) by hand or from a scheduled task — carries the dashboard page's documents into one tracker cycle and publishes the cycle's outbox back to the page's database as a new generation. Needs the ArtifactData tool; it never edits a page document or writes to GitHub.
+description: Use when running the issue-dashboard sync job (spec 7.2) by hand or from a scheduled task — carries the dashboard page's documents into one tracker cycle and publishes the cycle's outbox back to the page's database as a new generation, or only a heartbeat when nothing changed. Needs the ArtifactData tool; it never edits a page document or writes to GitHub.
 ---
 
 # issue-dashboard sync
 
 One run of the sync job: read the page's documents, run one cycle, publish the outbox as a
-new generation, switch the page to it, clean up. The CLI plans every write; this skill only
+new generation, switch the page to it, clean up. Most runs change nothing the page shows:
+then the plan says `unchanged`, and the run writes one heartbeat document and ends. The CLI
+plans every write; this skill only
 carries files between the CLI and the page's database with `ArtifactData`, so document
 content never passes through the conversation.
 
@@ -20,8 +22,9 @@ content never passes through the conversation.
 | `BIN` | the `issue-dashboard` binary |
 | `WORK` | a fresh, empty scratch directory for this run (never reuse one). Keep its path short: every batch entry repeats it, and a 150-character path costs about 10k output tokens per 50-entry batch. **It must not be under `~/.claude`**: `ArtifactData` refuses to save documents (`out_dir`) anywhere in that tree, so step 1 fails there. A short path such as `mktemp -d /tmp/idsync.XXXX` works |
 
-Every step below is one tool call or one command. A step that fails **stops the run**: report
-what failed and the step, and do not retry with different flags or write anything by hand.
+Every call or command a step names must succeed before the next. One that fails **stops the
+run** (except where a step says a refusal is a success): report what failed and the step, and
+do not retry with different flags or write anything by hand.
 The next scheduled run starts fresh, and every step is safe to repeat.
 
 ## Steps
@@ -31,11 +34,14 @@ The next scheduled run starts fresh, and every step is safe to repeat.
    `out_dir: WORK/pages`. Follow `next_cursor` until there is none. An empty collection is
    fine.
 2. **Assemble them:** `BIN pages --dir WORK/pages --out WORK/pages.json`.
-2a. **List the app's sessions** (spec 10.10). Note the time first (`date -u +%Y-%m-%dT%H:%M:%SZ`),
-   then call `mcp__ccd_session_mgmt__list_sessions` with `include_archived: true` and
-   `limit: 200`. Write `WORK/sessions.json` with the Write tool as
-   `{"listed_at": "<that time>", "limit": 200, "sessions": <the reply's array, verbatim>}`.
-   The list leaves out the session that runs the job, so a run started by hand from a session
+2a. **List the app's sessions** (spec 10.10). Note the time first (`date -u +%Y-%m-%dT%H:%M:%SZ`;
+   the command that makes `WORK` can print it too), then call
+   `mcp__ccd_session_mgmt__list_sessions` with `include_archived: true` and `limit: 200`. The
+   reply is too long for the conversation, so the app saves its array to a file and names the
+   file. Wrap that file with one command; never retype the rows:
+   `jq -n --arg t "<that time>" --slurpfile s "<the saved file>" '{listed_at: $t, limit: 200, sessions: $s[0]}' > WORK/sessions.json`.
+   If the reply comes back inline instead, Write its array verbatim to `WORK/list.json` and
+   run the same command on that file. The list leaves out the session that runs the job, so a run started by hand from a session
    working on an issue shows that session as gone until a later run lists it again.
    The rows carry only titles, ids, paths, branches, PR numbers, times and links: never fetch
    a transcript or call any other session tool. If the tool is not available (the job runs
@@ -45,14 +51,24 @@ The next scheduled run starts fresh, and every step is safe to repeat.
    It prints JSON; its `outbox` field is the outbox file. Exit 1 is a refusal (stop and
    report it); exit 2 is an environment error.
 4. **Read the page's state:**
-   - `ArtifactData` `get` with `collection: meta`, `doc_id: active` and `out_dir: WORK/active`.
-     Note the `version` the reply gives. "Not found" means a first publish.
+   - `ArtifactData` `list` with `collection: meta`, `query: {limit: 1000}` and
+     `out_dir: WORK/active`. The reply gives each document's `version`: note `active`'s and
+     `heartbeat`'s. No `active` means a first publish; no `heartbeat` means none was written yet.
+     The documents themselves are saved as `WORK/active/meta/active.json` and
+     `WORK/active/meta/heartbeat.json`.
    - `ArtifactData` `list` with `collection: gens`, `query: {limit: 1000}` and
      `out_dir: WORK/markers`, following `next_cursor`.
 5. **Plan the publish:**
-   `BIN publish-plan --outbox <outbox> --active WORK/active/meta/active.json --active-version <version> --markers WORK/markers --out WORK/plan`.
-   On a first publish, leave out `--active` and `--active-version`. If `decision` is `stop`,
-   the page already shows a newer generation: report the reason and end the run, a success.
+   `BIN publish-plan --outbox <outbox> --active WORK/active/meta/active.json --active-version <active's version> --heartbeat WORK/active/meta/heartbeat.json --heartbeat-version <heartbeat's version> --markers WORK/markers --out WORK/plan`.
+   Leave out `--active` and `--active-version` on a first publish, and `--heartbeat` and
+   `--heartbeat-version` when there is no heartbeat. It prints JSON; act on its `decision`:
+   - `stop`: the page already shows a newer generation, or a newer quiet run confirmed it.
+     Report the reason and end the run, a success.
+   - `unchanged`: the page already shows this content. Run `ArtifactData` `batch` with
+     `url: PAGE` and `writes` set to the printed `heartbeat` array, verbatim (it is pinned to the
+     heartbeat's version). A `version_mismatch` means another run wrote it first: a success.
+     Then go to step 9; steps 6 to 8 do not run.
+   - `publish`: continue with step 6.
 6. **Write the generation.** For each file in `batches`, in order, run `ArtifactData`
    `batch` with `url: PAGE` and `writes` set to the file's JSON array, verbatim. Read the file
    with the Read tool and pass its array unchanged: every entry carries a `file_path`, so the
@@ -70,7 +86,8 @@ The next scheduled run starts fresh, and every step is safe to repeat.
    - For each file in its `batches`, in order, run `ArtifactData` `batch` the same way.
    - A refused delete batch is not an error: someone deleted those documents first. Stop
      cleaning; the next run lists again and finishes.
-9. **Report** in two lines: the generation published (or why not), the cycle's per-repo
+9. **Report** in two lines: the generation published (or `unchanged` with the heartbeat
+   written, or why not), the cycle's per-repo
    errors, the ingest counts and skipped documents, the sessions seen, gone and skipped, and
    the generations cleaned.
 

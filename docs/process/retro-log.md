@@ -94,3 +94,21 @@ Template:
 - improve: a negative-control harness always runs an unmutated copy first and must see it GREEN;
   and any page-side optimistic state gets a test-table row "after the tracker consumed it, does
   the page defer?" (the S3 was optimism that never ended).
+
+## 2026-10-24 skip an unchanged publish: fingerprint and heartbeat (T1)
+- time: implement ~45%, tests and controls ~25%, gates and fixes ~30%; friction ~25 min (the
+  mutation pass; the exclamation-mark shell hook on test edits).
+- catches: self-review=1 (the ack control masked by a second changed field) gate=round 1: 2 S3 +
+  1 S1 (Codex), round 2: 1 S1 user=0 post-merge=n/a. Biggest: skipping a write removed the
+  version bump the overlap protection relied on, so an older run could switch over newer state.
+- DG=n/a IG=22 post-merge=n/a
+- friction: the mutation pass took ~25 min on whole-suite runs per mutant (GUARDED: owner rule
+  2026-10-24, targeted runs, skip guards already controlled, reading only selects).
+- tier-call: right (T1), but the memo's hazard list missed the concurrency consequence.
+- delegation: mutation finder Sonnet (25 min, 25 survivors, no production bug); depth Codex
+  (3 min, 2 S3 both real); confirming Sonnet medium (1 min, 0 S2+).
+- unconsolidated: 5
+- improve: an optimization that SKIPS a write gets a memo hazard row "what did that write
+  guarantee as a side effect?" (version bump, sequence advance, timestamp): the S3 was a
+  protection that rode on the skipped write. And a fixture used for "every X" tests must
+  populate every X (the fixture left six of seven collections empty).

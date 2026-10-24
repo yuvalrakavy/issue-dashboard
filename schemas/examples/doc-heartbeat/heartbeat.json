@@ -1,0 +1,19 @@
+{
+  "schema": 1,
+  "project": "VillaRakavy",
+  "generation": "gen-42",
+  "sequence": 47,
+  "synced_at": "2026-10-23T08:25:00Z",
+  "repos": [
+    {
+      "repo": "example-org/server",
+      "read_at": "2026-10-23T08:25:00Z",
+      "read": "incremental"
+    },
+    {
+      "repo": "upstream-org/engine",
+      "read_at": null,
+      "read": "full"
+    }
+  ]
+}

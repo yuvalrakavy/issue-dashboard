@@ -5,7 +5,9 @@
 //! first), then every document under `gens/gen-<seq>/<collection>/<id>`, then a switch of
 //! `meta/active` pinned to the version the skill read. Generation documents are only ever
 //! created, so no write is pinned and a name already used is refused by the database itself;
-//! a delete of one is pinned to version 1. Cleanup keeps the new generation and the previous
+//! a delete of one is pinned to version 1. The switch carries the outbox's fingerprint, and an
+//! outbox with the active generation's fingerprint publishes nothing: it writes `meta/heartbeat`
+//! alone, so the page still shows when the tracker last synced. Cleanup keeps the new generation and the previous
 //! active one, and plans its deletes from a listing of what is there, so a cleanup that
 //! stopped part way is finished by the next one.
 
@@ -17,9 +19,10 @@ use chrono::{DateTime, Duration, Utc};
 use serde::Serialize;
 use serde_json::{Value, json};
 
+use crate::canonical::{canonical_json, hash_value};
 use crate::ingest::Pages;
 use crate::root::format_time;
-use crate::{Error, Result};
+use crate::{Error, Result, schema};
 
 /// `ArtifactData`'s batch limit.
 pub const BATCH_WRITES: usize = 50;
@@ -42,10 +45,23 @@ pub const COLLECTIONS: [&str; 7] = [
 /// The page's own collections, which the tracker ingests (5.3).
 pub const PAGE_COLLECTIONS: [&str; 4] = ["decisions", "launches", "views", "requests"];
 
+/// The fields of an outbox's `meta` that differ between two runs over the same state.
+const PER_RUN_META: [&str; 4] = ["generation", "sequence", "taken_at", "fingerprint"];
+/// The fields of each `meta.repos` entry that differ between two runs over the same state: a
+/// good read moves `read_at` every run, and the daily full read changes `read`.
+const PER_RUN_REPO: [&str; 2] = ["read_at", "read"];
+
 /// `meta/active` as the skill read it.
 #[derive(Debug, Clone)]
 pub struct Active {
     pub meta: Value,
+    pub version: u64,
+}
+
+/// `meta/heartbeat` as the skill read it: the last quiet run's document and its version.
+#[derive(Debug, Clone)]
+pub struct Heartbeat {
+    pub doc: Value,
     pub version: u64,
 }
 
@@ -122,9 +138,45 @@ fn batches(writes: Vec<(Write, u64)>, dir: &Path) -> Result<Vec<String>> {
     Ok(paths)
 }
 
-/// Plans the publish of `outbox` into `out`: the documents, the batches, the switch and the
-/// generations to clean once the switch has succeeded. An outbox no newer than the active
-/// generation is a stop that writes nothing; a generation name already used is refused.
+/// The outbox's content without what differs between two runs over the same state: `meta`'s
+/// generation, sequence and sync time (and a fingerprint already on it), each repo's read time
+/// and read mode, and the order of each collection's documents (the database keeps none). An
+/// outbox with the active generation's fingerprint is published as `unchanged` (10.6).
+pub fn fingerprint(outbox: &Value) -> String {
+    let mut meta = outbox.get("meta").cloned().unwrap_or(Value::Null);
+    if let Some(m) = meta.as_object_mut() {
+        for k in PER_RUN_META {
+            m.remove(k);
+        }
+        for r in m
+            .get_mut("repos")
+            .and_then(Value::as_array_mut)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_object_mut)
+        {
+            for k in PER_RUN_REPO {
+                r.remove(k);
+            }
+        }
+    }
+    let mut content = serde_json::Map::new();
+    content.insert("meta".into(), meta);
+    for c in COLLECTIONS {
+        let mut docs: Vec<String> = outbox
+            .get(c)
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .map(canonical_json)
+            .collect();
+        docs.sort();
+        content.insert(c.into(), json!(docs));
+    }
+    hash_value(&Value::Object(content))
+}
+
+/// [`plan_with_heartbeat`] with no `meta/heartbeat` read: an unchanged outbox creates it.
 pub fn plan(
     outbox: &Value,
     active: Option<&Active>,
@@ -132,6 +184,65 @@ pub fn plan(
     now: DateTime<Utc>,
     out: &Path,
 ) -> Result<Value> {
+    plan_with_heartbeat(outbox, active, None, markers, now, out)
+}
+
+/// The `unchanged` plan: no generation, switch or cleanup, only one `meta/heartbeat` write
+/// pinned to `heartbeat_version` (unpinned when none was read), naming the active generation,
+/// this run's sync time and its per-repo reads.
+fn unchanged(outbox: &Value, active: &Active, seq: i64, heartbeat_version: Option<u64>, out: &Path) -> Result<Value> {
+    let meta = &outbox["meta"];
+    let generation = active.meta.get("generation").cloned().unwrap_or(Value::Null);
+    let repos: Vec<Value> = meta
+        .get("repos")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .map(|r| json!({"repo": r.get("repo"), "read_at": r.get("read_at"), "read": r.get("read")}))
+        .collect();
+    let heartbeat = json!({
+        "schema": 1,
+        "project": outbox.get("project"),
+        "generation": generation,
+        "sequence": seq,
+        "synced_at": meta.get("taken_at"),
+        "repos": repos,
+    });
+    schema::validate("doc-heartbeat", "the heartbeat", &heartbeat)?;
+    let out = absolute(out)?;
+    let path = out.join("docs/meta/heartbeat.json");
+    write_json(&path, &heartbeat)?;
+    let write = Write {
+        op: "set",
+        collection: "meta".into(),
+        doc_id: "heartbeat".into(),
+        file_path: Some(path.display().to_string()),
+        if_version: heartbeat_version,
+    };
+    let summary = json!({
+        "decision": "unchanged",
+        "generation": generation,
+        "reason": format!("{generation} already shows this outbox's content: only meta/heartbeat is written"),
+        "heartbeat": [write],
+    });
+    write_json(&out.join("plan.json"), &summary)?;
+    Ok(summary)
+}
+
+/// Plans the publish of `outbox` into `out`: the documents, the batches, the switch and the
+/// generations to clean once the switch has succeeded. An outbox no newer than the active
+/// generation, or than the quiet run that wrote `heartbeat`, is a stop that writes nothing; one
+/// with the active generation's fingerprint is `unchanged`, which writes only `meta/heartbeat`
+/// (pinned to the version the skill read); a generation name already used is refused.
+pub fn plan_with_heartbeat(
+    outbox: &Value,
+    active: Option<&Active>,
+    heartbeat: Option<&Heartbeat>,
+    markers: &BTreeMap<String, Value>,
+    now: DateTime<Utc>,
+    out: &Path,
+) -> Result<Value> {
+    let heartbeat_version = heartbeat.map(|h| h.version);
     let seq = sequence_of(outbox).ok_or_else(|| Error::refused("the outbox has no sequence"))?;
     let generation = format!("gen-{seq}");
     let meta = outbox
@@ -146,6 +257,20 @@ pub fn plan(
             "decision": "stop",
             "reason": format!("gen-{a} is active and {generation} is not newer: this outbox is older than what the page shows"),
         }));
+    }
+    // A quiet run moves no generation, so the last one's sequence counts as well: an outbox
+    // older than it would show older state than the page has already confirmed.
+    if let Some(q) = heartbeat.and_then(|h| sequence_of(&h.doc)).filter(|q| *q >= seq) {
+        return Ok(json!({
+            "decision": "stop",
+            "reason": format!("a quiet run of sequence {q} already confirmed the page and {generation} is not newer: this outbox is older than what the page shows"),
+        }));
+    }
+    let print = fingerprint(outbox);
+    if let Some(a) = active
+        && a.meta.get("fingerprint").and_then(Value::as_str) == Some(print.as_str())
+    {
+        return unchanged(outbox, a, seq, heartbeat_version, out);
     }
     if markers.contains_key(&generation) {
         return Err(Error::refused(format!(
@@ -202,7 +327,9 @@ pub fn plan(
     let batch_paths = batches(writes, &out.join("batches"))?;
 
     let spath = out.join("docs/meta/active.json");
-    write_json(&spath, meta)?;
+    let mut switched = meta.clone();
+    switched["fingerprint"] = json!(print);
+    write_json(&spath, &switched)?;
     let switch = Write {
         if_version: active.map(|a| a.version),
         ..create("meta".into(), "active".into(), &spath)

@@ -801,7 +801,9 @@ artifact's editors only, so a person the page is shared with read-only cannot la
 ### 5.5 Freshness
 
 Each panel shows the snapshot time it was built from. A repo whose last good read is older
-than twice the run interval is marked stale in the header and on its rows.
+than twice the run interval is marked stale in the header and on its rows. The status strip's
+sync time and each repo's read time come from the newer of the active generation and the
+heartbeat a run that changed nothing writes (10.6), so a quiet tracker never looks stale.
 
 ### 5.6 Views: include and exclude by repo and group
 
@@ -1069,7 +1071,7 @@ does not go through this seam.
 
 | Job | What it is | When |
 |---|---|---|
-| **Sync** | a scheduled Claude task on the smallest model: reads the page documents from the dashboard database and the app's session list, runs `issue-dashboard cycle` on them (10.4), then publishes the cycle's outbox as a new generation (10.6) | every `sync_interval` (default 5 min); this is the cycle that applies your decisions |
+| **Sync** | a scheduled Claude task on the smallest model: reads the page documents from the dashboard database and the app's session list, runs `issue-dashboard cycle` on them (10.4), then publishes the cycle's outbox as a new generation (10.6), or, when the outbox has the active generation's content, writes only a heartbeat | every `sync_interval` (default 5 min); this is the cycle that applies your decisions |
 | **Triage** | a Claude session: reads the snapshot, makes suggestions through the decision seam, checks claims against the code, groups defect classes and batches, and records all of it with `record-suggestions`; it applies nothing (10.4) | daily, and on demand from the dashboard |
 | **Dispatcher** | a long-lived Claude session watching each project's dashboard | always on while you want launches to work |
 
@@ -1079,12 +1081,19 @@ list (`list_sessions`, archived ones included) and hand it to the cycle as a fil
 file holds each session's id, title, working directory, branch, pull-request number, whether
 it runs, whether it is archived, when it was last active and its link; never a transcript.
 
+**A quiet run publishes nothing.** Most runs change nothing the page shows: no issue moved,
+no decision arrived, no launch changed state. Republishing the whole generation then cost
+about 50 tool calls and up to five minutes, enough to make the app skip the next slot (measured
+2026-10-24). So the publish compares the outbox's fingerprint with the active generation's
+(10.6) and, when they match, writes one small `meta/heartbeat` document with the sync time
+instead: no generation, no switch, no cleanup. Any real change still publishes in full.
+
 **Why a sync job exists.** The dashboard's database is reachable through Claude's artifact
 tools; no route from a plain program to it is known (**unverified**: it is the first probe
 of the build). So the CLI never touches the database: it reads and writes files, and the
 sync job, the smallest possible session, carries those files to and from the database. Its
-whole work is two tool calls: one read of the unconsumed page documents, one batch write of
-the prepared ones (`ArtifactData` accepts a document from a local JSON file, so the content
+whole work is carrying files: reads of the unconsumed page documents, batch writes of the
+prepared ones (`ArtifactData` accepts a document from a local JSON file, so the content
 never passes through the model). If a direct route turns up, the CLI writes the database
 itself and the sync job goes away; nothing else changes.
 
@@ -1507,21 +1516,43 @@ document**; the page shows a decision as pending until its ack arrives.
 An outbox is larger than one database batch can carry (a batch holds at most 50 documents),
 so it is published as an **immutable generation** and switched on by one pinned write:
 
-1. read the `meta` document, which names the active generation and its sequence;
-2. if the outbox's sequence is not greater, stop: a newer one is already published;
-3. write the outbox's documents under `gen-<seq>/…`, in as many batches as needed; nothing
+1. read the `meta` document, which names the active generation, its sequence and its
+   fingerprint, and the `heartbeat` document with its version;
+2. if the outbox's sequence is not greater than the active generation's, or than the last quiet
+   run's (the heartbeat's), stop: a newer run already published or confirmed the page;
+3. if the outbox's fingerprint equals the active generation's, write only `heartbeat`, pinned
+   to the version read in step 1, and stop: the page already shows this content;
+4. write the outbox's documents under `gen-<seq>/…`, in as many batches as needed; nothing
    reads them yet;
-4. write `meta` alone, pinned to the version read in step 1, naming `gen-<seq>` as active;
-5. delete the generation that was active before, once the switch has succeeded.
+5. write `meta` alone, pinned to the version read in step 1, naming `gen-<seq>` as active and
+   carrying the outbox's fingerprint;
+6. delete the generation that was active before, once the switch has succeeded.
+
+**The fingerprint** is a hash of the outbox's content without what differs between two runs
+over the same state: the generation, sequence and sync time, each repo's last read time and
+read mode, and the order of each collection's documents. An issue edit, a launch's state, an
+idle age crossing a day, a decision's ack, a repo going stale or failing a read all change it.
+A generation published before fingerprints has none, so the next run publishes in full.
+
+**The heartbeat** names the active generation the run confirmed, the run's own sequence and
+sync time, and each repo's read time and mode (what the fingerprint leaves out). It is a
+document of its own, so its pinned write never meets the switch of `meta`; two quiet runs that
+overlap cannot both write it. The page shows the newer of the heartbeat's sync time and the
+generation's, and takes each repo's read from the heartbeat, but only while the heartbeat names
+the active generation: a slow quiet run that a publish overtook leaves a heartbeat for an older
+generation, which the page ignores.
 
 The page reads only the generation `meta` names, so it never sees half an outbox. Two
-overlapping syncs cannot both switch: the second's pinned write in step 4 fails because the
-first changed `meta`, and an older outbox is stopped at step 2 or step 4.
+overlapping syncs cannot both switch: the second's pinned write in step 5 fails because the
+first changed `meta`, and an older outbox is stopped at step 2 or step 5. A quiet run changes
+no `meta`, which is why step 2 also reads the heartbeat's sequence; one window stays open (an
+older run that read the page before a quiet run's heartbeat and switches after it), recorded
+in 10.10.
 
-**Cleanup keeps the previous generation.** Step 5 deletes only generations older than the one
+**Cleanup keeps the previous generation.** Step 6 deletes only generations older than the one
 that was active before the switch, so a page that read `meta` just before the switch can still
 finish reading. A page that finds a document missing re-reads `meta` and starts over. A
-generation that never became active (a sync that died after step 3) is deleted only once it is
+generation that never became active (a sync that died after step 4) is deleted only once it is
 more than one hour old, so a publisher still uploading is never cut off. Only one sync job runs
 per project (it is one scheduled task), so overlapping publishers arise only from a slow run
 meeting the next one, which the pinned switch already settles.
@@ -1838,6 +1869,35 @@ under the old name are skipped by ingest as another project's. There is no renam
   (abandoned), each generation's documents before its marker. A younger generation newer than
   the active one may be another run's and is kept. Access rule: everyone who can open the page
   reads, only the owner writes (`[{path: "", read: "view", write: "owner"}]`).
+- *Skipping an unchanged publish (2026-10-24, owner-approved).* Measured: a run took 3m40s to
+  5m06s and about 51 turns, nearly all carrying about 180 documents up in 4 batches and deleting
+  the previous generation's in 4 more, even when the cycle changed nothing; a 5m06s run made the
+  app skip the next 5-minute slot. `publish::fingerprint` hashes the outbox's `meta` without
+  `generation`, `sequence`, `taken_at` (and any `fingerprint`) and each `meta.repos[]` without
+  `read_at` and `read`, plus each collection's documents as sorted canonical JSON. Found by
+  reading derive: those are the only fields two cycles over the same state differ in (a good
+  read moves `read_at` every run; the daily full read flips `read`); `idle_days`, `stale`, the
+  acks' 30-day window and a session's last activity (recorded about hourly) are real changes.
+  The fingerprint lives on `meta/active`, not the marker: the switch writes it in the same pinned
+  write that makes the generation active, and the skill already reads `meta/active`.
+  `publish-plan --heartbeat-version N` (absent: the first heartbeat, an unpinned create)
+  returns `decision: "unchanged"` with the heartbeat's batch entry inline in its JSON, so the
+  skill passes it without reading a file; the order of checks is stop, then unchanged, then the
+  refusal of a reused generation name. *Beyond the approved memo:* the heartbeat also carries
+  each repo's `read_at` and `read`, since the page lists each repo's read time and would
+  otherwise show it hours old on a quiet tracker (`schemas/doc-heartbeat.schema.json`). A quiet
+  run cleans nothing, so an abandoned generation waits for the next real publish. The skill reads
+  `meta/active` and `meta/heartbeat` with one `list` of the `meta` collection, whose reply gives
+  each document's version, and wraps the saved `list_sessions` file with `jq` instead of
+  retyping it. *From the gate (depth reader):* a quiet run moves no generation, so an older
+  run's changed outbox could pass the stop check and switch over a newer confirmed state; the
+  stop check now also takes the heartbeat's sequence (`publish-plan --heartbeat <file>`, read
+  from the same `meta` listing). **Open:** an older run that read the page before a quiet run's
+  heartbeat and switches after it still switches; closing that needs the switch to fail on an
+  intervening heartbeat write, i.e. one batch pinning both documents, and whether an
+  `ArtifactData` batch applies all-or-nothing is unverified. The page shows the older state
+  until the next run, which publishes again. An item row's repo read time and its stale tag
+  come from the heartbeat too (`syncedRepo`), not only the status strip.
 - *Closing from the page (slice 3, 10.0's exception).* A `close` decision carries
   `value.close = {reason: completed | not_planned | duplicate, duplicate_of, comment}`. The cycle
   gains a write step between ingest and observe, so the same cycle's read and outbox already

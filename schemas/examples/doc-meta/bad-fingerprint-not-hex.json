@@ -1,0 +1,17 @@
+{
+  "schema": 1,
+  "project": "home",
+  "name": "Example home automation",
+  "generation": "gen-42",
+  "sequence": 42,
+  "taken_at": "2026-10-23T08:00:00Z",
+  "summary": {
+    "p0_open": 0,
+    "waiting_on_you": 0,
+    "untriaged": 0,
+    "over_time_limit": 0,
+    "open": 0
+  },
+  "repos": [],
+  "fingerprint": "not a sha256"
+}
