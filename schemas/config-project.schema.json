@@ -193,11 +193,13 @@
     },
     "demand_threshold": {
       "type": "integer",
-      "minimum": 1
+      "minimum": 1,
+      "description": "Distinct outside people whose demand raises an issue's reach one step (6.2). Default 3."
     },
     "gate_minutes_per_point": {
       "type": "integer",
-      "minimum": 1
+      "minimum": 1,
+      "description": "Wall-clock minutes per job-size point, the unit shared by effort and gate cost (6.3). Default 15."
     }
   }
 }
