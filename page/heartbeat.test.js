@@ -54,6 +54,17 @@ test("without a heartbeat, or with one for another generation or older, the gene
   assert.deepEqual(D.synced(null, beat()), { at: null, repos: [] });
 });
 
+test("a heartbeat that is not a time never counts, even when the generation has no time", () => {
+  const m = Object.assign({}, meta, { taken_at: null });
+  assert.equal(D.synced(m, beat({ synced_at: "soon" })).at, null);
+  assert.deepEqual(D.synced(m, beat({ synced_at: "soon" })).repos, meta.repos);
+});
+
+test("a heartbeat at the generation's own time is not newer: the generation's reads stand", () => {
+  const s = D.synced(meta, beat({ synced_at: meta.taken_at }));
+  assert.deepEqual(s.repos, meta.repos);
+});
+
 test("the next run is counted from the newer sync time", () => {
   const now = new Date("2026-10-23T08:21:00Z");
   assert.equal(D.nextRunMinutes(meta, now), null, "from the generation alone the run is overdue");

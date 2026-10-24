@@ -180,6 +180,59 @@ fn any_real_change_changes_the_fingerprint() {
 }
 
 #[test]
+fn every_document_of_every_collection_is_content_whatever_its_order() {
+    // The fixture's cycle fills only `issues`; give every collection two documents so a
+    // collection left out of the hash, or hashed by id alone, shows.
+    let (a, _) = two_quiet_cycles();
+    let mut base = a.clone();
+    for c in publish::COLLECTIONS {
+        if base[c].as_array().unwrap().len() < 2 {
+            base[c] = json!([{"id": format!("{c}_1"), "v": 1}, {"id": format!("{c}_2"), "v": 1}]);
+        }
+    }
+    let print = publish::fingerprint(&base);
+    for c in publish::COLLECTIONS {
+        let mut reordered = base.clone();
+        reordered[c].as_array_mut().unwrap().reverse();
+        assert_ne!(reordered, base, "{c}: the reorder changed nothing");
+        assert_eq!(publish::fingerprint(&reordered), print, "{c}: the order is not content");
+
+        let mut edited = base.clone();
+        edited[c][0]["v"] = json!(2);
+        assert_ne!(
+            publish::fingerprint(&edited),
+            print,
+            "{c}: a field of a document, its id unchanged"
+        );
+
+        let mut gone = base.clone();
+        gone[c].as_array_mut().unwrap().pop();
+        assert_ne!(publish::fingerprint(&gone), print, "{c}: a document gone");
+    }
+}
+
+#[test]
+fn every_other_field_of_meta_and_of_its_repos_is_content() {
+    let (a, _) = two_quiet_cycles();
+    let base = publish::fingerprint(&a);
+    let per_run = ["generation", "sequence", "taken_at", "fingerprint"];
+    let keys: Vec<String> = a["meta"].as_object().unwrap().keys().cloned().collect();
+    assert!(keys.iter().any(|k| k == "owner_id") && keys.iter().any(|k| k == "sync_interval_minutes"));
+    for k in keys.iter().filter(|k| !per_run.contains(&k.as_str())) {
+        let mut b = a.clone();
+        b["meta"][k] = json!({"changed": k});
+        assert_ne!(publish::fingerprint(&b), base, "meta.{k} is content");
+    }
+    let repo_keys: Vec<String> = a["meta"]["repos"][0].as_object().unwrap().keys().cloned().collect();
+    assert!(repo_keys.iter().any(|k| k == "repo"));
+    for k in repo_keys.iter().filter(|k| !["read_at", "read"].contains(&k.as_str())) {
+        let mut b = a.clone();
+        b["meta"]["repos"][0][k] = json!({"changed": k});
+        assert_ne!(publish::fingerprint(&b), base, "meta.repos[].{k} is content");
+    }
+}
+
+#[test]
 fn a_decision_acknowledged_by_a_cycle_changes_the_fingerprint() {
     let t = fixture_root();
     let a = doc(&run(&t, &no_pages(), 0));
@@ -303,6 +356,41 @@ fn a_stop_still_wins_over_unchanged() {
     let s = publish::plan_with_heartbeat(&a, Some(&active), Some(3), &BTreeMap::new(), now(), out.path()).unwrap();
     assert_eq!(s["decision"], "stop", "{s}");
     assert!(s.get("heartbeat").is_none());
+}
+
+#[test]
+fn unchanged_is_decided_before_the_refusal_of_a_generation_name_started_before() {
+    // A run that re-plans an outbox whose marker was written earlier: when the page already
+    // shows its content nothing is written to `gens`, so the name is not reused; when it does
+    // not, the refusal stands.
+    let (a, b) = two_quiet_cycles();
+    let g = b["meta"]["generation"].as_str().unwrap().to_string();
+    let markers = BTreeMap::from([(
+        g.clone(),
+        json!({"generation": g, "sequence": b["sequence"], "project": b["project"], "created_at": now().to_rfc3339()}),
+    )]);
+    let out = tempfile::tempdir().unwrap();
+    let s = publish::plan_with_heartbeat(&b, Some(&published(&a, 7)), Some(3), &markers, now(), out.path()).unwrap();
+    assert_eq!(s["decision"], "unchanged", "{s}");
+
+    let mut other = published(&a, 7);
+    other.meta["fingerprint"] = json!("f".repeat(64));
+    let out = tempfile::tempdir().unwrap();
+    let e = publish::plan_with_heartbeat(&b, Some(&other), Some(3), &markers, now(), out.path());
+    assert!(e.is_err(), "a changed outbox under a used name is still refused: {e:?}");
+}
+
+#[test]
+fn a_heartbeat_that_fails_its_schema_is_refused_and_not_written() {
+    // An active meta that names no generation would give a heartbeat naming none.
+    let (a, b) = two_quiet_cycles();
+    let mut active = published(&a, 7);
+    active.meta.as_object_mut().unwrap().remove("generation");
+    let out = tempfile::tempdir().unwrap();
+    let e = publish::plan_with_heartbeat(&b, Some(&active), Some(3), &BTreeMap::new(), now(), out.path());
+    assert!(e.is_err(), "{e:?}");
+    assert!(!out.path().join("docs/meta/heartbeat.json").exists());
+    assert!(!out.path().join("plan.json").exists());
 }
 
 #[test]
