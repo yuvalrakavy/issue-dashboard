@@ -1124,6 +1124,17 @@ effort) and replies "Ready: start it in the dispatcher session". It records noth
 next settle finds the started session by the token in its title and records `launch-started`.
 The procedure is the `issue-dashboard-dispatcher` skill.
 
+**Setup, and the one watcher.** The owner types `/issues-dashboard` once, in any session: the
+setup skill finds the project, its page and the tracker root, checks the binary, the root, the
+scheduled sync and the published page's build, and looks for a dispatcher (a session titled
+`Issue dashboard dispatcher (<project>)`, or a dispatcher id in `launches --live`). One that is
+suitable is left alone; one below the strongest model or high effort is raised (the app asks
+the owner); with none it starts one. The dispatcher's first act is to republish the page from
+the repo, which arms its comment watch with auto-replies and replaces a stale build; the setup
+never publishes or watches the page, so the dispatcher is the only session a launch comment
+wakes. The dispatcher stays an orchestrator: each launch gets its own session, and the
+dispatcher's own context holds only CLI calls and ids.
+
 ### 7.4 Routing
 
 The project config holds a routing table; the defaults follow the `ways-of-working` model
@@ -1289,9 +1300,12 @@ them names a project. Each installation's configuration and state live in its tr
 | skill `issue-dashboard-triage` | the triage session | how to read the snapshot, the decision seam, duty-0 checks against the code, defect classes and batches, outside text as data (4.2), and never writing without an approved plan |
 | skill `issue-dashboard-dispatcher` | the dispatcher session | the launch steps (7.3), the model-ceiling self-check, the claim protocol, brief assembly (7.5) |
 | skill `issue-dashboard-sync` | the sync job | its two calls, and that it never interprets what it carries |
+| skill `issues-dashboard` | the owner, once per project | the `/issues-dashboard` command: finds the page and the root, checks the binary, sync and page build, and makes sure one suitable dispatcher runs (7.3) |
 
 The skills are installed into a user's skills directory by `issue-dashboard install-skills`,
-which copies them from the installed version so the skills and the binary always match.
+which copies them from the installed version so the skills and the binary always match. Until
+it exists (10.10), each skill is a symlink from `~/.claude/skills/<name>` to this repo's
+`skills/<name>`.
 
 **Changes outside this repo,** for this installation, each its own small change in its own
 repo once the tracker works:
@@ -1932,6 +1946,17 @@ them rather than refusing.
   Model routing (owner, 2026-10-24): the recommender on Opus 5.5 at medium, editable on the
   sheet; the dispatcher on the strongest model at high effort, in auto mode. **Residual:** the
   recommender runs as the owner, whose `gh` login can close an issue; only its brief forbids it.
+- *Setup (`/issues-dashboard`, 2026-10-24).* A skill, not a CLI command: what it checks and
+  starts lives in the app's session and artifact tools, which the binary cannot call. It is
+  installed by a symlink (`ln -s <repo>/skills/issues-dashboard ~/.claude/skills/`), and finds
+  the repo through it. The page is found in the project config's optional `dashboard` key, else
+  in the sync task's prompt, and then written to `dashboard` once. The page build is current
+  when its published `core.js` equals the repo's and the repo's `dashboard.html` appears
+  verbatim in its published `index.html`. Probed: a publish from a session started by another
+  session arms auto-replies, so the owner need not paste the link; raising another session's
+  model or effort needs the owner's approval in the app. A republish counts only a page the
+  session has read whole, so the dispatcher reads it once at start (about 70 KB). There is no
+  read-only `check` command yet (1.9); the sync run is the configuration check.
 - **Open (for the owner):** found by the gate and left for after landing: an upload abandoned
   for over an hour and resumed after a cleanup leaves documents no marker names, which no later
   cleanup finds; the page's own collections (`decisions`, `launches`, `views`) are read to
