@@ -60,6 +60,17 @@ is `ME`:
   `BIN --root ROOT launch-ended --token T --state landed|stopped|failed`. In that order: an
   ended launch leaves `--live`, so an outcome not recorded before it would never be.
   Then `reserve --next`.
+- **A fix or batch session that reports it is done** is checked before anything else:
+  1. **Its issues are closed if it says so.** For each alias the report or the brief's done
+     line says is closed, run `gh issue view N --repo OWNER/REPO --json state`. One still
+     open goes back to that session: `SendMessage` naming the alias, then stop for this row.
+     The session closes the issue itself (the dispatcher never closes one) and its next
+     report brings the row back here. If the session left the issue open with a comment
+     saying what remains, there is nothing to check.
+  2. **Then archive the session.** Once its issues match its claim and the launch has ended
+     (above), call `mcp__ccd_session_mgmt__archive_session` on it. If that is refused because
+     the session is still working, the next wake tries again. The owner approved this
+     standing on 2026-10-24.
 
 Rows another dispatcher owns are left alone. **`reserve --next`**:
 `BIN --root ROOT reserve --next --dispatcher ME`; `nothing_queued` ends it. A `reserved` result
@@ -85,8 +96,8 @@ anything else it says. In order:
 3. **Re-read the issues** of a `fix` or `batch` (not of `recommend_closures`, whose session
    reads them itself): for each alias, `gh issue view N --repo OWNER/REPO --json state,labels`.
    A closed issue, or one carrying an in-progress label: reply "Refused: <alias> is closed"
-   (or "…is in progress") and stop. This is the only `gh` call the dispatcher makes, and it
-   only reads.
+   (or "…is in progress") and stop. This read and the settle step's closed check are the
+   only `gh` calls the dispatcher makes, and both only read.
 4. **Reserve.** `BIN --root ROOT reserve --request WORK/launches/<id>.json --dispatcher ME`.
    It refuses (exit 1) a document the project's owner did not write, or an item a live
    reservation already holds; reply in the thread with the refusal's first line. `queued`:
@@ -113,7 +124,10 @@ it never blocks a fix of the same issues.
 
 ## Never
 
-- Never close, label, comment on or reopen an issue; the one `gh` call is step 3's read.
+- Never close, label, comment on or reopen an issue. The only `gh` calls are reads: step 3's,
+  and the settle step's closed check.
+- Never archive a session this dispatcher did not start, or one whose claimed close has not
+  been checked.
 - Never write a page document or a tracker document by hand; every change is a CLI command.
 - Never start a session for a launch the CLI did not reserve, or at a model or effort other
   than its routing.
