@@ -49,6 +49,17 @@ test("a scope that is not one repo or group is shown as a view", () => {
   assert.equal(both.selected, "view");
 });
 
+test("an isolated repo with no entry of its own is shown as a view, never as a blank", () => {
+  const r = D.showOptions(meta, issues, { include: [{ repo: "yuvalrakavy/gone" }], exclude: [] }, null);
+  assert.equal(r.selected, "view");
+  assert.deepEqual(r.options[0], { value: "view", label: "Custom view" });
+});
+
+test("groups sort like repos, ignoring case", () => {
+  const m = { repos: [], groups: { Zeta: [], alpha: [] } };
+  assert.deepEqual(D.showOptions(m, [], null, null).options.map((o) => o.label), ["All repos", "alpha (0)", "Zeta (0)"]);
+});
+
 test("repos that share a short name are told apart by owner", () => {
   const m = { repos: [{ repo: "yuvalrakavy/rhai" }, { repo: "rhaiscript/rhai" }], groups: {} };
   const labels = D.showOptions(m, [], null, null).options.map((o) => o.label);

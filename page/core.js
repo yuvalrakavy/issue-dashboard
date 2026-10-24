@@ -108,12 +108,14 @@
     const byName = (a, b) => name(a).toLowerCase().localeCompare(name(b).toLowerCase());
 
     const options = [{ value: "all", label: "All repos" }];
-    for (const g of Object.keys(groups).sort()) options.push({ value: "group:" + g, label: g + " (" + count(groups[g]) + ")", heading: "Groups" });
+    for (const g of Object.keys(groups).sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()))) options.push({ value: "group:" + g, label: g + " (" + count(groups[g]) + ")", heading: "Groups" });
     for (const r of repos.slice().sort(byName)) options.push({ value: "repo:" + r, label: name(r) + " (" + count([r]) + ")", heading: "Repos" });
 
     const one = scope && !(scope.exclude && scope.exclude.length) && scope.include && scope.include.length === 1 ? scope.include[0] : null;
     let selected = "all";
-    if (scope && !scopeName && one) selected = one.repo ? "repo:" + one.repo : "group:" + one.group;
+    const isolated = scope && !scopeName && one ? (one.repo ? "repo:" + one.repo : "group:" + one.group) : null;
+    // An isolated repo or group with no entry of its own (out of the config) shows as a view, never a blank.
+    if (isolated && options.some((o) => o.value === isolated)) selected = isolated;
     else if (scope) {
       selected = "view";
       options.unshift({ value: "view", label: scopeName ? "View: " + scopeName : "Custom view" });
