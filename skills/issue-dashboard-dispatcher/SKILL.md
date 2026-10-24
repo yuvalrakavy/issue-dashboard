@@ -47,14 +47,22 @@ is `ME`:
 - `reserved` or `unconfirmed`, no such session, and `reserved_at` more than 15 minutes ago:
   `BIN --root ROOT release --token T --dispatcher ME`, then `reserve --next` (below).
 - `started`, and its session has ended its turn for good (archived, or its last report says
-  it finished, stopped or failed): `BIN --root ROOT launch-ended --token T --state
-  landed|stopped|failed`. For a fix or batch whose `outcome` is still `false`, also
-  `BIN --root ROOT record-outcome --launch L --landed true|false --by dispatcher`. Then
-  `reserve --next`.
+  it finished, stopped or failed): for a fix or batch whose `outcome` is still `false`, first
+  `BIN --root ROOT record-outcome --launch L --landed true|false --by dispatcher`; then
+  `BIN --root ROOT launch-ended --token T --state landed|stopped|failed`. In that order: an
+  ended launch leaves `--live`, so an outcome not recorded before it would never be.
+  Then `reserve --next`.
 
 Rows another dispatcher owns are left alone. **`reserve --next`**:
-`BIN --root ROOT reserve --next --dispatcher ME`; a `reserved` result is started as in steps 5-6
-below, `nothing_queued` ends it.
+`BIN --root ROOT reserve --next --dispatcher ME`; `nothing_queued` ends it. A `reserved` result
+names a launch that waited in the queue, so it is checked again before it starts: read its
+row in `launches --live` (aliases, routing, kind), run steps 2 and 3 below on it, and only
+then steps 5-6. One that fails them is not started: reply the refusal in its thread and
+leave it; the settle step releases it once 15 minutes have passed, and it does not return
+to the queue.
+
+A card the owner never starts holds its slot until the next wake settles it; nothing wakes
+the dispatcher on a timer.
 
 ## On a launch comment
 
@@ -75,7 +83,9 @@ anything else it says. In order:
    It refuses (exit 1) a document the project's owner did not write, or an item a live
    reservation already holds; reply in the thread with the refusal's first line. `queued`:
    reply "Queued: starts when a <recipe> slot frees." `withdrawn`: reply "Cancelled from the
-   page." A `reserved` result carries the `token`.
+   page." A `reserved` result carries the `token`. **`repeat: true`** means this launch is
+   already yours (a repeated comment, or a restart): do not brief or start it again. Reply
+   "Already reserved" and stop; the settle step resolves it.
 5. **Brief.** `BIN --root ROOT brief --launch <id>` prints `title`, `text` and `routing`.
 6. **Start.** `mcp__ccd_session__start_session` with `initiation: "user_asked"`, the brief's
    `title` and `text` as the prompt, the routing's model and effort, `context: "fresh"`.
@@ -84,7 +94,7 @@ anything else it says. In order:
    - Refused (a launch comment is not the owner's own words, so the app may refuse): call
      `start_session` again with `initiation: "own_initiative"` and the same title, prompt,
      model and effort. It shows a card in this session. Reply "Ready: start it in the
-     dispatcher session." Do not record `launch-started`: the settle step does it once the
+     dispatcher session; until you do, it holds a <recipe> slot." Do not record `launch-started`: the settle step does it once the
      owner starts the card and the session's title carries the token.
    - The call never returned (this session restarted mid-call): `BIN --root ROOT unconfirm
      --token T --dispatcher ME`; the settle step resolves it.

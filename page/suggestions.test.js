@@ -63,7 +63,11 @@ test("Dismiss hides the card at once; a refused, cancelled or undone dismissal d
   for (const result of ["refused", "cancelled"]) {
     assert.equal(D.suggestionCards([s], issues, [d], [{ decision: d.id, result }]).cards.length, 1, result);
   }
-  assert.equal(D.suggestionCards([s], issues, [d], [{ decision: d.id, result: "applied" }]).cards.length, 0);
+  // Once a cycle consumed it, the tracker's documents decide: a suggestion it still publishes
+  // was lifted (the issue changed since), so it shows again under the same id.
+  assert.equal(D.suggestionCards([s], issues, [d], [{ decision: d.id, result: "applied" }]).cards.length, 1);
+  assert.equal(D.suggestionCards([s], issues, [d], [], "2026-10-25T00:00:00Z").cards.length, 1, "a dismissal past the ack horizon is the tracker's");
+  assert.equal(D.suggestionCards([s], issues, [d], [], "2026-10-01T00:00:00Z").cards.length, 0, "a pending one inside the horizon hides");
   const undo = D.decisionDoc({ action: "undo", target: { decision: d.id, item: "I_1" } }, who, now, () => 0.6);
   assert.equal(D.suggestionCards([s], issues, [d, undo], []).cards.length, 1);
   const other = D.decisionDoc(D.dismissSuggestionFields(sg("obsolete", 2)), who, now, () => 0.7);

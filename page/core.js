@@ -536,14 +536,16 @@
   // --- closing recommendations (5.8) ----------------------------------------------------
 
   // The page's dismissals still in force: not refused, not cancelled, and not undone.
-  function dismissedSuggestions(decisions, acks) {
-    const result = new Map((acks || []).map((a) => [a.decision, a.result]));
-    const undone = new Set((decisions || []).filter((d) => d.action === "undo" && d.target && d.target.decision).map((d) => d.target.decision));
+  // The suggestions the page hides before a cycle has seen their dismissal. Once a cycle has
+  // consumed it (any ack), the tracker's documents are the word: it leaves an applied one out
+  // until the issue changes, then shows it again under the same id.
+  function dismissedSuggestions(decisions, acks, horizon) {
+    const st = decisionStates(decisions, acks, horizon);
     const out = new Set();
-    for (const d of decisions || []) {
+    for (const s of Object.values(st.byId)) {
+      const d = s.doc;
       if (d.action !== "dismiss_suggestion" || !d.target || !d.target.suggestion) continue;
-      const r = result.get(d.id);
-      if (r === "refused" || r === "cancelled" || undone.has(d.id)) continue;
+      if (s.ack || s.undoneBy || s.settled) continue;
       out.add(d.target.suggestion);
     }
     return out;
@@ -553,9 +555,9 @@
   // batch's first member), its open members, and the issues a run left open with why. A
   // suggestion the page has dismissed leaves at once; one about an issue not in view, or
   // closed since, is not shown; a batch with fewer than two members still open is not either.
-  function suggestionCards(suggestions, issues, decisions, acks) {
+  function suggestionCards(suggestions, issues, decisions, acks, horizon) {
     const byId = new Map(issues.filter(isOpen).map((i) => [i.id, i]));
-    const gone = dismissedSuggestions(decisions, acks);
+    const gone = dismissedSuggestions(decisions, acks, horizon);
     const cards = [];
     const leftOut = [];
     for (const s of suggestions || []) {

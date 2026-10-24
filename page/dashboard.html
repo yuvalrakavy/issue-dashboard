@@ -459,7 +459,7 @@ footer .wrap { padding-block: 0 32px; font-size: .82rem; color: var(--muted); di
       tile(t.open, "open", () => go("queue", "all")),
     );
     const cards = D.inbox(scoped());
-    const recs = D.suggestionCards(S.suggestions, shown(), S.decisions, S.acks).cards.length;
+    const recs = D.suggestionCards(S.suggestions, shown(), S.decisions, S.acks, D.ackHorizon(S.meta)).cards.length;
     $("c-inbox").textContent = cards.length + recs ? String(cards.length + recs) : "";
     $("c-queue").textContent = String(D.tiles(scoped()).open - cards.length);
   }
@@ -658,7 +658,7 @@ footer .wrap { padding-block: 0 32px; font-size: .82rem; color: var(--muted); di
   const SUGGESTED = { likely_fixed: "Likely fixed", duplicate: "Duplicate", obsolete: "No longer relevant", batch: "Close together" };
   const LEFT_OUT = { needs_design: "needs design", blocked: "blocked", keep_open: "keep open" };
   function recommendationsSection() {
-    const r = D.suggestionCards(S.suggestions, shown(), S.decisions, S.acks);
+    const r = D.suggestionCards(S.suggestions, shown(), S.decisions, S.acks, D.ackHorizon(S.meta));
     if (!r.cards.length && !r.leftOut.length) return null;
     const pct = (s) => Math.round(s.confidence * 100) + "%";
     const card = ({ s, issue: i, members }) => {
