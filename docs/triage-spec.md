@@ -41,7 +41,8 @@ Every question below goes through `decide(question, allowed answers, input)`. **
 whole answering context:** no input carries a label of ANY label decision (type, area, priority),
 the triage brief prints none, and the skill forbids reading an issue on GitHub while answering
 label questions, so no answer can be copied from a sibling question's input. A replay input
-(3.2) holds the body and only the comments before the truth record's time.
+(3.2) holds the body and only the comments before one cutoff per item: the earliest truth time
+among its label decisions, so a comment like "bumped to p1" cannot reach its type question.
 
 | Decision | Allowed answers | Input beyond title, body, inside comments | Scope | Shown as |
 |---|---|---|---|---|
@@ -107,7 +108,7 @@ priority's hash.
 | Step | Who | What |
 |---|---|---|
 | 1 | dispatcher | starts a `triage` launch (scope `full` or `closures`) whose request names the items 2.2 selected at request time (an empty list is refused, `crates/core/src/launch.rs:384`), with `brief --launch` (ch. 5) |
-| 2 | session | `issue-dashboard prepare --launch <id> --session-model <m@e> --out questions.json` (refused when `m@e` is not the routing): builds each blinded input for the launch's items, writes one question per (item, decision) from `decisions/*.toml`, and records a **`prepared`** event: launch, backend, and per question its id, decision, question hash, input hash and the `map_id` in force |
+| 2 | session | `issue-dashboard prepare --launch <id> --session-model <m@e> --out questions.json` (refused when `m@e` is not the routing): builds each blinded input for the launch's items, writes one question per (item, decision) that 2.2 finds eligible (recomputed per item: the request names items, not questions), and records a **`prepared`** event: launch, backend, and per question its id, decision, question hash, input hash and the `map_id` in force |
 | 3 | session | checks each item against the code (duty 0: cited sites, commits that mention it), then answers every question in `answers.json`, plus estimates, batches and left-out entries |
 | 4 | session | `issue-dashboard record-suggestions --launch <id> answers.json`: every answer is checked against its `prepared` question, the calibration map (2.4) applied, and `suggested` events recorded with the **raw** and the **calibrated** probabilities |
 | 5 | next sync | cards appear (ch. 4) |
@@ -118,7 +119,7 @@ repeat for it. **Only asked questions can be answered:** an answer to an unprepa
 refuses the file; an answer whose item changed since prepare (its input hash, recomputed from the
 ledger at record, differs) is dropped and reported, and the rest is recorded. The map applied is
 the one `prepared` froze, so a retry of the same file records identical payloads (phase 1
-compares them, `crates/core/src/suggest.rs:349`). **The backend is the launch's routing** (the model and
+compares them, `crates/core/src/suggest.rs:355-359`). **The backend is the launch's routing** (the model and
 effort the dispatcher started), never the session's own claim; the answer file's `backend` must
 equal it.
 
@@ -146,8 +147,11 @@ split (ch. 3) by minimising log loss over the grid 0.25–4 in steps of 0.05: de
 usable from a few dozen examples, and it keeps the backend's ranking. With a map, calibrated =
 softmax(log p / T) (per area as yes/no); without one, the identity, and the suggestion is
 marked **uncalibrated**. Maps live in `state/evals/<project>/<backend>/<decision>-<hash>-<map_id>.json`,
-written by `eval`. A suggestion keeps the map its `prepared` event froze, and its badge is that
-map's evaluation.
+written by `eval`. **The map in force** for a key is the one its latest `evaluated` event names,
+passing or not (the badge says which); with none, `map_id` is null and suggestions are
+uncalibrated. A fit at the grid edge writes no map: the key stays uncalibrated and its
+`evaluated` event records `uncalibratable`. A suggestion keeps the map its `prepared` event
+froze, and its badge is that map's evaluation.
 
 ### 2.5 "Needs a stronger look"
 
@@ -173,7 +177,7 @@ provenance, so an evaluation can drop any of them:
 | a tagged review | same | `bulk_review:<name>` | the label event is in a `truth tag` set (3.3) |
 | accept on the page | any | `owner_accept` | `accept_suggestion` |
 | an edit | any | `owner_edit` | `edit_suggestion`; `set_priority`; `set_override` with type or areas; a dismissed second opinion (confirms the current label); a Details edit of severity, reach, detectability |
-| a closure verdict | likely_fixed, duplicate, obsolete, support_question | `owner_accept` / `owner_edit` | for its own suggestion document only: accept, or the owner's close of the item within 14 days with the matching reason (completed → likely_fixed, duplicate → duplicate, not planned → obsolete / support_question): **true**; a dismissal with a reason: **false**; without one: **no truth** |
+| a closure verdict | likely_fixed, duplicate, obsolete, support_question | `owner_accept` / `owner_edit` | for its own suggestion document only: accept, or the owner's close of the item within 14 days with the matching reason (completed → likely_fixed, duplicate naming the suggested other issue → duplicate, not planned → obsolete / support_question): **true**; a dismissal with a reason: **false**; a close with another reason, or a dismissal without one: **no truth** |
 
 **Folding:** records are replayed in time order; an area truth is the set built from adds and
 removes, with the provenance of the latest event touching it; an undone decision removes its
@@ -184,8 +188,10 @@ separately.
 ### 3.2 Two modes
 
 - **replay** (label decisions): `eval prepare <decision> --backend B` writes two files, a tuning
-  sample and a held-out sample, built as 2.1 with the replay cutoff (1.1); one `eval` session
-  answers both; `eval score` fits the map on tuning, freezes it, then scores the held-out set.
+  sample (at most `eval_tuning`, default 120) and a held-out sample, built as 2.1 with the
+  replay cutoff (1.1), plus a manifest of question ids and input hashes; one `eval` session
+  answers both; `eval score` re-verifies the manifest, fits the map on tuning, freezes it, then
+  scores the held-out set.
 - **live** (closure decisions): scores recorded suggestions against the verdicts that followed;
   nothing is re-asked, since "is this fixed" depends on the code of that moment.
 
@@ -213,12 +219,14 @@ bulk_review:<n>` then drops them.
 - **Accuracy:** the top answer equals the truth (`area`: the chosen set equals it exactly).
 - **ECE:** on the top answer's calibrated confidence (area: on every per-area yes/no marginal), 10
   bins `[k/10, (k+1)/10)`, the last closed. **Debiased** (Kumar et al. 2019): a bin with `n ≥ 2`
-  contributes `(ā − c̄)² − ā(1 − ā)/(n − 1)`, a bin with one item its plain `(ā − c̄)²`; the
-  `n`-weighted sum is clamped at 0 before the square root. **Interval:** 1,000 bootstrap resamples
+  contributes `(ā − c̄)² − ā(1 − ā)/(n − 1)`, a bin with one item its plain `(ā − c̄)²`; ECE =
+  `sqrt(max(0, Σ_b (n_b/N)·term_b))`, the ℓ2 calibration error. **Interval:** 1,000 bootstrap resamples
   by item, seed = the key's hash, the 5th and 95th percentiles. A non-finite result refuses the eval.
 - **Gate checks:** each eval also reports per-answer (classwise) ECE and the second-opinion rule's
-  **false-alarm rate**: the share of held-out items whose truth answer got calibrated p ≤ 0.2.
-  Second-opinion cards show it; the bars below are unchanged.
+  **false-alarm rate**: the share of held-out items whose truth answer got calibrated p ≤ 0.2
+  (area: the share of (item, area) pairs in the truth set given p ≤ 0.2). Second-opinion cards
+  show it; the bars below are unchanged. An item whose folded area truth is empty is left out of
+  area's eval.
 
 | Bar | Needs (**owner, 2026-10-25**: amends spec §7.1's 50) |
 |---|---|
@@ -233,7 +241,9 @@ Each eval records an `evaluated` event (project, backend, decision, question has
 accuracy, ECE and interval, classwise ECE, false-alarm rate, exclusions, bars passed, fitted `T`)
 and writes the map. A card's badge is the evaluation of its own map; the launch sheet shows the
 key's latest; `eval_exclude` in the project config makes an exclusion the default.
-**Drift:** when live accuracy over the last 30 truth records (never `owner_bulk`) of a key falls more than 10 points
+**Drift:** live accuracy is the agreement rate over a key's last 30 `owner_accept` / `owner_edit`
+records whose `from_backend` is the key's backend (each a card the owner read; never `owner_bulk`):
+the share where the truth equals the suggestion's top answer. When it falls more than 10 points
 below its evaluated accuracy, its cards say "drifting" and "apply all" is suspended for it until
 a new eval passes. **Cold start:** a key without a passing eval is unevaluated (uncalibrated
 without a map) and never in "apply all"; severity, reach, detectability and the closure
@@ -290,12 +300,17 @@ commit, tier, blast, effort).
 
 ### 4.6 Contract changes
 
-`schemas/common.schema.json` `suggestionBody`: `answer` also an array (area), the decision enum
-gains `detectability`, plus `map_id` and `raw`; `record-suggestions` accepts `triage`,
-`stronger_look` and alias launches (today only `RecommendClosures`, `crates/core/src/suggest.rs:188`)
-and requires a `prepared` question; `DecisionValue` (`crates/core/src/docs.rs`) gains the 4.2
-fields; `derive.rs` gains the accepted-suggestion layer; accept/edit actions name their card and
-component (a combined card's type or priority). Phase-1 suggestion documents keep parsing.
+| Where | Change |
+|---|---|
+| `schemas/common.schema.json` `suggestionBody` | `answer` also an array (area); the decision enum (`:219`) gains `detectability` and `estimates` (a record, not probabilities); `map_id`, `raw` |
+| `suggest.rs` | `record-suggestions` accepts `triage`, `stronger_look` and alias launches (today only `RecommendClosures`, `:188`) and requires a `prepared` question; `BACKEND` (`:31`, hard-coded `recommend_closures`) becomes the launch's routing |
+| `docs.rs` | `LaunchKind` gains `Eval`; `holds_items` (`:43-45`) is false for `triage`, `stronger_look`, `eval`; `LaunchRequest` / `LaunchData` (`deny_unknown_fields`) gain `scope`; `DecisionValue` gains the 4.2 fields |
+| schemas | `page-launch` (kind enum `:37`) and `event-launch` gain `scope` and `eval`; new `event-prepared`, `event-evaluated`, `event-truth-tag` with `Kind` entries; `event-suggested` gains `raw`, `map_id`; `doc-issue` gains `triage` (4.5) |
+| `derive.rs` | the accepted-suggestion layer |
+| launch author check | `crates/cli/src/main.rs:492-497` also accepts author `schedule`, for kind `triage` only; `triage-request` records through `record_doc` as `sync-now` does (`crates/core/src/sync.rs:30`), bypassing `ingest::owned` |
+| page actions | accept/edit name their card and component (a combined card's type or priority) |
+
+Phase-1 suggestion and launch documents keep parsing.
 
 ---
 
@@ -315,8 +330,9 @@ component (a combined card's type or priority). Phase-1 suggestion documents kee
 
 A scheduled task cannot pin its model, so it never answers questions. `issue-dashboard-triage`
 (Haiku, low) runs `issue-dashboard triage-request --project P`, which selects the items (2.2)
-and records a launch request authored by `schedule` with the configured routing, refused while a
-triage launch is live; the task then messages the dispatcher session (found as the
+and records a launch request authored by `schedule` with the configured routing (4.6), refused while a
+triage launch is live; with nothing eligible it records nothing and reports "nothing to triage".
+The task then messages the dispatcher session (found as the
 `issues-dashboard` skill finds it) to wake it. The dispatcher reserves `schedule` requests as it
 does the owner's and starts the session with that model and effort. The session passes its own
 model and effort (`get_session self`) to `prepare --session-model`, which refuses a mismatch, and
@@ -364,7 +380,11 @@ launch sheet warns "this routing has no evaluation" with **Evaluate…**.
 | apply all | never second opinions, closures, sub-Bulk or drifting keys; combined-card gating · core + `page/suggestions.test.js` (today it excludes type cards) |
 | stale accept | accept refuses after the item's value changed · core |
 | drift | on at 30 records and > 10 points; off after a passing eval · core |
-| daily launch | `triage-request` refused while triage is live; the dispatcher reserves `schedule` requests, still refuses other non-owner authors · core |
+| daily launch | `triage-request` refused while triage is live, a no-op with nothing eligible; the dispatcher reserves `schedule` requests of kind `triage` only, still refuses other non-owner authors and `schedule` on other kinds · core + CLI |
+| eligibility | an item re-selected only for a closure recheck gets no `full` questions · core |
+| closure truth | a duplicate close naming another issue than the suggested one is no truth · core |
+| area eval | false-alarm over truth-set pairs; empty folded truth excluded · core unit |
+| replay cutoff | a comment after an item's priority label time is absent from its type input · core |
 | self-check | `prepare --session-model M` refuses a mismatch with the routing · core |
 | alias | phase-1 `recommend_closures` documents parse; existing `suggest` tests stay green · core |
 
