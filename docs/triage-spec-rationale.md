@@ -33,7 +33,7 @@ Self-stated probabilities from one pass are expected to be miscalibrated. That i
 backend is calibrated (temperature scaling) and measured on held-out history before its badge
 reads "evaluated".
 
-## The ECE simulation (why 100 and the debiased estimator)
+## The ECE simulation (why 100 and plain ECE)
 
 The simulation draws top-answer confidences (0.25 + 0.75·Beta(5,2)), outcomes at exactly that
 probability, 10 equal-width bins, and counts how often a backend fails the bar ECE ≤ 0.10.
@@ -41,7 +41,7 @@ probability, 10 equal-width bins, and counts how often a backend fails the bar E
 cell; 2,000 for false passes). The first run's debiased column (18 % / 6 %) did not use the
 formula the spec states and is withdrawn.
 
-| Held-out | Honest backend fails — plain ℓ1 ECE | — debiased ℓ2 (spec §3.4) | Backend 0.15 overconfident passes — ℓ1 | — debiased ℓ2 |
+| Held-out | Honest backend fails — plain ℓ1 ECE (spec §3.4) | — debiased ℓ2 | Backend 0.15 overconfident passes — ℓ1 | — debiased ℓ2 |
 |---|---|---|---|---|
 | 50 | 47 % | 26 % | — | — |
 | 100 | 13 % | 11 % | 8 % | 21 % |
@@ -49,9 +49,11 @@ formula the spec states and is withdrawn.
 
 Plain ℓ1 is biased upward, so at 0.10 it acts as a stricter bar; debiased ℓ2 estimates the true
 error, so a backend truly at 0.10 passes about half the time. At 100 examples the two fail an
-honest backend about equally often, and debiased lets more overconfident backends through. The
-owner chose 100 examples with the debiased estimator (Kumar et al. 2019) on 2026-10-25, from the
-withdrawn numbers; that choice is re-put to the owner with these.
+honest backend about equally often, and debiased lets more overconfident backends through.
+The owner first chose 100 examples with the debiased estimator (Kumar et al. 2019) from the
+withdrawn numbers, then, on these, **switched to plain ℓ1 ECE ≤ 0.10 at 100 held-out examples
+(2026-10-25)**. 200 examples would cut both error rates but is out of reach: Store's priority
+history holds about 150 held-out items.
 
 ## Other choices the owner made
 
@@ -104,7 +106,7 @@ Every finding was checked against the code and all were folded:
 | estimates had no `decision` enum entry | `estimates`, a record (4.6) |
 | `prepare` wrote every decision for every item | only the eligible (item, decision) pairs (2.1) |
 | "the `map_id` in force" undefined; uncalibratable only in a test row | 2.4 defines both |
-| ECE weights and unit not exact; the simulation used another quantity | exact formula (3.4); simulation re-run (above) |
+| ECE weights and unit not exact; the simulation used another quantity | simulation re-run (above); the owner then chose plain ℓ1, stated exactly (3.4) |
 | false-alarm rate undefined for `area`; empty area truth | 3.4 |
 | tuning size, eval manifest | 3.2 |
 | drift population; duplicate close must name the pair; other-reason close | 3.5, 3.1 |

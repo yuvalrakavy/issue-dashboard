@@ -218,9 +218,9 @@ bulk_review:<n>` then drops them.
 - **Sample:** a replay asks at most `eval_sample` held-out items (default 120), in hash order.
 - **Accuracy:** the top answer equals the truth (`area`: the chosen set equals it exactly).
 - **ECE:** on the top answer's calibrated confidence (area: on every per-area yes/no marginal), 10
-  bins `[k/10, (k+1)/10)`, the last closed. **Debiased** (Kumar et al. 2019): a bin with `n ≥ 2`
-  contributes `(ā − c̄)² − ā(1 − ā)/(n − 1)`, a bin with one item its plain `(ā − c̄)²`; ECE =
-  `sqrt(max(0, Σ_b (n_b/N)·term_b))`, the ℓ2 calibration error. **Interval:** 1,000 bootstrap resamples
+  bins `[k/10, (k+1)/10)`, the last closed; **plain ℓ1** (owner, 2026-10-25): ECE =
+  `Σ_b (n_b/N)·|ā_b − c̄_b|`, ā the bin's accuracy, c̄ its mean confidence, empty bins skipped.
+  **Interval:** 1,000 bootstrap resamples
   by item, seed = the key's hash, the 5th and 95th percentiles. A non-finite result refuses the eval.
 - **Gate checks:** each eval also reports per-answer (classwise) ECE and the second-opinion rule's
   **false-alarm rate**: the share of held-out items whose truth answer got calibrated p ≤ 0.2
@@ -230,10 +230,10 @@ bulk_review:<n>` then drops them.
 
 | Bar | Needs (**owner, 2026-10-25**: amends spec §7.1's 50) |
 |---|---|
-| **Evaluated** | at least **100** held-out examples and debiased ECE ≤ 0.10 |
+| **Evaluated** | at least **100** held-out examples and ECE ≤ 0.10 |
 | **Bulk** | Evaluated, plus accuracy ≥ 85 % |
 
-Why 100 and debiased: rationale, "The ECE simulation".
+Why 100 and plain ECE: rationale, "The ECE simulation".
 
 ### 3.5 Records, drift, cold start
 
@@ -369,7 +369,7 @@ launch sheet warns "this routing has no evaluation" with **Evaluate…**.
 | two stages | priority cannot be prepared before stage 1 is recorded; its hash changes when `severity.toml` does · core |
 | rubric | table boundaries 25/26, 8/9, 2/3, and the silent bump · core unit |
 | calibration | synthetic answers at a known `T` → fit within one grid step; a fit at the grid edge reports "uncalibratable" · core unit |
-| ECE and bars | debiased ECE ≈ 0 on a calibrated sample, ≈ truth on a skewed one; a one-item bin and a negative sum are handled; same seed → same interval; bars flip at 99/100, 0.10, 85 % · core unit |
+| ECE and bars | ECE equals a hand-computed value on a fixed two-bin fixture (literal, e.g. 0.07); a one-item bin and empty bins are handled; same seed → same interval; bars flip at 99/100, 0.10, 85 % · core unit |
 | gate checks | the false-alarm rate on a fixture whose stated 0.1 answers are true 40 % of the time · core unit |
 | split | adding items moves no existing item · core unit |
 | provenance | label at 9:59 → `filed`, at 10:01 → `github_later`; area add/remove folding; paginated history · core, replayed `GitHub` |
@@ -396,7 +396,7 @@ decision, `prepared`, raw + calibrated (identity). 2/5 **Eval**: `refresh-histor
 VillaRakavy history. 3/5 **Page**: ch. 4. 4/5 **Launch**: ch. 5, the scheduled task. 5/5 **Docs +
 skills**: a triage skill absorbing `docs/closing-recommendations.md`; the dispatcher and
 `issues-dashboard` skills; README; `docs/triage-tutorial.md`; the spec.md corrections (§7.1's 50 →
-100 with debiased ECE, its "already have enough examples" line, §7.4's routing, §5.8's alias,
+100 with plain ECE ≤ 0.10, its "already have enough examples" line, §7.4's routing, §5.8's alias,
 §6.7's likelihood folded into reach).
 Inline, one pre-merge deep gate; phases 1–2 may merge before 3–4.
 
