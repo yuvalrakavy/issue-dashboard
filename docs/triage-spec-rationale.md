@@ -33,18 +33,27 @@ Self-stated probabilities from one pass are expected to be miscalibrated. That i
 backend is calibrated (temperature scaling) and measured on held-out history before its badge
 reads "evaluated".
 
-## The ECE simulation (why 100 and the debiased estimator)
+## The ECE simulation (why 100 and plain ECE)
 
-The simulation draws a backend whose probabilities are perfectly calibrated and counts how often
-it still fails ECE ≤ 0.10 (10 equal-width bins):
+The simulation draws top-answer confidences (0.25 + 0.75·Beta(5,2)), outcomes at exactly that
+probability, 10 equal-width bins, and counts how often a backend fails the bar ECE ≤ 0.10.
+**Re-run 2026-10-25 with the spec's exact formula** ([triage-ece-sim.py](triage-ece-sim.py), `python3 -I`, 3,000 runs per
+cell; 2,000 for false passes). The first run's debiased column (18 % / 6 %) did not use the
+formula the spec states and is withdrawn.
 
-| Held-out examples | Plain ECE fails it | Debiased ECE fails it |
-|---|---|---|
-| 50 | 48 % | 18 % |
-| 100 | 12 % | 6 % |
+| Held-out | Honest backend fails — plain ℓ1 ECE (spec §3.4) | — debiased ℓ2 | Backend 0.15 overconfident passes — ℓ1 | — debiased ℓ2 |
+|---|---|---|---|---|
+| 50 | 47 % | 26 % | — | — |
+| 100 | 13 % | 11 % | 8 % | 21 % |
+| 200 | 0.4 % | 1.8 % | 4 % | 10 % |
 
-At spec §7.1's 50 examples, chance decides whether an honest backend passes. The owner chose 100
-examples together with the debiased estimator (Kumar et al. 2019) on 2026-10-25.
+Plain ℓ1 is biased upward, so at 0.10 it acts as a stricter bar; debiased ℓ2 estimates the true
+error, so a backend truly at 0.10 passes about half the time. At 100 examples the two fail an
+honest backend about equally often, and debiased lets more overconfident backends through.
+The owner first chose 100 examples with the debiased estimator (Kumar et al. 2019) from the
+withdrawn numbers, then, on these, **switched to plain ℓ1 ECE ≤ 0.10 at 100 held-out examples
+(2026-10-25)**. 200 examples would cut both error rates but is out of reach: Store's priority
+history holds about 150 held-out items.
 
 ## Other choices the owner made
 
@@ -86,7 +95,25 @@ the owner had made.
 | 14 | S2 | No wake path for a `schedule` request; launches with no items are refused | The request names its selected items; the task messages the dispatcher, marked verify during implementation (5.2) |
 | 15 | S2 | Test rows lacked seams and fixtures | Rows added; replay fixtures gain comment bodies and label times (6.1) |
 
-**Size.** With these folded in, the spec is about 25 KB, over the 20 KB T2 cap. What made it
+### Confirming read of the fold (2026-10-25)
+
+One reader (Sonnet, medium) checked the 15 fixes against the spec and code: 0 S3, 9 S2, 2 S1.
+Every finding was checked against the code and all were folded:
+
+| Finding | Fold |
+|---|---|
+| §4.6 missed the owner-only launch author check (`main.rs:492`), `holds_items`, schema and event additions, `suggest::BACKEND` | §4.6 rewritten as a table; §5.2 names it |
+| estimates had no `decision` enum entry | `estimates`, a record (4.6) |
+| `prepare` wrote every decision for every item | only the eligible (item, decision) pairs (2.1) |
+| "the `map_id` in force" undefined; uncalibratable only in a test row | 2.4 defines both |
+| ECE weights and unit not exact; the simulation used another quantity | simulation re-run (above); the owner then chose plain ℓ1, stated exactly (3.4) |
+| false-alarm rate undefined for `area`; empty area truth | 3.4 |
+| tuning size, eval manifest | 3.2 |
+| drift population; duplicate close must name the pair; other-reason close | 3.5, 3.1 |
+| comment after one label leaks to a sibling question | one cutoff per item (1.1) |
+| empty `triage-request`; a line anchor 10 off | 5.2; 2.1 |
+
+**Size.** With these folded in, the spec is about 28 KB, over the 20 KB T2 cap. What made it
 grow is the definitions the measurement depends on (formulas, identity, truth folding). Leaving
 any of them out is what the verification flagged as a defect. If the cap is to hold, the natural
 split is (a) seam + evaluation, chapters 1–3, and (b) page + launch, chapters 4–5.
