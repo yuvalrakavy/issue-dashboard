@@ -35,7 +35,7 @@ fn write(path: &Path, v: Value) {
 
 fn marker(seq: i64, created: &str) -> Value {
     json!({"generation": format!("gen-{seq}"), "sequence": seq, "created_at": created,
-           "counts": {"issues": 1, "acks": 0, "launch_status": 0, "suggestions": 0, "plans": 0, "forks": 0, "metrics": 0}})
+           "parts": 1, "length": 100})
 }
 
 fn plan_with_markers(d: &Path) -> Value {
@@ -83,7 +83,7 @@ fn publish_plan_pins_the_version_read_and_cleans_from_the_marker_listing() {
     assert_eq!(switch[0]["if_version"], json!(4));
     assert_eq!(
         s["clean"],
-        json!([{"generation": "gen-3", "list": ["gens/gen-3/issues"]}])
+        json!([{"generation": "gen-3", "list": ["gens/gen-3/parts"]}])
     );
 }
 

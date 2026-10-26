@@ -1524,8 +1524,8 @@ so it is published as an **immutable generation** and switched on by one pinned 
    run's (the heartbeat's), stop: a newer run already published or confirmed the page;
 3. if the outbox's fingerprint equals the active generation's, write only `heartbeat`, pinned
    to the version read in step 1, and stop: the page already shows this content;
-4. write the outbox's documents under `gen-<seq>/…`, in as many batches as needed; nothing
-   reads them yet;
+4. write the outbox under `gen-<seq>/…`: its JSON text cut into parts of at most 240 KiB each,
+   in as many batches as needed; nothing reads them yet;
 5. write `meta` alone, pinned to the version read in step 1, naming `gen-<seq>` as active and
    carrying the outbox's fingerprint;
 6. delete the generation that was active before, once the switch has succeeded.
@@ -1553,7 +1553,7 @@ in 10.10.
 
 **Cleanup keeps the previous generation.** Step 6 deletes only generations older than the one
 that was active before the switch, so a page that read `meta` just before the switch can still
-finish reading. A page that finds a document missing re-reads `meta` and starts over. A
+finish reading. A page that finds a part missing re-reads `meta` and starts over. A
 generation that never became active (a sync that died after step 4) is deleted only once it is
 more than one hour old, so a publisher still uploading is never cut off. Only one sync job runs
 per project (it is one scheduled task), so overlapping publishers arise only from a slow run
@@ -1854,8 +1854,8 @@ under the old name are skipped by ingest as another project's. There is no renam
   performs, with `ArtifactData`, what three CLI helpers plan, none of which needs a root:
   `pages` (the four page collections, listed with `out_dir`, into the `--pages` file),
   `publish-plan` and `cleanup-plan`. A generation is a marker `gens/gen-<seq>` (sequence,
-  project, `created_at`, per-collection `counts`), written in the first batch, then every
-  outbox document at `gens/gen-<seq>/<collection>/<id>`, in batches of at most 50 entries and
+  project, `created_at`, `parts`, `length`), written in the first batch, then the outbox's
+  parts at `gens/gen-<seq>/parts/p<NNNN>` (packed generations, below), in batches of at most 50 entries and
   900 KiB of files; then the switch: `meta/active` set to the outbox's meta, pinned to the
   version the skill read (unpinned on the first publish, which the database refuses if the
   document exists). An outbox no newer than the active generation is a stop that writes
@@ -1900,6 +1900,22 @@ under the old name are skipped by ingest as another project's. There is no renam
   `ArtifactData` batch applies all-or-nothing is unverified. The page shows the older state
   until the next run, which publishes again. An item row's repo read time and its stale tag
   come from the heartbeat too (`syncedRepo`), not only the status strip.
+- *Packed generations (2026-10-26, owner-approved T1).* The app still skipped slots: a publish
+  run measured 290 s (`local_b3d40eea`): about 95 s of setup, cycle and plan, about 120 s for
+  5 write batches and about 70 s of cleanup (7 listings, 5 delete batches). The cost is per
+  batch ENTRY, not per byte: `ArtifactData` `batch` cannot take its writes from a file, so the
+  model emits every entry (about 6k output tokens a batch). So a generation is now the outbox's
+  JSON text in parts, `gens/gen-<seq>/parts/p0001…` = `{index, text}`, each part's serialized
+  document at most `PART_BYTES` (240 KiB, counted with JSON escaping, cut on a character
+  boundary); the marker carries `parts` and `length` (UTF-16 code units of the joined text, what
+  the page's `String.length` measures) in place of `counts`. A 621 KB outbox is 3 parts in one
+  batch, and cleanup is one listing and one delete batch. Probed on the page first: a 240 KiB
+  text field round-trips exactly. The page lists `gens/<g>/parts`, drops snapshots that do not
+  exist, sorts by `index`, and accepts only indexes 1..`parts` and a joined length equal to
+  `length` that parses; anything else re-reads `meta/active`. A marker without `parts` (written
+  before this) is partial with no retry, and a partial load returns no `data`, so the page keeps
+  what it showed until the next publish. Cleanup lists only `parts` for a packed marker, all
+  eight `GENERATION_COLLECTIONS` for an older one.
 - *Closing from the page (slice 3, 10.0's exception).* A `close` decision carries
   `value.close = {reason: completed | not_planned | duplicate, duplicate_of, comment}`. The cycle
   gains a write step between ingest and observe, so the same cycle's read and outbox already

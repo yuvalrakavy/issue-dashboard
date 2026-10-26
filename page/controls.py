@@ -6,9 +6,14 @@ import os, shutil, subprocess, sys, tempfile
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MUTANTS = [
     ("generation name check", "!GENERATION.test(generation)", "false"),
-    ("short collection retries", "data[c].length < Math.min(want, LIST_LIMIT)", "false"),
     ("missing marker retries", "if (!marker.exists) {", "if (false) {"),
-    ("over-limit collection is partial", 'if (want !== null && want > LIST_LIMIT) why', "if (false) why"),
+    ("legacy marker is partial", 'typeof m.parts !== "number" || typeof m.length !== "number"', "false"),
+    ("parts joined in index order", "parts.sort((a, b) => a.index - b.index);", ""),
+    ("part count must match", "parts.length === m.parts && ", ""),
+    ("part indexes must run 1..k", "p.index === k + 1 && ", ""),
+    ("joined length must match", "text.length !== m.length", "false"),
+    ("gone part not joined", "snap.docs.filter((d) => d.exists)", "snap.docs"),
+    ("short generation retries", "      last = { meta, generation, why, attempts: attempt };\n", "      return Object.assign({ status: \"partial\" }, { meta, generation, why, attempts: attempt });\n"),
     ("exclude wins", "if (hits(view.exclude)) return false;", ""),
     ("empty include is every repo", "!(view.include && view.include.length) || ", ""),
     ("inbox item shown once", "!shown.has(i.id)", "true"),

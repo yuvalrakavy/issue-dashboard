@@ -50,26 +50,43 @@ test("the random part of an id is the random number in 8 base-36 digits", () => 
   assert.equal(D.newId("D", jan, () => 1 / 36), "D_20260105_030405_10000000");
 });
 
-// Kills: the `exists` filter on a listed collection (a document deleted between the listing
-// and its read comes back as a snapshot that does not exist).
-test("a listed document that no longer exists is not loaded as data", async () => {
-  const g = "gens/gen-4";
+// Kills: the `exists` filter on the parts listing (a part deleted between the listing and its
+// read comes back as a snapshot that does not exist).
+test("a listed part that no longer exists is not joined", async () => {
+  const text = JSON.stringify({ project: "home", sequence: 4, issues: [{ id: "I_1" }, { id: "I_2" }] });
+  const half = Math.ceil(text.length / 2);
   const docs = {
     "meta/active": { generation: "gen-4", sequence: 4 },
-    [g]: { generation: "gen-4", sequence: 4, counts: { issues: 2, acks: 0, launch_status: 0, suggestions: 0, plans: 0, forks: 0, metrics: 0 } },
+    "gens/gen-4": { generation: "gen-4", sequence: 4, parts: 2, length: text.length },
   };
-  const live = (id) => ({ id, exists: true, data: () => ({ id }) });
+  const live = (index, t) => ({ exists: true, data: () => ({ index, text: t }) });
+  const gone = { exists: false, data: () => ({ index: 2, text: "stale" }) };
   const db = {
     doc: (p) => ({ get: async () => ({ exists: p in docs, data: () => docs[p] }) }),
     collection: () => ({
-      limit: () => ({
-        get: async () => ({ docs: [live("I_1"), { id: "I_gone", exists: false, data: () => undefined }, live("I_2")] }),
-      }),
+      limit: () => ({ get: async () => ({ docs: [live(1, text.slice(0, half)), gone, live(2, text.slice(half))] }) }),
     }),
   };
   const r = await D.loadGeneration(db);
-  assert.equal(r.status, "ok");
+  assert.equal(r.status, "ok", r.why);
   assert.deepEqual(r.data.issues.map((i) => i.id), ["I_1", "I_2"]);
+});
+
+// Kills: the part count check (an extra empty part keeps the joined length, so only the count
+// tells this generation is not the one its marker describes).
+test("a generation with more parts than its marker says is partial", async () => {
+  const text = JSON.stringify({ project: "home", sequence: 4, issues: [] });
+  const docs = {
+    "meta/active": { generation: "gen-4", sequence: 4 },
+    "gens/gen-4": { generation: "gen-4", sequence: 4, parts: 1, length: text.length },
+  };
+  const part = (index, t) => ({ exists: true, data: () => ({ index, text: t }) });
+  const db = {
+    doc: (p) => ({ get: async () => ({ exists: p in docs, data: () => docs[p] }) }),
+    collection: () => ({ limit: () => ({ get: async () => ({ docs: [part(1, text), part(2, "")] }) }) }),
+  };
+  const r = await D.loadGeneration(db, { attempts: 1 });
+  assert.equal(r.status, "partial");
 });
 
 // Kills: waiting_on_you counting a review of an inside pull request.
