@@ -26,11 +26,11 @@
       const meta = active.data();
       const generation = meta && meta.generation;
       if (typeof generation !== "string" || !GENERATION.test(generation)) {
-        return { status: "partial", meta, why: "meta/active names no generation", attempts: attempt, data: emptyData() };
+        return { status: "partial", meta, why: "meta/active names no generation", attempts: attempt };
       }
       const marker = await db.doc("gens/" + generation).get();
       if (!marker.exists) {
-        last = { meta, generation, why: generation + " has no marker", data: emptyData(), attempts: attempt };
+        last = { meta, generation, why: generation + " has no marker", attempts: attempt };
         continue;
       }
       const m = marker.data() || {};

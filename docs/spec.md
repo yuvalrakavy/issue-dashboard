@@ -1915,7 +1915,12 @@ under the old name are skipped by ingest as another project's. There is no renam
   `length` that parses; anything else re-reads `meta/active`. A marker without `parts` (written
   before this) is partial with no retry, and a partial load returns no `data`, so the page keeps
   what it showed until the next publish. Cleanup lists only `parts` for a packed marker, all
-  eight `GENERATION_COLLECTIONS` for an older one.
+  eight `GENERATION_COLLECTIONS` for an older one. *From the gate (depth reader):* an `unchanged`
+  run would leave the page on an unpacked active generation for as long as the tracker stays
+  quiet, so `publish-plan` publishes whenever the active generation's listed marker has no
+  `parts`, whatever the fingerprint says. The page must be republished BEFORE the first packed
+  publish: the older page reads a packed generation as an empty board marked ok. Every partial
+  load now returns no `data`, including the missing-marker and unnamed-generation ones.
 - *Closing from the page (slice 3, 10.0's exception).* A `close` decision carries
   `value.close = {reason: completed | not_planned | duplicate, duplicate_of, comment}`. The cycle
   gains a write step between ingest and observe, so the same cycle's read and outbox already

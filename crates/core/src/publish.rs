@@ -292,8 +292,18 @@ pub fn plan_with_heartbeat(
         }));
     }
     let print = fingerprint(outbox);
+    // An active generation written before packing is one the page cannot read, so it is
+    // replaced even when its content is this outbox's.
+    let unpacked = |a: &Active| {
+        a.meta
+            .get("generation")
+            .and_then(Value::as_str)
+            .and_then(|g| markers.get(g))
+            .is_some_and(|m| m.get("parts").and_then(Value::as_u64).is_none())
+    };
     if let Some(a) = active
         && a.meta.get("fingerprint").and_then(Value::as_str) == Some(print.as_str())
+        && !unpacked(a)
     {
         return unchanged(outbox, a, seq, heartbeat_version, out);
     }

@@ -66,7 +66,7 @@ fn batch_bytes(b: &[Value]) -> usize {
 /// An outbox of only `issues`, so the sizes of a batch are exactly the test's.
 fn bare(issues: Vec<Value>) -> Value {
     let mut o = with_sequence(real_outbox(), 500);
-    for c in publish::GENERATION_COLLECTIONS {
+    for c in publish::COLLECTIONS {
         o[c] = json!([]);
     }
     o["issues"] = json!(issues);

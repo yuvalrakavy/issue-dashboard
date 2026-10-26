@@ -299,8 +299,9 @@ fn cleanup_refuses_a_plan_that_did_not_publish() {
     assert_eq!(publish::cleanup(&p, out.path(), out.path()).unwrap_err().exit_code(), 1);
 }
 
-/// Text that serializes larger than it reads: quotes, backslashes, newlines and control
-/// characters escape, and multi-byte characters take several bytes.
+/// Text that serializes larger than it reads: the outbox's JSON already escapes quotes,
+/// backslashes, newlines and control characters, so packing that text escapes them a second
+/// time, and multi-byte characters take several bytes.
 const AWKWARD: &str = "é\"\\\n\u{1}😀 plain ";
 
 #[test]

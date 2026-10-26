@@ -194,6 +194,16 @@ test("a meta naming no generation is partial without listing anything", async ()
   assert.equal(r.why, "meta/active names no generation");
   assert.equal(r.attempts, 1, "a bad name is not retried");
   assert.deepEqual(db.lists, []);
+  assert.equal(r.data, undefined, "a partial load leaves what the page shows");
+});
+
+test("a generation whose marker is gone is retried, and a partial leaves what the page shows", async () => {
+  const db = fakeDb({ "meta/active": meta(4) });
+  const r = await D.loadGeneration(db, { attempts: 2 });
+  assert.equal(r.status, "partial");
+  assert.equal(r.attempts, 2);
+  assert.equal(r.why, "gen-4 has no marker");
+  assert.equal(r.data, undefined);
 });
 
 test("the tiles use derive.rs's predicates and count only open items", () => {
