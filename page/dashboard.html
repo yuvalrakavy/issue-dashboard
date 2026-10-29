@@ -998,9 +998,10 @@ footer .wrap { padding-block: 0 32px; font-size: .82rem; color: var(--muted); di
     const pick = (label, key, options) => h("select", { "aria-label": "Estimate " + label, onchange: (ev) => save({ [key]: ev.target.value }) },
       v[key] ? null : h("option", { value: "", selected: "selected", disabled: "disabled" }, "—"),
       options.map((o) => h("option", Object.assign({ value: o }, o === v[key] ? { selected: "selected" } : {}), o)));
-    const blast = h("input", { "aria-label": "Estimate blast", placeholder: "blast", value: v.blast || "" });
-    const sites = h("input", { "aria-label": "Estimate sites", placeholder: "file:line, file:line", value: (v.sites || []).join(", ") });
-    const readAt = h("input", { "aria-label": "Estimate commit", class: "mono", placeholder: "commit", size: "9", value: v.read_at ? String(v.read_at).slice(0, 7) : "" });
+    const f = D.estimatesFormValues(v);
+    const blast = h("input", { "aria-label": "Estimate blast", placeholder: "blast", value: f.blast });
+    const sites = h("input", { "aria-label": "Estimate sites", placeholder: "file:line, file:line", value: f.sites });
+    const readAt = h("input", { "aria-label": "Estimate commit", class: "mono", placeholder: "commit", size: "9", value: f.read_at });
     return [
       "tier ", pick("tier", "tier", ["T0", "T1", "T2", "T3"]), " · effort ", pick("effort", "effort", ["S", "M", "L"]), " ", whose,
       h("div", {}, blast, " ", h("button", { class: "btn quiet", onclick: () => save({ blast: blast.value }) }, "Save blast")),

@@ -484,7 +484,7 @@ const TRIAGE_EXAMPLE: &str = r#"{
     {"question": "q-0123456789abcdef0123", "probabilities": {"true": 0.85, "false": 0.15}, "reason": "abc1234 removed the cited call", "commit": "abc1234"}
   ],
   "estimates": [
-    {"item": "owner/repo#15", "sites": ["src/config.rs:120"], "read_at": "abc1234", "tier": "T1", "blast": "the config loader", "effort": "S", "reason": "one parser function reads the key"}
+    {"item": "owner/repo#15", "sites": ["src/config.rs:120"], "read_at": "abc1234", "tier": "T1", "blast": "quick", "effort": "S", "reason": "one parser function in the config loader reads the key"}
   ],
   "suggestions": [
     {"kind": "batch", "members": ["owner/repo#15", "owner/repo#16"], "surface": "the config loader", "confidence": 0.7, "reason": "both are in config.rs"}
@@ -538,13 +538,12 @@ fn triage(
         format!(
             "3. Write answers.json with `\"backend\": \"{backend}\"` and one entry per question \
                  (`question`, `probabilities`, `reason`, and `commit`, `related` or `reply` where \
-                 the {SESSION_SKILL} skill says), and run \
-                 `{cli} record-suggestions --launch {id} answers.json`. It is checked whole: fix any \
-                 refused entry and run it again."
+                 the {SESSION_SKILL} skill says)."
         ),
         format!(
             "4. In the same file, add where they apply: `estimates` for each issue you read code \
-                 for; one `batch` entry in `suggestions` for two or more issues of one repo whose \
+                 for (`blast` is the gate level a fix needs, a gate of the repo's recipe such as \
+                 `quick`); one `batch` entry in `suggestions` for two or more issues of one repo whose \
                  fixes touch the same code (`members`, the shared `surface`), to be fixed together \
                  with one gate, never across repos and never an issue in two batches; and a \
                  `left_out` entry for an issue you judge still open and in no batch, with `why`: \
@@ -552,11 +551,15 @@ fn triage(
                  and a batch a `confidence` between 0 and 1. For example:\n\n{}",
             fenced(&TRIAGE_EXAMPLE.replace("BACKEND", &backend))
         ),
+        format!(
+            "5. Run `{cli} record-suggestions --launch {id} answers.json` with the whole file. It \
+                 is checked whole: fix any refused entry and run it again."
+        ),
     ];
     if full {
         steps.push(format!(
-            "5. Run `{cli} prepare --launch {id} --session-model <model>@<effort> --stage priority \
-                 --out priority.json`, answer it as in step 2, and record it as in step 3."
+            "6. Run `{cli} prepare --launch {id} --session-model <model>@<effort> --stage priority \
+                 --out priority.json`, answer it as in step 2, and record it as in steps 3 and 5."
         ));
     }
     b.tracker(format!("## Steps\n\n{}", steps.join("\n")));

@@ -342,8 +342,17 @@ fn an_estimates_edit_shows_over_the_recorded_estimates_merges_and_records_no_tru
     let truth_after = tr.t.root.read(|l| truth::owner_records(l.conn(), "home")).unwrap();
     assert_eq!(truth_after.len(), truth_before, "{truth_after:?}");
 
-    // Undo takes the later edit back.
-    assert_eq!(ingest(&tr, &undo("d-u", "d-e2"), 22), None);
+    // A third edit of one field keeps every field the earlier edits set.
+    let e3 = estimates_edit("d-e3", &a, json!({"blast": "full"}), 22);
+    assert_eq!(ingest(&tr, &e3, 22), None);
+    let mut kept = want.clone();
+    kept["edited"] = json!({"tier": "T2", "effort": "L", "sites": ["src/b.rs:2", "src/c.rs:3"], "read_at": "def5678", "blast": "full"});
+    assert_eq!(triage_of(&tr, &a)["estimates"], kept);
+
+    // Undo takes an edit back.
+    assert_eq!(ingest(&tr, &undo("d-u3", "d-e3"), 23), None);
+    assert_eq!(triage_of(&tr, &a)["estimates"], want);
+    assert_eq!(ingest(&tr, &undo("d-u", "d-e2"), 24), None);
     want["edited"] = json!({"tier": "T2", "effort": "M"});
     assert_eq!(triage_of(&tr, &a)["estimates"], want);
 }

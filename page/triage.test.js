@@ -137,6 +137,14 @@ test("the estimates shown are the owner's edit over the recorded ones", () => {
     { tier: "T0", effort: null, blast: null, sites: null, read_at: null, edited: true });
 });
 
+test("the estimates editor starts from the full commit, so saving the sites keeps it", () => {
+  const full = "def5678901234567890123456789012345678901";
+  const f = D.estimatesFormValues({ tier: "T1", effort: "S", blast: "quick", sites: ["src/a.rs:1", "src/b.rs:2"], read_at: full, edited: false });
+  assert.deepEqual(f, { blast: "quick", sites: "src/a.rs:1, src/b.rs:2", read_at: full });
+  assert.equal(D.estimatesEditFields(issue(1), { sites: f.sites, read_at: f.read_at }).fields.value.estimates.read_at, full);
+  assert.deepEqual(D.estimatesFormValues(null), { blast: "", sites: "", read_at: "" });
+});
+
 test("a support question is a closing card that closes as not planned", () => {
   const s = tg("support_question", 1);
   assert.deepEqual(D.suggestionCards([s], [issue(1)], [], []).cards.map((c) => c.s.kind), ["support_question"]);

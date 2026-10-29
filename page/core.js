@@ -805,6 +805,13 @@
     return out;
   }
 
+  // The editor's starting text for the estimates shown: the full commit, never a shortened one,
+  // since saving the sites saves this commit with them.
+  function estimatesFormValues(shown) {
+    const v = shown || {};
+    return { blast: v.blast || "", sites: (v.sites || []).join(", "), read_at: v.read_at ? String(v.read_at) : "" };
+  }
+
   // A priority card more than one level from the rubric's (4.1) says so; otherwise null.
   function rubricNote(s) {
     if (s.kind !== "priority" || !s.rubric_level) return null;
@@ -978,7 +985,7 @@
     dismissedSuggestions, suggestionCards, dismissSuggestionFields, closePrefill, fixLaunchFields, recommendFields, READ_ONLY_RECIPE,
     triageLive, fixLaunchStates, triageLaunchFields, evalLaunchFields, noEvaluation,
     strongerLookList, strongerLookFields, metricsRows,
-    actedSuggestions, answerText, triageCards, acceptFields, acceptCardFields, editFields, applyAllFields, detailsEditFields, estimatesEditFields, shownEstimates, rubricNote, secondOpinionNote,
+    actedSuggestions, answerText, triageCards, acceptFields, acceptCardFields, editFields, applyAllFields, detailsEditFields, estimatesEditFields, shownEstimates, estimatesFormValues, rubricNote, secondOpinionNote,
   };
   root.IssueDashboard = api;
   if (typeof module === "object" && module.exports) module.exports = api;

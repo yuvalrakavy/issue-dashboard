@@ -1773,8 +1773,13 @@ fn a_closures_brief_has_a_section_per_repo_its_closure_method_and_the_read_only_
     // The example in the brief is a file `record-suggestions` reads: an answer with its commit,
     // the estimates, a batch and an issue left out.
     let steps = &b.pieces.iter().find(|p| p.text.starts_with("## Steps")).unwrap().text;
+    // The file is recorded once, after everything is in it: answers, estimates, batches and
+    // the issues left out.
+    let record_step = "5. Run `tracker --root /r record-suggestions --launch RB answers.json` with the whole file.";
+    assert!(steps.contains(record_step), "{steps}");
+    assert_eq!(steps.matches("record-suggestions --launch RB").count(), 1, "{steps}");
     assert!(
-        steps.contains("run `tracker --root /r record-suggestions --launch RB answers.json`"),
+        steps.find("4. In the same file, add where they apply").unwrap() < steps.find(record_step).unwrap(),
         "{steps}"
     );
     let fence = steps.find("```\n{").expect("a fenced JSON example");
@@ -1786,6 +1791,8 @@ fn a_closures_brief_has_a_section_per_repo_its_closure_method_and_the_read_only_
     assert_eq!(example.answers.len(), 1);
     assert_eq!(example.answers[0].commit.as_deref(), Some("abc1234"));
     assert_eq!(example.estimates.len(), 1);
+    // `blast` is a gate level, not a surface.
+    assert_eq!(example.estimates[0].blast, "quick");
     // record-suggestions refuses an entry without a reason: the example gives each one.
     assert!(!example.estimates[0].reason.is_empty() && !example.left_out[0].reason.is_empty());
     assert!(!example.suggestions[0].reason.is_empty() && !example.answers[0].reason.is_empty());
