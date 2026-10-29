@@ -110,6 +110,13 @@ pub struct Target {
     pub token: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session: Option<String>,
+    /// The card an accept or edit was made on (triage spec 4.6): a combined card's id, or the
+    /// suggestion's own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub card: Option<String>,
+    /// Which part of the card: a combined card's `type` or `priority` (4.6).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub component: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -131,6 +138,13 @@ pub struct DecisionValue {
     /// An accept made by apply all (triage spec 4.3): `owner_bulk`, never ground truth (3.1).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bulk: Option<bool>,
+    /// A Details edit (triage spec 4.2): stored for ordering, never a label.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub severity: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reach: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detectability: Option<String>,
 }
 
 /// Why an issue is closed: GitHub's `state_reason`, as `gh issue close --reason` takes it.

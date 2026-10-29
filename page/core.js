@@ -634,6 +634,7 @@
   // batch's first member), its open members, and the issues a run left open with why. A
   // suggestion the page has dismissed leaves at once; one about an issue not in view, or
   // closed since, is not shown; a batch with fewer than two members still open is not either.
+  const CLOSING_KINDS = ["likely_fixed", "duplicate", "obsolete", "support_question"];
   function suggestionCards(suggestions, issues, decisions, acks, horizon) {
     const byId = new Map(issues.filter(isOpen).map((i) => [i.id, i]));
     const gone = dismissedSuggestions(decisions, acks, horizon);
@@ -650,7 +651,7 @@
       const issue = byId.get(s.item);
       if (!issue) continue;
       if (s.kind === "left_out") leftOut.push({ s, issue });
-      else if (["likely_fixed", "duplicate", "obsolete"].includes(s.kind)) cards.push({ s, issue, members: [issue] });
+      else if (CLOSING_KINDS.includes(s.kind)) cards.push({ s, issue, members: [issue] });
     }
     const order = (a, b) => cmp(a.s.made_at, b.s.made_at) || cmp(a.issue.alias, b.issue.alias);
     return { cards: cards.sort(order), leftOut: leftOut.sort(order) };
@@ -665,13 +666,131 @@
   // with the other issue named in the comment.
   function closePrefill(s) {
     if (s.kind === "likely_fixed") return { reason: "completed", comment: "Closed from the issue dashboard: fixed by " + s.commit + "." };
-    if (s.kind === "obsolete") return { reason: "not_planned" };
+    if (s.kind === "obsolete" || s.kind === "support_question") return { reason: "not_planned" };
     if (s.kind === "duplicate") {
       const other = String(s.related_alias || "");
       if (other && repoOf(other) === repoOf(s.alias)) return { reason: "duplicate", duplicateOf: other.split("#")[1] };
       return { reason: "not_planned", comment: "Closed from the issue dashboard as a duplicate of " + (other || "another issue") + "." };
     }
     return null;
+  }
+
+
+  // --- triage cards (triage spec 4.1-4.3) -----------------------------------------------
+
+  const LABEL_KINDS = ["type", "area", "priority"];
+  const BADGES = ["evaluated", "unevaluated", "uncalibrated", "drifting"];
+  const OPINION_RANK = ["priority", "type", "area"];
+
+  // The suggestions an accept, edit or dismiss of the page's hides before a cycle has seen
+  // it. Once a cycle has consumed the decision (any ack), the tracker's documents are the word.
+  function actedSuggestions(decisions, acks, horizon) {
+    const st = decisionStates(decisions, acks, horizon);
+    const out = new Set();
+    for (const s of Object.values(st.byId)) {
+      const d = s.doc;
+      if (!["accept_suggestion", "edit_suggestion", "dismiss_suggestion"].includes(d.action) || !d.target || !d.target.suggestion) continue;
+      if (s.ack || s.settled || s.undoneBy) continue;
+      out.add(d.target.suggestion);
+    }
+    return out;
+  }
+
+  // An answer as a card says it: an area set joined, none for an empty one.
+  function answerText(a) {
+    if (Array.isArray(a)) return a.length ? a.join(", ") : "none";
+    return a == null ? "none" : String(a);
+  }
+
+  // The type, area and priority cards for `issues` (the list in view). Suggestions sharing a
+  // `card` are one card (an untriaged item's type and priority, 4.1); a card carries its worst
+  // badge, and apply all may take it only when every part may. A combined card one of whose
+  // parts the page has acted on shows the other alone, labelled for it. Untriaged cards first,
+  // then second opinions; each oldest first. Returns { cards, applyAll }.
+  function triageCards(suggestions, issues, decisions, acks, horizon) {
+    const byId = new Map(issues.filter(isOpen).map((i) => [i.id, i]));
+    const gone = actedSuggestions(decisions, acks, horizon);
+    const groups = new Map();
+    for (const s of suggestions || []) {
+      if (!LABEL_KINDS.includes(s.kind) || gone.has(s.id)) continue;
+      const shownIssue = byId.get(s.item);
+      if (!shownIssue) continue;
+      const key = s.card || s.id;
+      if (!groups.has(key)) groups.set(key, { id: key, issue: shownIssue, parts: [] });
+      groups.get(key).parts.push(s);
+    }
+    const cards = [];
+    for (const c of groups.values()) {
+      c.parts.sort((a, b) => LABEL_KINDS.indexOf(a.kind) - LABEL_KINDS.indexOf(b.kind));
+      c.second = c.parts.some((s) => s.second_opinion && typeof s.second_opinion === "object");
+      c.badge = c.parts.map((s) => s.badge || "uncalibrated").sort((a, b) => BADGES.indexOf(b) - BADGES.indexOf(a))[0];
+      c.bulk_ok = !c.second && c.parts.every((s) => s.bulk_ok === true);
+      c.confidence = Math.min(...c.parts.map((s) => s.confidence));
+      c.from_reporter = c.parts.some((s) => s.from_reporter === true);
+      c.made_at = c.parts.map((s) => s.made_at).sort()[0];
+      const lone = c.parts.length === 1 && c.parts[0].card && c.parts[0].card !== c.parts[0].id;
+      c.label = lone ? "Set " + answerText(c.parts[0].answer) : c.parts[0].action_label || "Accept";
+      cards.push(c);
+    }
+    // Second opinions in 4.1's order: priority, type, area, then the most confident
+    // disagreement (the current value's lowest probability) first.
+    const rank = (c) => Math.min(...c.parts.map((s) => OPINION_RANK.indexOf(s.kind)));
+    const pCurrent = (c) => Math.min(...c.parts.map((s) => (s.second_opinion ? s.second_opinion.p_current : 1)));
+    cards.sort((a, b) => (a.second - b.second)
+      || (a.second ? (rank(a) - rank(b)) || (pCurrent(a) - pCurrent(b)) : 0)
+      || cmp(a.made_at, b.made_at) || cmp(a.issue.alias, b.issue.alias));
+    return { cards, applyAll: cards.filter((c) => c.bulk_ok) };
+  }
+
+  // One part of a card accepted (4.2, 4.6): the decision names the card and the component.
+  // `bulk` marks an apply-all accept, recorded as owner_bulk.
+  function acceptFields(card, s, bulk) {
+    const f = { action: "accept_suggestion", target: { suggestion: s.id, item: s.item, alias: s.alias, card: card.id, component: s.kind } };
+    if (bulk) f.value = { bulk: true };
+    return f;
+  }
+
+  // A whole card accepted: one decision per part.
+  function acceptCardFields(card, bulk) {
+    return card.parts.map((s) => acceptFields(card, s, bulk));
+  }
+
+  // One part of a card edited: accepted with the owner's value (4.2).
+  function editFields(card, s, answer) {
+    const value = s.kind === "type" ? { type: answer } : s.kind === "area" ? { areas: [...new Set([].concat(answer))].sort() } : { priority: answer };
+    return { action: "edit_suggestion", target: { suggestion: s.id, item: s.item, alias: s.alias, card: card.id, component: s.kind }, value };
+  }
+
+  // Apply all (4.3): one accept per part of every card it may take, never a second opinion.
+  function applyAllFields(cards) {
+    return cards.filter((c) => c.bulk_ok && !c.second).flatMap((c) => acceptCardFields(c, true));
+  }
+
+  // A Details edit of severity, reach or detectability (4.2): it names the issue's suggestion
+  // for that decision when there is one, and otherwise only the item.
+  function detailsEditFields(issue, decision, answer) {
+    const t = issue.triage && issue.triage[decision];
+    const target = t && t.suggestion ? { suggestion: t.suggestion, item: issue.id, alias: issue.alias } : { item: issue.id, alias: issue.alias };
+    return { action: "edit_suggestion", target, value: { [decision]: answer } };
+  }
+
+  // A priority card more than one level from the rubric's (4.1) says so; otherwise null.
+  function rubricNote(s) {
+    if (s.kind !== "priority" || !s.rubric_level) return null;
+    const a = PRIORITIES.indexOf(s.answer);
+    const r = PRIORITIES.indexOf(s.rubric_level);
+    if (a < 0 || r < 0 || Math.abs(a - r) <= 1) return null;
+    return "The rubric gives " + s.rubric_level + ".";
+  }
+
+  // What a second opinion disagrees with, and how often the gate's opinions were false alarms.
+  function secondOpinionNote(s) {
+    const o = s.second_opinion;
+    if (!o || typeof o !== "object") return null;
+    const pct = (x) => Math.round(x * 100) + "%";
+    const now = s.kind === "area" && o.flagged ? o.flagged.join(", ") : answerText(o.current);
+    const alarms = o.false_alarm_rate == null ? "false-alarm rate not measured" : pct(o.false_alarm_rate) + " false alarms";
+    return "Second opinion: " + now + " is " + pct(o.p_current) + " likely · " + alarms;
   }
 
   // A launch of a fix (one issue) or a batch (several of one repo) through its repo's recipe
@@ -715,6 +834,7 @@
     closable, closeComment, closeFields, describeClose, pendingClose, dismissed, recentlyClosed, dismissFields,
     sessionLines, inProgress, ownerNotice,
     dismissedSuggestions, suggestionCards, dismissSuggestionFields, closePrefill, fixLaunchFields, recommendFields, READ_ONLY_RECIPE,
+    actedSuggestions, answerText, triageCards, acceptFields, acceptCardFields, editFields, applyAllFields, detailsEditFields, rubricNote, secondOpinionNote,
   };
   root.IssueDashboard = api;
   if (typeof module === "object" && module.exports) module.exports = api;

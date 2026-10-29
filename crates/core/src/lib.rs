@@ -20,6 +20,7 @@ pub mod github;
 pub mod history;
 pub mod ingest;
 pub mod launch;
+pub mod layers;
 pub mod ledger;
 pub mod lock;
 pub mod observe;

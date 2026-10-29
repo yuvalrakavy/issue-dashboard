@@ -15,6 +15,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+use crate::config::ConfigSet;
 use crate::decision;
 use crate::docs::{Action, Decision, LaunchRequest};
 use crate::event::Kind;
@@ -120,7 +121,7 @@ pub(crate) fn record_doc(tx: &mut Tx<'_>, kind: Kind, project: &str, doc: &Value
 }
 
 /// Ingests one cycle's page documents for `project`.
-pub fn ingest(tx: &mut Tx<'_>, project: &str, owner_id: &str, pages: &Pages) -> Result<Report> {
+pub fn ingest(tx: &mut Tx<'_>, config: &ConfigSet, project: &str, owner_id: &str, pages: &Pages) -> Result<Report> {
     let mut report = Report::default();
     let mut skipped = Vec::new();
 
@@ -145,7 +146,7 @@ pub fn ingest(tx: &mut Tx<'_>, project: &str, owner_id: &str, pages: &Pages) -> 
         guarded(&mut skipped, "decisions", doc, || {
             schema::validate("page-decision", "decision document", doc)?;
             let d: Decision = serde_json::from_value(doc.clone())?;
-            let r = decision::ingest(tx, project, owner_id, &d)?;
+            let r = decision::ingest_checked(tx, config, project, owner_id, &d)?;
             if r.is_new() {
                 report.decided += 1;
                 if r.event().data.get("accepted") == Some(&Value::Bool(false)) {

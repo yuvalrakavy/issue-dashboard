@@ -335,6 +335,30 @@ footer .wrap { padding-block: 0 32px; font-size: .82rem; color: var(--muted); di
     render();
   }
 
+  // Triage cards (triage spec 4.2-4.3): a card's accept is one decision per part; apply all
+  // writes one per part of every card it may take, each recorded as owner_bulk.
+  async function writeAll(list) {
+    const out = [];
+    for (const f of list) {
+      const doc = await writeDecision(f);
+      if (!doc) break;
+      out.push(doc);
+    }
+    return out;
+  }
+  async function acceptCard(c) {
+    const docs = await writeAll(D.acceptCardFields(c, false));
+    if (docs.length) toast(c.label + " on " + c.issue.alias + ".", { label: "Undo", run: () => writeAll(docs.map((d) => ({ action: "undo", target: { decision: d.id, item: d.target.item } }))) });
+    render();
+  }
+  async function applyAll(cards) {
+    const list = D.applyAllFields(cards);
+    if (!list.length) return;
+    const docs = await writeAll(list);
+    toast("Applied " + docs.length + " suggestion" + (docs.length === 1 ? "" : "s") + ".", { label: "Undo", run: () => writeAll(docs.map((d) => ({ action: "undo", target: { decision: d.id, item: d.target.item } }))) });
+    render();
+  }
+
   function setPriority(i, p) {
     writeDecision({ action: "set_priority", target: { item: i.id, alias: i.alias }, value: { priority: p } });
   }
@@ -462,7 +486,9 @@ footer .wrap { padding-block: 0 32px; font-size: .82rem; color: var(--muted); di
       tile(t.open, "open", () => go("queue", "all")),
     );
     const cards = D.inbox(scoped());
-    const recs = D.suggestionCards(S.suggestions, shown(), S.decisions, S.acks, D.ackHorizon(S.meta)).cards.length;
+    const inboxIds = new Set(cards.map((c) => c.issue.id));
+    const recs = D.suggestionCards(S.suggestions, shown(), S.decisions, S.acks, D.ackHorizon(S.meta)).cards.length
+      + D.triageCards(S.suggestions, shown(), S.decisions, S.acks, D.ackHorizon(S.meta)).cards.filter((c) => !inboxIds.has(c.issue.id)).length;
     $("c-inbox").textContent = cards.length + recs ? String(cards.length + recs) : "";
     $("c-queue").textContent = String(D.tiles(scoped()).open - cards.length);
   }
@@ -635,7 +661,8 @@ footer .wrap { padding-block: 0 32px; font-size: .82rem; color: var(--muted); di
     // Recently closed belongs to the whole Inbox only: a filter ("Untriaged", "Waiting on you")
     // shows just the cards it names.
     const closedPart = () => (S.inboxFilter === "all" ? recentlyClosedSection() : null);
-    const recsPart = S.inboxFilter === "all" ? recommendationsSection() : null;
+    const parts = [S.inboxFilter !== "waiting" ? triageSection() : null, S.inboxFilter === "all" ? recommendationsSection() : null].filter(Boolean);
+    const recsPart = parts.length ? parts : null;
     if (!cards.length) return h("div", { class: "list" }, head, recsPart, recsPart ? null : h("div", { class: "note" }, S.inboxFilter === "untriaged" ? "Nothing untriaged." : "Nothing waiting on you."), closedPart());
     return h("div", { class: "list" }, head, recsPart, cards.map((c) => {
       const i = c.issue;
@@ -655,10 +682,51 @@ footer .wrap { padding-block: 0 32px; font-size: .82rem; color: var(--muted); di
     }), closedPart());
   }
 
+
+  // Triage suggestions (triage spec 4.1): type, area and priority cards with their badge,
+  // confidence, the rubric note, a reporter's own request marked, and a second opinion's
+  // false-alarm rate. Accept, Edit, Dismiss; apply all over the cards that pass Bulk.
+  const BADGE_TEXT = { evaluated: "evaluated", unevaluated: "not yet evaluated", uncalibrated: "uncalibrated", drifting: "drifting" };
+  function triageSection() {
+    const r = D.triageCards(S.suggestions, shown(), S.decisions, S.acks, D.ackHorizon(S.meta));
+    if (!r.cards.length) return null;
+    const pct = (x) => Math.round(x * 100) + "%";
+    const editor = (c) => h("div", { class: "picker" }, c.parts.map((s) => {
+      if (s.kind === "priority") return h("div", { class: "meta" }, h("span", {}, "priority"), D.PRIORITIES.map((p) => h("button", { class: "chip" + (p === s.answer ? " on" : ""), onclick: () => writeDecision(D.editFields(c, s, p)) }, p)));
+      const value = Array.isArray(s.answer) ? s.answer.join(", ") : s.answer || "";
+      const input = h("input", { type: "text", value, "aria-label": s.kind });
+      const save = () => {
+        const v = input.value.trim();
+        if (!v) return;
+        writeDecision(D.editFields(c, s, s.kind === "area" ? v.split(",").map((x) => x.trim()).filter(Boolean) : v));
+      };
+      return h("div", { class: "meta" }, h("span", {}, s.kind), input, h("button", { class: "btn", onclick: save }, "Save"));
+    }), h("button", { class: "btn quiet", onclick: () => { S.openCard = null; render(); } }, "Cancel"));
+    const card = (c) => {
+      const i = c.issue;
+      const notes = c.parts.flatMap((s) => [D.secondOpinionNote(s), D.rubricNote(s)]).filter(Boolean);
+      const editing = S.openCard && S.openCard.id === c.id && S.openCard.mode === "triage-edit";
+      return h("article", { class: "card", tabindex: "0", "data-nav": "1", "data-gh": ghUrl(i), "data-id": i.id },
+        h("div", { class: "why recommend" }, (c.second ? "Second opinion" : "Suggested") + " · " + c.parts.map((s) => s.kind).join(" · ") + " · " + pct(c.confidence) + " · " + BADGE_TEXT[c.badge] + (c.from_reporter ? " · the reporter's own request" : "")),
+        h("div", { class: "head" }, h("a", { class: "alias", href: ghUrl(i), target: "_blank", rel: "noopener" }, i.alias), h("span", { class: "title" }, i.title)),
+        notes.map((n) => h("div", { class: "sub" }, n)),
+        c.parts.map((s) => (s.reason ? h("div", { class: "sub muted" }, s.reason) : null)),
+        editing ? editor(c) : null,
+        S.owner && !editing ? h("div", { class: "actions" },
+          h("button", { class: "btn primary", "data-main": "1", onclick: () => acceptCard(c) }, c.label),
+          h("button", { class: "btn", onclick: () => { S.openCard = { id: c.id, mode: "triage-edit" }; render(); } }, "Edit…"),
+          h("button", { class: "btn quiet", onclick: () => writeAll(c.parts.map((s) => D.dismissSuggestionFields(s))) }, "Dismiss")) : null);
+    };
+    const all = S.owner && r.applyAll.length
+      ? h("button", { class: "btn", onclick: () => applyAll(r.applyAll) }, "Apply all · " + r.applyAll.length)
+      : null;
+    return h("section", { class: "closes" }, h("h2", {}, "Triage suggestions · " + r.cards.length, all ? " " : null, all), r.cards.map(card));
+  }
+
   // Closing recommendations (5.8): what a Recommend closures run found, each with its main
   // action and Dismiss. A close goes through the close sheet, where the owner's Close is the
   // approval; a batch goes through the launch sheet. What the run left open is listed below.
-  const SUGGESTED = { likely_fixed: "Likely fixed", duplicate: "Duplicate", obsolete: "No longer relevant", batch: "Close together" };
+  const SUGGESTED = { likely_fixed: "Likely fixed", duplicate: "Duplicate", obsolete: "No longer relevant", support_question: "Support question", batch: "Close together" };
   const LEFT_OUT = { needs_design: "needs design", blocked: "blocked", keep_open: "keep open" };
   function recommendationsSection() {
     const r = D.suggestionCards(S.suggestions, shown(), S.decisions, S.acks, D.ackHorizon(S.meta));
@@ -676,7 +744,7 @@ footer .wrap { padding-block: 0 32px; font-size: .82rem; color: var(--muted); di
         : s.kind === "likely_fixed" ? "fixed by " + s.commit
         : s.kind === "duplicate" ? "duplicate of " + (s.related_alias || "?") : null;
       return h("article", { class: "card", tabindex: "0", "data-nav": "1", "data-gh": ghUrl(i), "data-id": i.id },
-        h("div", { class: "why recommend" }, "Recommended · " + SUGGESTED[s.kind] + " · " + pct(s) + (about ? " · " + about : "")),
+        h("div", { class: "why recommend" }, "Recommended · " + SUGGESTED[s.kind] + " · " + pct(s) + (about ? " · " + about : "") + (s.badge ? " · " + BADGE_TEXT[s.badge] : "") + (s.from_reporter ? " · the reporter's own request" : "")),
         s.kind === "batch"
           ? members.map((m) => h("div", { class: "head" }, h("a", { class: "alias", href: ghUrl(m), target: "_blank", rel: "noopener" }, m.alias), h("span", { class: "title" }, m.title)))
           : h("div", { class: "head" }, h("a", { class: "alias", href: ghUrl(i), target: "_blank", rel: "noopener" }, i.alias), h("span", { class: "title" }, i.title)),
@@ -842,6 +910,31 @@ footer .wrap { padding-block: 0 32px; font-size: .82rem; color: var(--muted); di
   }
   const closeBtn = () => h("button", { class: "btn quiet", "aria-label": "Close", onclick: () => dlg.close() }, "✕");
 
+  // Details (triage spec 4.2, 4.5): severity, reach and detectability, each editable when the
+  // issue holds a suggestion for it, and the estimates.
+  const TRIAGE_ANSWERS = {
+    severity: ["cosmetic", "degraded", "wrong_result", "hang_or_data_loss"],
+    reach: ["one_corner", "one_subsystem", "most", "all"],
+    detectability: ["silent", "visible"],
+  };
+  function triageRows(i) {
+    const t = i.triage || {};
+    const rows = [];
+    for (const k of Object.keys(TRIAGE_ANSWERS)) {
+      const v = t[k] || {};
+      const shown = v.edited || v.answer;
+      const pick = S.owner
+        ? h("select", { "aria-label": k, onchange: (e) => writeDecision(D.detailsEditFields(i, k, e.target.value)).then(() => dlg.close()) },
+          shown ? null : h("option", { value: "", selected: "selected", disabled: "disabled" }, "—"),
+          TRIAGE_ANSWERS[k].map((a) => h("option", Object.assign({ value: a }, a === shown ? { selected: "selected" } : {}), a)))
+        : h("span", {}, shown || "—");
+      rows.push(h("dt", {}, k[0].toUpperCase() + k.slice(1)), h("dd", {}, pick, " ", v.edited ? "(your edit)" : v.backend ? "(" + v.backend + ", " + (v.badge || "uncalibrated") + ")" : ""));
+    }
+    const e = t.estimates;
+    if (e) rows.push(h("dt", {}, "Estimates"), h("dd", {}, e.tier + " · effort " + e.effort + " · " + e.blast + (e.sites && e.sites.length ? " · " + e.sites.join(", ") : "") + " @ " + String(e.read_at).slice(0, 7)));
+    return rows;
+  }
+
   function openDetails(i) {
     const p = i.priority || {};
     const links = i.links || {};
@@ -854,6 +947,9 @@ footer .wrap { padding-block: 0 32px; font-size: .82rem; color: var(--muted); di
         h("dt", {}, "Priority"), h("dd", {}, badge(i), " ", p.source ? "from the " + p.source : "none set"),
         h("dt", {}, "Sources"), h("dd", { class: "mono" }, "label " + (p.label || "—") + " · project " + (p.project || "—") + " · override " + (p.override || "—")),
         h("dt", {}, "Type · status"), h("dd", {}, (i.type || "no type") + " · " + i.status + (i.areas && i.areas.length ? " · areas " + i.areas.join(", ") : "")),
+        i.type_source === "suggestion" || i.areas_source === "suggestion" ? h("dt", {}, "") : null,
+        i.type_source === "suggestion" || i.areas_source === "suggestion" ? h("dd", { class: "muted" }, "From an accepted suggestion: not written to GitHub yet.") : null,
+        ...triageRows(i),
         h("dt", {}, "Opened"), h("dd", {}, fmtDay(i.created_at) + " by " + (i.author || "?") + (i.outside ? " (outside)" : "")),
         h("dt", {}, "Updated"), h("dd", {}, fmtDay(i.updated_at) + " · idle " + (i.idle_days || 0) + " d" + (i.limit_breached ? " · over time limit" : "")),
         i.closed_at ? h("dt", {}, "Closed") : null, i.closed_at ? h("dd", {}, fmtDay(i.closed_at)) : null,

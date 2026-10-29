@@ -384,6 +384,90 @@
               ]
             }
           }
+        },
+        "current": {
+          "description": "A type, area or priority answer: the item's effective value when it was recorded (triage spec 4.1); type and priority a string or null, area the set (empty: none). The card shows while the value is still this one, and an accept refuses once it is not (4.2).",
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "array",
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          ]
+        },
+        "second_opinion": {
+          "description": "The answer confidently disagrees with the current value (triage spec 4.1): its calibrated probability is at most 0.2 (area: one of the current areas'). Names the current value and the false-alarm rate the map's evaluation measured.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "current",
+            "p_current",
+            "false_alarm_rate"
+          ],
+          "properties": {
+            "current": {
+              "anyOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "type": "string",
+                  "minLength": 1
+                },
+                {
+                  "type": "array",
+                  "uniqueItems": true,
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              ]
+            },
+            "p_current": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "false_alarm_rate": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "minimum": 0,
+              "maximum": 1
+            },
+            "flagged": {
+              "description": "Area: the current areas at or below 0.2.",
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        },
+        "rubric_level": {
+          "description": "Priority: the level the rubric table gives the first stage's top answers (triage spec 1.5); null when the table does not know one.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/priority"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "allOf": [

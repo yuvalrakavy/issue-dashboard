@@ -36,6 +36,7 @@
         "duplicate",
         "combined",
         "obsolete",
+        "support_question",
         "batch",
         "left_out"
       ]
@@ -52,6 +53,23 @@
       "description": "What the main button says (5.2a), e.g. \"Set bug · p1\".",
       "type": "string",
       "minLength": 1
+    },
+    "badge": {
+      "description": "The evaluation of the suggestion's own calibration map (triage spec 4.1, 3.5).",
+      "enum": [
+        "evaluated",
+        "unevaluated",
+        "uncalibrated",
+        "drifting"
+      ]
+    },
+    "bulk_ok": {
+      "description": "Apply all may take this card (triage spec 4.3): an untriaged item's type, area or priority card on a key that passes Bulk and is not drifting.",
+      "type": "boolean"
+    },
+    "card": {
+      "description": "The card the suggestion is shown on: its own id, or the combined card an untriaged item's type and priority share (4.1).",
+      "$ref": "common.schema.json#/$defs/docId"
     }
   },
   "unevaluatedProperties": false

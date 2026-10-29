@@ -79,6 +79,18 @@
         "session": {
           "type": "string",
           "minLength": 1
+        },
+        "card": {
+          "description": "The card an accept or edit was made on (triage spec 4.6).",
+          "$ref": "common.schema.json#/$defs/docId"
+        },
+        "component": {
+          "description": "Which part of the card: a combined card's type or priority (triage spec 4.6).",
+          "enum": [
+            "type",
+            "area",
+            "priority"
+          ]
         }
       }
     },
@@ -147,6 +159,31 @@
               "duplicate_of"
             ]
           }
+        },
+        "severity": {
+          "description": "A Details edit (triage spec 4.2).",
+          "enum": [
+            "cosmetic",
+            "degraded",
+            "wrong_result",
+            "hang_or_data_loss"
+          ]
+        },
+        "reach": {
+          "description": "A Details edit (triage spec 4.2).",
+          "enum": [
+            "one_corner",
+            "one_subsystem",
+            "most",
+            "all"
+          ]
+        },
+        "detectability": {
+          "description": "A Details edit (triage spec 4.2).",
+          "enum": [
+            "silent",
+            "visible"
+          ]
         }
       }
     },
@@ -297,8 +334,7 @@
           "action": {
             "enum": [
               "accept_suggestion",
-              "dismiss_suggestion",
-              "edit_suggestion"
+              "dismiss_suggestion"
             ]
           }
         }
@@ -364,6 +400,60 @@
             ]
           }
         }
+      }
+    },
+    {
+      "description": "An edit names its suggestion; a Details edit of severity, reach or detectability may instead name only its item (triage spec 4.1-4.2).",
+      "if": {
+        "properties": {
+          "action": {
+            "const": "edit_suggestion"
+          }
+        }
+      },
+      "then": {
+        "anyOf": [
+          {
+            "properties": {
+              "target": {
+                "required": [
+                  "suggestion"
+                ]
+              }
+            }
+          },
+          {
+            "properties": {
+              "target": {
+                "required": [
+                  "item"
+                ]
+              },
+              "value": {
+                "anyOf": [
+                  {
+                    "required": [
+                      "severity"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "reach"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "detectability"
+                    ]
+                  }
+                ]
+              }
+            },
+            "required": [
+              "value"
+            ]
+          }
+        ]
       }
     }
   ]
