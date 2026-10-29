@@ -5,6 +5,7 @@
   "subject": "LE_lADOAbCdEf5xYz34zwAAAAF",
   "pred": 0,
   "distinct": {
+    "project": "home",
     "name": "has space"
   },
   "identity": "0000000000000000000000000000000000000000000000000000000000000000",

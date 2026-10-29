@@ -112,3 +112,74 @@ fn truth_tag_lists_without_yes_and_records_with_it() {
     assert_eq!(recorded["events"].as_array().unwrap().len(), n);
     assert_eq!(backup_kinds(t.path()).iter().filter(|k| *k == "truth_tag").count(), n);
 }
+
+fn tag_args<'a>(decision: &'a str, from: &'a str, to: &'a str) -> Vec<&'a str> {
+    let mut v = vec![
+        "truth",
+        "tag",
+        "--project",
+        "home",
+        "--name",
+        "oct-review",
+        "--decision",
+    ];
+    v.extend([decision, "--from", from, "--to", to]);
+    v
+}
+
+fn events(v: &Value) -> Vec<Value> {
+    v["events"].as_array().unwrap().clone()
+}
+
+fn tags_recorded(dir: &Path) -> usize {
+    backup_kinds(dir).iter().filter(|k| *k == "truth_tag").count()
+}
+
+#[test]
+fn truth_tag_filters_by_decision_window_and_issue_and_a_repeat_records_nothing() {
+    let t = root();
+    ok(t.path(), &["eval", "refresh-history", "--project", "home"]);
+    let (lo, hi) = ("2024-01-01T00:00:00Z", "2026-10-29T00:00:00Z");
+
+    // Decision: priority events carry only p-labels, type events none.
+    let prio = events(&ok(t.path(), &tag_args("priority", lo, hi)));
+    let typ = events(&ok(t.path(), &tag_args("type", lo, hi)));
+    assert!(!prio.is_empty() && !typ.is_empty());
+    assert!(
+        prio.iter().all(|e| e["label"].as_str().unwrap().starts_with('p')),
+        "{prio:?}"
+    );
+    assert!(
+        typ.iter().all(|e| !e["label"].as_str().unwrap().starts_with('p')),
+        "{typ:?}"
+    );
+
+    // Window: the end bound excludes later events (rhai#1188 is on 2026-10-17, the rest 10-23).
+    let early = events(&ok(t.path(), &tag_args("type", lo, "2026-10-20T00:00:00Z")));
+    assert!(!early.is_empty() && early.len() < typ.len());
+    assert!(
+        early.iter().all(|e| e["at"].as_str().unwrap() <= "2026-10-20T00:00:00"),
+        "{early:?}"
+    );
+
+    // Issues filter.
+    let mut one = tag_args("type", lo, hi);
+    one.extend(["--issues", "yuvalrakavy/airzoned#4"]);
+    let only = events(&ok(t.path(), &one));
+    assert!(!only.is_empty() && only.len() < typ.len());
+    assert!(only.iter().all(|e| e["alias"] == "yuvalrakavy/airzoned#4"), "{only:?}");
+
+    // A repeat --yes records nothing new.
+    let mut yes = tag_args("type", lo, hi);
+    yes.push("--yes");
+    ok(t.path(), &yes);
+    assert_eq!(tags_recorded(t.path()), typ.len());
+    ok(t.path(), &yes);
+    assert_eq!(tags_recorded(t.path()), typ.len());
+    // A -> B -> A: the return to the first name is recorded, so the first is in force again.
+    let mut b = yes.clone();
+    b[5] = "other-review";
+    ok(t.path(), &b);
+    ok(t.path(), &yes);
+    assert_eq!(tags_recorded(t.path()), 3 * typ.len());
+}

@@ -48,6 +48,7 @@ fn ex(item: &str, probs: &[(&str, f64)], truth: Value) -> Example {
         item: item.to_string(),
         probs: probs.iter().map(|(k, v)| (k.to_string(), *v)).collect(),
         truth,
+        source: None,
     }
 }
 
@@ -976,7 +977,7 @@ fn closures_suggested() -> Tracked {
 
 fn closure_truths(t: &TempRoot) -> BTreeMap<String, (bool, String)> {
     t.root
-        .read(|l| truth::closure_truth(l.conn(), "home"))
+        .read(|l| truth::closure_truth(l.conn(), "home", &BTreeSet::new()))
         .unwrap()
         .into_iter()
         .map(|c| (c.decision, (c.value, c.provenance)))
@@ -1106,6 +1107,7 @@ fn passing_eval(t: &TempRoot, minutes: i64, accuracy: f64) {
         exclusions: Vec::new(),
         bars: eval::bars(120, 0.05, accuracy),
         unanswered: 0,
+        by_source: BTreeMap::new(),
     };
     let subject = eval::key_subject("home", BACKEND, "type", &type_hash());
     t.root
@@ -1200,4 +1202,344 @@ fn drift_is_off_within_10_points() {
     }
     let d = drift(&tr.t);
     assert_eq!((d.records, d.drifting), (30, false), "0.75 − 0.667 is 8 points");
+}
+
+// --- Gate round 1 -------------------------------------------------------------------------
+
+fn rec(at_min: i64, provenance: &str, op: Op, from_backend: Option<&str>) -> Record {
+    Record {
+        item: "I_1".into(),
+        decision: "type".into(),
+        at: at(at_min),
+        provenance: provenance.into(),
+        op,
+        from_backend: from_backend.map(str::to_string),
+        suggested: None,
+        question: None,
+    }
+}
+
+#[test]
+fn a_single_choice_truth_is_the_latest_value_still_standing() {
+    let none = BTreeSet::new();
+    // The owner said bug; GitHub later added todo beside it: todo is the latest.
+    let recs = vec![
+        rec(1, "owner_edit", Op::Set(vec!["bug".into()]), Some(BACKEND)),
+        rec(2, "github_later", Op::Add("todo".into()), None),
+    ];
+    let t = truth::fold("type", &recs, &none).unwrap();
+    assert_eq!(
+        (t.value, t.provenance.as_str(), t.from_backend),
+        (json!("todo"), "github_later", None)
+    );
+    // Removing it uncovers the earlier value.
+    let mut more = recs.clone();
+    more.push(rec(3, "github_later", Op::Remove("todo".into()), None));
+    assert_eq!(truth::fold("type", &more, &none).unwrap().value, json!("bug"));
+    // Two type labels added in turn: the later one.
+    let two = vec![
+        rec(1, "filed", Op::Add("bug".into()), None),
+        rec(2, "filed", Op::Add("docs".into()), None),
+    ];
+    assert_eq!(truth::fold("type", &two, &none).unwrap().value, json!("docs"));
+    // The owner's record keeps its suggestion's backend.
+    let owner = vec![rec(1, "owner_accept", Op::Set(vec!["bug".into()]), Some(BACKEND))];
+    assert_eq!(
+        truth::fold("type", &owner, &none).unwrap().from_backend.as_deref(),
+        Some(BACKEND)
+    );
+}
+
+#[test]
+fn a_history_read_for_another_window_or_filter_restarts_and_is_never_evaluated() {
+    let t = fixture_root();
+    // An interrupted read for 30 days, its cursor somewhere no recording covers: resuming it
+    // would fail; a 730-day refresh starts over.
+    let stale = RepoHistory {
+        repo: AIRZONED.into(),
+        filter: None,
+        window_days: 30,
+        since: "2026-09-29T12:00:00Z".into(),
+        started_at: NOW.into(),
+        complete: false,
+        cursor: Some(history::Cursor::Connection {
+            after: Some("no-such-cursor".into()),
+        }),
+        requests: 1,
+        items: Vec::new(),
+        skipped: Vec::new(),
+    };
+    history::save(t.path(), &stale).unwrap();
+    let r = history::refresh_repo(t.path(), &history_gh(), AIRZONED, None, 730, now(), HISTORY_PAGE).unwrap();
+    assert_eq!((r.complete, r.resumed, r.items), (true, false, 44));
+    // The same for a search read under another filter.
+    history::save(
+        t.path(),
+        &RepoHistory {
+            repo: RHAI.into(),
+            filter: Some("author:someone-else".into()),
+            window_days: 730,
+            cursor: Some(history::Cursor::Search {
+                ids: vec!["I_no_such_node".into()],
+                read: 0,
+            }),
+            ..stale.clone()
+        },
+    )
+    .unwrap();
+    let r = history::refresh_repo(
+        t.path(),
+        &history_gh(),
+        RHAI,
+        Some("author:yuvalrakavy"),
+        730,
+        now(),
+        HISTORY_PAGE,
+    )
+    .unwrap();
+    assert_eq!((r.complete, r.resumed, r.items), (true, false, 1));
+    let complete_store = |window_days: u32, filter: Option<&str>| RepoHistory {
+        repo: STORE.into(),
+        filter: filter.map(str::to_string),
+        window_days,
+        complete: true,
+        cursor: None,
+        ..stale.clone()
+    };
+    history::save(t.path(), &complete_store(730, None)).unwrap();
+    let c = ConfigSet::load(t.path()).unwrap();
+    assert_eq!(history::project_history(t.path(), &c, "home").unwrap().len(), 3);
+    // A complete history read for another window, or under another filter, is refused.
+    history::save(t.path(), &complete_store(30, None)).unwrap();
+    let m = refused(history::project_history(t.path(), &c, "home"));
+    assert!(m.contains("history of yuvalrakavy/Store was read for 30 days"), "{m}");
+    history::save(t.path(), &complete_store(730, Some("label:bug"))).unwrap();
+    let m = refused(history::project_history(t.path(), &c, "home"));
+    assert!(m.contains("filtered by label:bug"), "{m}");
+}
+
+#[test]
+fn score_refuses_exclusions_other_than_the_manifest_s() {
+    let t = with_history(Vec::new());
+    let r = replay("type");
+    let m = manifest_of(&prepare_eval(&t, &r).unwrap());
+    let mut other = r.clone();
+    other.exclude = vec!["github_later".into()];
+    let msg = refused(score(&t, &other, &answers(&m, 0.6, |_| true)));
+    assert!(msg.contains("prepared excluding []"), "{msg}");
+    assert!(
+        t.root
+            .read(|l| ledger::events_by_kind(l.conn(), Kind::Evaluated))
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn manifest_paths_never_collide_and_score_refuses_a_manifest_of_another_key() {
+    let p = |backend: &str, repo: Option<&str>| {
+        eval::manifest_path(
+            std::path::Path::new("/r"),
+            "home",
+            backend,
+            "type",
+            repo,
+            EvalStage::Scored,
+        )
+    };
+    assert_ne!(p(BACKEND, Some("a/b_c")), p(BACKEND, Some("a_b/c")));
+    assert_ne!(p("m:x@medium", None), p("m?x@medium", None));
+    assert_ne!(p("claude/opus@medium", None), p("claude_opus@medium", None));
+
+    let t = with_history(Vec::new());
+    let r = replay("type");
+    let prepared = prepare_eval(&t, &r).unwrap();
+    let m = manifest_of(&prepared);
+    // The type manifest under priority's name.
+    let wrong = eval::manifest_path(t.path(), "home", BACKEND, "priority", None, EvalStage::Scored);
+    fs::copy(&prepared.manifest, &wrong).unwrap();
+    let msg = refused(score(&t, &replay("priority"), &answers(&m, 0.6, |_| true)));
+    assert!(msg.contains("is the manifest of home/"), "{msg}");
+    assert!(msg.contains("/type"), "{msg}");
+}
+
+#[test]
+fn a_tag_is_its_project_s_and_returning_to_an_earlier_name_puts_it_back_in_force() {
+    let t = with_history(Vec::new());
+    let h = history::load(t.path(), AIRZONED).unwrap().unwrap();
+    let item = &h.items[0];
+    let e = &item.label_events[0];
+    let tagged = Tagged {
+        event: e.id.clone(),
+        item: item.id.clone(),
+        alias: item.alias.clone(),
+        label: e.label.clone(),
+        added: e.added,
+        at: e.at.clone(),
+    };
+    let tag = |project: &str, name: &str| {
+        t.root
+            .mutate(now(), |tx| {
+                truth::record_tags(tx, project, name, "type", std::slice::from_ref(&tagged))
+            })
+            .unwrap()
+    };
+    assert_eq!(tag("home", "oct-a"), 1);
+    assert_eq!(tag("home", "oct-a"), 0, "a repeat");
+    assert_eq!(tag("kernel", "oct-a"), 1, "another project's tag of the same event");
+    let in_force = |project: &str| {
+        t.root
+            .read(|l| truth::tags(l.conn(), project))
+            .unwrap()
+            .get(&e.id)
+            .cloned()
+    };
+    assert_eq!(in_force("kernel").as_deref(), Some("oct-a"));
+    assert_eq!(tag("home", "oct-b"), 1);
+    assert_eq!(tag("home", "oct-a"), 1, "back to the first name");
+    assert_eq!(in_force("home").as_deref(), Some("oct-a"));
+}
+
+#[test]
+fn an_excluded_closure_verdict_uncovers_the_earlier_one() {
+    let tr = closures_suggested();
+    let id = tr.items[0].0.clone();
+    let doc = suggestion_doc(&tr.t, &id, "likely_fixed");
+    decided(&tr.t, &on_suggestion("d-1", Action::AcceptSuggestion, &doc, 10, None));
+    let mut d = on_suggestion("d-2", Action::DismissSuggestion, &doc, 11, None);
+    d.reason = Some("still reproduces".into());
+    decided(&tr.t, &d);
+    assert_eq!(closure_truths(&tr.t)["likely_fixed"], (false, "owner_edit".to_string()));
+    let without_edits: BTreeMap<String, (bool, String)> =
+        tr.t.root
+            .read(|l| truth::closure_truth(l.conn(), "home", &BTreeSet::from(["owner_edit".to_string()])))
+            .unwrap()
+            .into_iter()
+            .map(|c| (c.decision, (c.value, c.provenance)))
+            .collect();
+    assert_eq!(without_edits["likely_fixed"], (true, "owner_accept".to_string()));
+}
+
+#[test]
+fn a_closure_key_counts_its_verdicts_toward_drift() {
+    let tr = closures_suggested();
+    let hash = Catalogue::embedded().question_hash("likely_fixed", &[]).unwrap();
+    let data = eval::EvaluatedData {
+        project: "home".into(),
+        backend: BACKEND.into(),
+        decision: "likely_fixed".into(),
+        question_hash: hash.clone(),
+        mode: "live".into(),
+        map_id: None,
+        uncalibratable: false,
+        t: 1.0,
+        n: 120,
+        n_tuning: 80,
+        accuracy: 0.9,
+        ece: 0.05,
+        ece_interval: [0.03, 0.08],
+        classwise_ece: BTreeMap::new(),
+        false_alarm_rate: Some(0.02),
+        exclusions: Vec::new(),
+        bars: eval::bars(120, 0.05, 0.9),
+        unanswered: 0,
+        by_source: BTreeMap::new(),
+    };
+    let subject = eval::key_subject("home", BACKEND, "likely_fixed", &hash);
+    tr.t.root
+        .mutate(at(5), |tx| {
+            tx.record_valid(
+                Kind::Evaluated,
+                &subject,
+                json!({"manifest": "live", "answers": format!("{:064}", 5)}),
+                serde_json::to_value(&data)?,
+                ledger::Dedupe::Latest,
+            )
+        })
+        .unwrap();
+    let id = tr.items[0].0.clone();
+    let mut d = on_suggestion(
+        "d-1",
+        Action::DismissSuggestion,
+        &suggestion_doc(&tr.t, &id, "likely_fixed"),
+        10,
+        None,
+    );
+    d.reason = Some("still reproduces".into());
+    decided(&tr.t, &d);
+    let drift =
+        tr.t.root
+            .read(|l| eval::drift(l.conn(), "home", BACKEND, "likely_fixed", &hash))
+            .unwrap();
+    assert_eq!((drift.records, drift.live_accuracy, drift.drifting), (1, None, false));
+}
+
+#[test]
+fn owner_truths_are_scored_apart_by_source_and_backend() {
+    let allowed = strings(&["bug", "todo"]);
+    let mut e = vec![
+        ex("I_1", &[("bug", 0.9), ("todo", 0.1)], json!("bug")),
+        ex("I_2", &[("bug", 0.9), ("todo", 0.1)], json!("todo")),
+        ex("I_3", &[("bug", 0.2), ("todo", 0.8)], json!("todo")),
+        ex("I_4", &[("bug", 0.2), ("todo", 0.8)], json!("todo")),
+    ];
+    e[0].source = eval::owner_source("owner_accept", Some(BACKEND));
+    e[1].source = eval::owner_source("owner_accept", Some(BACKEND));
+    e[2].source = eval::owner_source("owner_edit", Some("jev@1"));
+    assert_eq!(eval::owner_source("filed", None), None);
+    let by = eval::by_source(AnswerKind::Choice, &allowed, &e);
+    assert_eq!(by.len(), 2, "{by:?}");
+    let a = &by[&format!("owner_accept/{BACKEND}")];
+    assert_eq!((a.n, a.accuracy), (2, 0.5));
+    let b = &by["owner_edit/jev@1"];
+    assert_eq!((b.n, b.accuracy), (1, 1.0));
+}
+
+#[test]
+fn a_backend_with_a_slash_scores_and_validates() {
+    let t = with_history(Vec::new());
+    let mut r = replay("type");
+    r.backend = "claude/opus-5-5@medium".into();
+    let m = manifest_of(&prepare_eval(&t, &r).unwrap());
+    let mut a = answers(&m, 0.6, |i| i % 4 != 3);
+    a.backend = r.backend.clone();
+    let s = score(&t, &r, &a).unwrap();
+    assert_eq!(s.evaluated.backend, "claude/opus-5-5@medium");
+}
+
+#[test]
+fn a_flat_loss_fits_the_lowest_t() {
+    // Even odds stay even at every T: the loss is flat, and the tie goes to the lowest T.
+    let e: Vec<Example> = (0..10)
+        .map(|i| {
+            ex(
+                &format!("I_{i}"),
+                &[("true", 0.5), ("false", 0.5)],
+                json!(if i % 2 == 0 { "true" } else { "false" }),
+            )
+        })
+        .collect();
+    let f = eval::fit(AnswerKind::Boolean, &e);
+    assert_eq!((f.t, f.at_edge), (0.25, true));
+}
+
+#[test]
+fn classwise_ece_is_each_answer_against_whether_it_is_the_truth() {
+    // bug: (0.8, right) in bin 8 and (0.6, wrong) in bin 6: ½·0.2 + ½·0.6 = 0.4.
+    // todo: (0.2, wrong) and (0.4, right): ½·0.2 + ½·0.6 = 0.4.
+    let e = [
+        ex("I_1", &[("bug", 0.8), ("todo", 0.2)], json!("bug")),
+        ex("I_2", &[("bug", 0.6), ("todo", 0.4)], json!("todo")),
+    ];
+    let c = eval::classwise_ece(AnswerKind::Choice, &strings(&["bug", "todo"]), &e);
+    assert!(close(c["bug"], 0.4) && close(c["todo"], 0.4), "{c:?}");
+}
+
+#[test]
+fn the_interval_is_the_5th_and_95th_percentile_of_the_resamples() {
+    let e = interval_fixture();
+    let allowed = strings(&["bug", "todo"]);
+    // Seed 4: the 49th and 50th sorted resamples differ, so rounding p · 999 is observable.
+    let (lo, hi) = eval::ece_interval(AnswerKind::Choice, &allowed, &e, 4);
+    assert!(close(lo, 0.059) && close(hi, 0.227), "{lo} {hi}");
 }

@@ -18,6 +18,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use chrono::{DateTime, Utc};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -105,6 +106,47 @@ pub struct Example {
     pub item: String,
     pub probs: BTreeMap<String, f64>,
     pub truth: Value,
+    /// For an owner truth, `<provenance>/<from_backend>` (3.1: accuracy on owner records is
+    /// reported apart); `None` for a label truth.
+    pub source: Option<String>,
+}
+
+/// The owner source of a truth, for [`Example::source`].
+pub fn owner_source(provenance: &str, from_backend: Option<&str>) -> Option<String> {
+    matches!(provenance, "owner_accept" | "owner_edit")
+        .then(|| format!("{provenance}/{}", from_backend.unwrap_or("none")))
+}
+
+/// Accuracy on the examples of each owner source (3.1); label truths are not counted.
+pub fn by_source(kind: AnswerKind, allowed: &[String], examples: &[Example]) -> BTreeMap<String, SourceAccuracy> {
+    let mut counts: BTreeMap<String, (usize, usize)> = BTreeMap::new();
+    for e in examples {
+        if let Some(src) = &e.source {
+            let c = counts.entry(src.clone()).or_default();
+            c.0 += 1;
+            c.1 += usize::from(correct(kind, allowed, e));
+        }
+    }
+    counts
+        .into_iter()
+        .map(|(k, (n, right))| {
+            (
+                k,
+                SourceAccuracy {
+                    n,
+                    accuracy: right as f64 / n as f64,
+                },
+            )
+        })
+        .collect()
+}
+
+/// Accuracy on one owner source's held-out examples.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SourceAccuracy {
+    pub n: usize,
+    pub accuracy: f64,
 }
 
 fn truth_set(v: &Value) -> BTreeSet<String> {
@@ -188,17 +230,21 @@ impl Map {
     }
 }
 
-/// A path segment for a backend name: `/` and anything unusual become `_`.
+/// A path segment for a name: anything but letters, digits and `@.-_` is percent-encoded, so
+/// two names never share a segment (`a/b_c` and `a_b/c` stay apart).
 fn segment(s: &str) -> String {
-    s.chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || "@.-_".contains(c) {
-                c
-            } else {
-                '_'
+    let mut out = String::new();
+    for c in s.chars() {
+        if c.is_ascii_alphanumeric() || "@.-_".contains(c) {
+            out.push(c);
+        } else {
+            let mut buf = [0u8; 4];
+            for b in c.encode_utf8(&mut buf).bytes() {
+                out.push_str(&format!("%{b:02X}"));
             }
-        })
-        .collect()
+        }
+    }
+    out
 }
 
 /// `state/evals/<project>/<backend>/`.
@@ -505,9 +551,11 @@ pub struct ManifestQuestion {
     pub decision: String,
     pub split: Split,
     pub input_hash: String,
-    /// The truth of the decision measured, and its provenance.
+    /// The truth of the decision measured, its provenance, and for an owner truth the
+    /// backend of the suggestion it answered.
     pub truth: Value,
     pub provenance: String,
+    pub from_backend: Option<String>,
 }
 
 /// A replay's manifest (3.2).
@@ -822,6 +870,7 @@ pub fn build(
                 input_hash: ihash,
                 truth: c.truth.value.clone(),
                 provenance: c.truth.provenance.clone(),
+                from_backend: c.truth.from_backend.clone(),
             });
         }
     }
@@ -1108,6 +1157,8 @@ pub struct EvaluatedData {
     pub bars: Bars,
     /// Held-out items asked but not answered, or answered but without a truth.
     pub unanswered: usize,
+    /// Accuracy on the held-out owner truths, by `<provenance>/<from_backend>` (3.1).
+    pub by_source: BTreeMap<String, SourceAccuracy>,
 }
 
 /// What `eval score` recorded.
@@ -1158,6 +1209,7 @@ fn evaluate(
         .collect();
     let subject = key_subject(project, backend, decision, qhash);
     let m = metrics(kind, allowed, &scored, seed_of(&subject))?;
+    let by_source = by_source(kind, allowed, &scored);
     let fa = m.false_alarm_rate;
     let data = EvaluatedData {
         project: project.to_string(),
@@ -1178,6 +1230,7 @@ fn evaluate(
         exclusions,
         bars: m.bars,
         unanswered,
+        by_source,
     };
     // The map is written before the event that names it, so no event names a missing map.
     let path = match &map {
@@ -1224,6 +1277,30 @@ pub fn score(
         EvalStage::Scored,
     );
     let m = load_manifest(&path)?;
+    // The file is the request's: its key, and the exclusions it was prepared under.
+    let asked = (&r.project, &r.backend, &r.decision, &r.repo, EvalStage::Scored);
+    if (&m.project, &m.backend, &m.decision, &m.repo, m.stage) != asked {
+        return Err(Error::refused(format!(
+            "{} is the manifest of {}/{}/{} (repo {:?}, stage {:?}), not of this request: eval prepare again",
+            path.display(),
+            m.project,
+            m.backend,
+            m.decision,
+            m.repo,
+            m.stage
+        )));
+    }
+    let mut want = r.exclude.clone();
+    want.sort();
+    want.dedup();
+    let mut had = m.exclusions.clone();
+    had.sort();
+    had.dedup();
+    if want != had {
+        return Err(Error::refused(format!(
+            "the manifest was prepared excluding {had:?} and this score excludes {want:?}: eval prepare again with the same exclusions"
+        )));
+    }
     let history = history::project_history(root, config, &r.project)?;
     verify(tx.conn(), config, cat, &history, &m)?;
     let answered = checked_answers(cat, config, &m, answers)?;
@@ -1249,6 +1326,7 @@ pub fn score(
             item: q.item.clone(),
             probs: raw.clone(),
             truth: q.truth.clone(),
+            source: owner_source(&q.provenance, q.from_backend.as_deref()),
         };
         match q.split {
             Split::Tuning => tuning.push(e),
@@ -1293,13 +1371,12 @@ pub fn score_live(
         )));
     }
     let exclusions = exclusions(config, project, exclude)?;
-    let excluded: BTreeSet<&String> = exclusions.iter().collect();
+    let excluded: BTreeSet<String> = exclusions.iter().cloned().collect();
     let qhash = cat.question_hash(decision, &[])?;
     let questions = triage::prepared_questions(tx.conn())?;
     let found = truth::suggestions(tx.conn(), project)?;
-    let verdicts: BTreeMap<String, truth::ClosureTruth> = truth::closure_truth(tx.conn(), project)?
+    let verdicts: BTreeMap<String, truth::ClosureTruth> = truth::closure_truth(tx.conn(), project, &excluded)?
         .into_iter()
-        .filter(|t| !excluded.contains(&t.provenance))
         .map(|t| (t.suggestion.clone(), t))
         .collect();
     let (mut tuning, mut held_out) = (Vec::new(), Vec::new());
@@ -1320,6 +1397,7 @@ pub fn score_live(
             item: s.item.clone(),
             probs,
             truth: json!(v.value.to_string()),
+            source: owner_source(&v.provenance, v.from_backend.as_deref()),
         };
         if is_tuning(&s.item) {
             tuning.push(e);
@@ -1376,20 +1454,53 @@ pub fn drift(conn: &Connection, project: &str, backend: &str, decision: &str, ha
     let since = parse_time(&eval.time)?;
     let evaluated = eval.data["accuracy"].as_f64();
     let questions = triage::prepared_questions(conn)?;
-    let mut records: Vec<Record> = truth::owner_records(conn, project)?
+    let of_key = |b: Option<&str>, at: DateTime<Utc>, q: Option<&String>| {
+        b == Some(backend)
+            && at > since
+            && q.and_then(|q| questions.get(q))
+                .is_some_and(|(q, _)| q.question_hash == hash)
+    };
+    // A closure suggestion is asked only when answered true (3.1), so its verdict agrees when
+    // the truth is true.
+    let agreements: Vec<(DateTime<Utc>, bool)> = if CLOSURE_DECISIONS.contains(&decision) {
+        truth::closure_truth(conn, project, &BTreeSet::new())?
+            .into_iter()
+            .filter(|t| t.decision == decision && of_key(t.from_backend.as_deref(), t.at, t.question.as_ref()))
+            .map(|t| (t.at, t.value))
+            .collect()
+    } else {
+        owner_agreements(conn, project, decision, &of_key)?
+    };
+    drift_of(agreements, evaluated)
+}
+
+/// Whether a verdict (its backend, time and prepared question) is of the drift key.
+type OfKey<'a> = dyn Fn(Option<&str>, DateTime<Utc>, Option<&String>) -> bool + 'a;
+
+/// The label and Details decisions' owner records of a key, as (time, agreed).
+fn owner_agreements(
+    conn: &Connection,
+    project: &str,
+    decision: &str,
+    of_key: &OfKey,
+) -> Result<Vec<(DateTime<Utc>, bool)>> {
+    Ok(truth::owner_records(conn, project)?
         .into_iter()
-        .filter(|r| {
-            r.decision == decision
-                && r.from_backend.as_deref() == Some(backend)
-                && r.at > since
-                && r.question
-                    .as_ref()
-                    .and_then(|q| questions.get(q))
-                    .is_some_and(|(q, _)| q.question_hash == hash)
+        .filter(|r| r.decision == decision && of_key(r.from_backend.as_deref(), r.at, r.question.as_ref()))
+        .map(|r| {
+            let truth: BTreeSet<String> = match &r.op {
+                truth::Op::Set(v) => v.iter().cloned().collect(),
+                truth::Op::Add(v) | truth::Op::Remove(v) => BTreeSet::from([v.clone()]),
+            };
+            (r.at, r.suggested.as_ref().is_some_and(|s| truth_set(s) == truth))
         })
-        .collect();
-    records.sort_by_key(|r| r.at);
-    let last: Vec<&Record> = records.iter().rev().take(DRIFT_RECORDS).collect();
+        .collect())
+}
+
+/// Drift over the last [`DRIFT_RECORDS`] agreements against the evaluated accuracy.
+fn drift_of(mut agreements: Vec<(DateTime<Utc>, bool)>, evaluated: Option<f64>) -> Result<Drift> {
+    agreements.sort_by_key(|a| a.0);
+    let last: Vec<bool> = agreements.iter().rev().take(DRIFT_RECORDS).map(|a| a.1).collect();
     if last.len() < DRIFT_RECORDS {
         return Ok(Drift {
             records: last.len(),
@@ -1398,16 +1509,7 @@ pub fn drift(conn: &Connection, project: &str, backend: &str, decision: &str, ha
             drifting: false,
         });
     }
-    let agree = last
-        .iter()
-        .filter(|r| {
-            let truth: BTreeSet<String> = match &r.op {
-                truth::Op::Set(v) => v.iter().cloned().collect(),
-                truth::Op::Add(v) | truth::Op::Remove(v) => BTreeSet::from([v.clone()]),
-            };
-            r.suggested.as_ref().is_some_and(|s| truth_set(s) == truth)
-        })
-        .count();
+    let agree = last.iter().filter(|a| **a).count();
     let live = agree as f64 / last.len() as f64;
     Ok(Drift {
         records: last.len(),

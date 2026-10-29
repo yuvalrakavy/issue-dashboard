@@ -15,7 +15,7 @@
     "subject": {
       "description": "project/backend/decision/question hash.",
       "type": "string",
-      "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*/[^/@]+@[^/@]+/[a-z_]+/[0-9a-f]{12}$"
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*/[^@]+@[^/@]+/[a-z_]+/[0-9a-f]{12}$"
     },
     "distinct": {
       "type": "object",
@@ -62,16 +62,17 @@
         "false_alarm_rate",
         "exclusions",
         "bars",
-        "unanswered"
+        "unanswered",
+        "by_source"
       ],
       "properties": {
         "project": {
           "$ref": "common.schema.json#/$defs/projectName"
         },
         "backend": {
-          "description": "model@effort (triage spec 1.3).",
+          "description": "model@effort (triage spec 1.3); the model may hold '/', as claude/opus-5-5@medium.",
           "type": "string",
-          "pattern": "^[^@/]+@[^@/]+$"
+          "pattern": "^[^@]+@[^@/]+$"
         },
         "decision": {
           "enum": [
@@ -186,6 +187,32 @@
           "description": "Held-out questions asked but not answered.",
           "type": "integer",
           "minimum": 0
+        },
+        "by_source": {
+          "description": "Accuracy on the held-out owner truths apart (triage spec 3.1), keyed <provenance>/<from_backend>.",
+          "type": "object",
+          "propertyNames": {
+            "pattern": "^(owner_accept|owner_edit)/[^@]+@[^@/]+$|^(owner_accept|owner_edit)/none$"
+          },
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "n",
+              "accuracy"
+            ],
+            "properties": {
+              "n": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "accuracy": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              }
+            }
+          }
         }
       }
     }

@@ -35,6 +35,7 @@
       "evaluated": false,
       "bulk": false
     },
-    "unanswered": 0
+    "unanswered": 0,
+    "by_source": {}
   }
 }

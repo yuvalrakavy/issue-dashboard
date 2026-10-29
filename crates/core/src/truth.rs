@@ -78,6 +78,8 @@ pub struct Truth {
     pub value: Value,
     pub provenance: String,
     pub at: DateTime<Utc>,
+    /// The suggestion's backend when the latest record is the owner's answer to one (3.1).
+    pub from_backend: Option<String>,
 }
 
 fn hit(names: &Labels, label: &str) -> bool {
@@ -155,7 +157,9 @@ pub fn label_records(t: &Translation, item: &HistoryItem, tags: &BTreeMap<String
     Ok(out)
 }
 
-/// Folds `records` of one (item, decision) (3.1), skipping the provenances in `exclude`.
+/// Folds `records` of one (item, decision) (3.1), skipping the provenances in `exclude`. An
+/// area truth is the set the adds and removes build; a single choice is the latest value still
+/// standing: a later label beside an earlier one wins, and removing it uncovers the earlier.
 pub fn fold(decision: &str, records: &[Record], exclude: &BTreeSet<String>) -> Option<Truth> {
     let mut kept: Vec<&Record> = records
         .iter()
@@ -163,29 +167,28 @@ pub fn fold(decision: &str, records: &[Record], exclude: &BTreeSet<String>) -> O
         .collect();
     kept.sort_by_key(|r| r.at);
     let last = kept.last()?;
-    let mut set: BTreeSet<String> = BTreeSet::new();
+    // In the order the values were set; the last is the latest.
+    let mut on: Vec<String> = Vec::new();
     for r in &kept {
         match &r.op {
             Op::Add(v) => {
-                set.insert(v.clone());
+                on.retain(|x| x != v);
+                on.push(v.clone());
             }
-            Op::Remove(v) => {
-                set.remove(v);
-            }
-            Op::Set(vs) => set = vs.iter().cloned().collect(),
+            Op::Remove(v) => on.retain(|x| x != v),
+            Op::Set(vs) => on = vs.clone(),
         }
     }
     let value = if decision == "area" {
-        json!(set)
-    } else if set.len() == 1 {
-        json!(set.into_iter().next().expect("one value"))
+        json!(on.into_iter().collect::<BTreeSet<String>>())
     } else {
-        return None;
+        json!(on.pop()?)
     };
     Some(Truth {
         value,
         provenance: last.provenance.clone(),
         at: last.at,
+        from_backend: last.from_backend.clone(),
     })
 }
 
@@ -340,6 +343,9 @@ pub struct ClosureTruth {
     pub value: bool,
     pub provenance: String,
     pub at: DateTime<Utc>,
+    /// The suggestion's backend and question, for scoring and drift (3.5).
+    pub from_backend: Option<String>,
+    pub question: Option<String>,
 }
 
 /// The number of an alias owner/repo#N.
@@ -364,8 +370,8 @@ fn close_after(conn: &Connection, item: &str, after: DateTime<Utc>) -> Result<Op
 }
 
 /// The truth of every closure suggestion of `project` that has one (3.1): bound to the
-/// suggestion's own document; the latest verdict wins.
-pub fn closure_truth(conn: &Connection, project: &str) -> Result<Vec<ClosureTruth>> {
+/// suggestion's own document; the latest verdict whose provenance is not in `exclude` wins.
+pub fn closure_truth(conn: &Connection, project: &str, exclude: &BTreeSet<String>) -> Result<Vec<ClosureTruth>> {
     let found = suggestions(conn, project)?;
     let resolved = decision::resolved(conn, project)?;
     let window = Duration::days(CLOSURE_WINDOW_DAYS);
@@ -418,6 +424,7 @@ pub fn closure_truth(conn: &Connection, project: &str) -> Result<Vec<ClosureTrut
                 verdicts.push((at, true, "owner_accept"));
             }
         }
+        verdicts.retain(|v| !exclude.contains(v.2));
         verdicts.sort_by_key(|v| v.0);
         if let Some((at, value, provenance)) = verdicts.last() {
             out.push(ClosureTruth {
@@ -427,6 +434,8 @@ pub fn closure_truth(conn: &Connection, project: &str) -> Result<Vec<ClosureTrut
                 value: *value,
                 provenance: provenance.to_string(),
                 at: *at,
+                from_backend: s.body["backend"].as_str().map(str::to_string),
+                question: s.body["question"].as_str().map(str::to_string),
             });
         }
     }
@@ -506,7 +515,7 @@ pub fn record_tags(
         let r = tx.record_valid(
             Kind::TruthTag,
             &t.event,
-            json!({"name": name}),
+            json!({"project": project, "name": name}),
             json!({
                 "project": project,
                 "name": name,
@@ -517,7 +526,9 @@ pub fn record_tags(
                 "added": t.added,
                 "at": t.at,
             }),
-            ledger::Dedupe::Any,
+            // A tag is the project's: another project's tag of the same event is no repeat, and
+            // tagging A, then B, then A again leaves A in force.
+            ledger::Dedupe::Latest,
         )?;
         if r.is_new() {
             new += 1;

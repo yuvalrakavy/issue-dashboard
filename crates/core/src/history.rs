@@ -144,6 +144,9 @@ pub enum Cursor {
 #[serde(deny_unknown_fields)]
 pub struct RepoHistory {
     pub repo: String,
+    /// The member's search filter the history was read with (`None`: every issue).
+    #[serde(default)]
+    pub filter: Option<String>,
     pub window_days: u32,
     /// The window's start: issues updated before it are not read.
     pub since: String,
@@ -379,11 +382,12 @@ pub fn refresh_repo(
     let previous = load(root, repo)?;
     let resumed = previous
         .as_ref()
-        .is_some_and(|h| !h.complete && h.window_days == window_days);
+        .is_some_and(|h| !h.complete && h.window_days == window_days && h.filter.as_deref() == filter);
     let mut h = match previous {
         Some(h) if resumed => h,
         _ => RepoHistory {
             repo: repo.to_string(),
+            filter: filter.map(str::to_string),
             window_days,
             since: format_time(now - Duration::days(i64::from(window_days))),
             started_at: format_time(now),
@@ -529,12 +533,29 @@ pub fn refresh(
     Ok(out)
 }
 
-/// Every complete history file of `project`'s repos; a repo whose history is missing or
-/// incomplete is refused, so an evaluation never runs on part of the window.
+/// Every complete history file of `project`'s repos; a repo whose history is missing,
+/// incomplete, or read for another window or filter (another project's, or an older config) is
+/// refused, so an evaluation never runs on part of the window or on another population.
 pub fn project_history(root: &Path, config: &ConfigSet, project: &str) -> Result<Vec<RepoHistory>> {
+    let days = config.project(project)?.eval_history_days.unwrap_or(HISTORY_DAYS);
     let mut out = Vec::new();
-    for repo in config.views(project)?.keys() {
+    for (repo, view) in config.views(project)? {
+        let repo = &repo;
         match load(root, repo)? {
+            Some(h) if h.window_days != days || h.filter != view.filter => {
+                return Err(Error::refused(format!(
+                    "the history of {repo} was read for {} days{} and {project} wants {days}{}: run eval refresh-history --project {project}",
+                    h.window_days,
+                    h.filter
+                        .as_deref()
+                        .map(|f| format!(" filtered by {f}"))
+                        .unwrap_or_default(),
+                    view.filter
+                        .as_deref()
+                        .map(|f| format!(" filtered by {f}"))
+                        .unwrap_or_default(),
+                )));
+            }
             Some(h) if h.complete => out.push(h),
             Some(_) => {
                 return Err(Error::refused(format!(
