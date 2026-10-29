@@ -459,17 +459,36 @@ pub fn check_author(config: &ConfigSet, doc: &LaunchRequest) -> Result<()> {
     )))
 }
 
-/// A triage launch of `project` (the `recommend_closures` alias included) that is live: not
-/// yet ended, released or withdrawn (triage spec 5.1, 5.2).
-pub fn live_triage(conn: &Connection, project: &str) -> Result<Option<Launch>> {
-    Ok(all(conn)?.into_iter().find(|l| {
-        l.request.project == project
-            && l.request.triage_scope().is_some()
-            && matches!(
+/// How long an owner's triage request no dispatcher has taken counts as live. The dispatcher
+/// hears a page launch within minutes; one unheard for a day was never sent (a refused send's
+/// `not_sent` record is not ingested), and counting it live would stop every later triage run.
+/// A `schedule` request does not age: the daily run wakes the dispatcher for it again.
+pub const UNHEARD_REQUEST_HOURS: i64 = 24;
+
+/// A triage launch of `project` (the `recommend_closures` alias included) that is live at
+/// `now`: not yet ended, released or withdrawn, and not an owner request unheard for
+/// [`UNHEARD_REQUEST_HOURS`] (triage spec 5.1, 5.2).
+pub fn live_triage(conn: &Connection, project: &str, now: &str) -> Result<Option<Launch>> {
+    let now = parse_time(now)?;
+    for l in all(conn)? {
+        if l.request.project != project
+            || l.request.triage_scope().is_none()
+            || !matches!(
                 l.state,
                 State::Requested | State::Queued | State::Reserved | State::Unconfirmed | State::Started
             )
-    }))
+        {
+            continue;
+        }
+        if l.state == State::Requested
+            && l.request.author != SCHEDULE_AUTHOR
+            && now - parse_time(&l.request.created_at)? >= Duration::hours(UNHEARD_REQUEST_HOURS)
+        {
+            continue;
+        }
+        return Ok(Some(l));
+    }
+    Ok(None)
 }
 
 /// An item of `l` held by another launch, with that launch. A launch whose kind holds no

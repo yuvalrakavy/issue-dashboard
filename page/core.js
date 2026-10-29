@@ -813,26 +813,37 @@
 
   // Triage launches (triage spec 5.1). `recommend_closures` is the alias of scope `closures`.
   const TRIAGE_KINDS = ["triage", "recommend_closures"];
+  const READ_ONLY_KINDS = ["triage", "recommend_closures", "stronger_look", "eval"];
+  const MAX_TRIAGE_ITEMS = 40;
   const LIVE_STATES = ["requested", "queued", "reserved", "unconfirmed", "started"];
 
   // Whether a triage launch is live: one the tracker reports in a live state (the daily run's
   // included, which the page did not write), or one the page wrote that the tracker has not
-  // reported yet and that was sent.
+  // reported yet and that was sent. As in launchStates, the tracker's `requested` does not
+  // outrank the page's record of a refused send: that launch never reached a dispatcher.
   function triageLive(launches, statuses) {
     const status = new Map((statuses || []).map((s) => [s.launch, s]));
-    for (const s of statuses || []) {
-      if (TRIAGE_KINDS.includes(s.kind) && LIVE_STATES.includes(s.state)) return true;
-    }
     const notSent = new Set((launches || []).filter((l) => l.not_sent).map((l) => l.not_sent.launch));
+    for (const s of statuses || []) {
+      if (TRIAGE_KINDS.includes(s.kind) && LIVE_STATES.includes(s.state) && !(s.state === "requested" && notSent.has(s.launch))) return true;
+    }
     return (launches || []).some((l) => TRIAGE_KINDS.includes(l.kind) && !status.has(l.id) && !notSent.has(l.id));
   }
 
+  // The launch states that decide whether an item can be launched for a fix: those of the
+  // launches that hold their items. A triage, closure check or eval only reads them.
+  function fixLaunchStates(launches, statuses) {
+    return launchStates((launches || []).filter((l) => !READ_ONLY_KINDS.includes(l.kind)), statuses);
+  }
+
   // Run triage… (triage spec 5.1): the items the tracker found due for `scope`
-  // (meta.triage_queue, already in the 2.2 order and capped), kept to the open issues in view.
+  // (meta.triage_queue, in the 2.2 order, uncapped), kept to the open issues in view, then
+  // capped at meta.max_triage_items.
   function triageLaunchFields(issues, meta, scope, routing) {
     const queue = ((meta && meta.triage_queue) || {})[scope] || [];
+    const max = (meta && meta.max_triage_items) || MAX_TRIAGE_ITEMS;
     const byId = new Map((issues || []).filter((i) => i.state === "open").map((i) => [i.id, i]));
-    const items = queue.filter((id) => byId.has(id)).map((id) => byId.get(id));
+    const items = queue.filter((id) => byId.has(id)).slice(0, max).map((id) => byId.get(id));
     if (!items.length) return { error: scope === "closures" ? "No open issue in view is due for a closure check." : "No open issue in view is due for triage." };
     return {
       fields: {
@@ -864,7 +875,7 @@
     closable, closeComment, closeFields, describeClose, pendingClose, dismissed, recentlyClosed, dismissFields,
     sessionLines, inProgress, ownerNotice,
     dismissedSuggestions, suggestionCards, dismissSuggestionFields, closePrefill, fixLaunchFields, recommendFields, READ_ONLY_RECIPE,
-    triageLive, triageLaunchFields, evalLaunchFields, noEvaluation,
+    triageLive, fixLaunchStates, triageLaunchFields, evalLaunchFields, noEvaluation,
     actedSuggestions, answerText, triageCards, acceptFields, acceptCardFields, editFields, applyAllFields, detailsEditFields, rubricNote, secondOpinionNote,
   };
   root.IssueDashboard = api;

@@ -784,12 +784,13 @@ pub(crate) fn owner_asked(conn: &Connection, project: &str) -> Result<BTreeMap<S
     Ok(out)
 }
 
-/// Every issue `project` tracks in a repo it may write to: a read-only member's issues are
-/// someone else's to label (1.4).
+/// Every issue `project` tracks in a repo it may write to: a read-only member's issues
+/// (declared, or observed without write access, as the dashboard reads it) are someone else's
+/// to label (1.4).
 fn project_items(conn: &Connection, config: &ConfigSet, project: &str) -> Result<BTreeSet<String>> {
     let mut out = BTreeSet::new();
     for view in config.views(project)?.into_values() {
-        if view.read_only {
+        if crate::derive::read_only(conn, project, &view)?.is_some() {
             continue;
         }
         let node = match crate::snapshot::read_state(conn, project, &view.repo)?.and_then(|s| s.repo_node) {

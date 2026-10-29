@@ -28,6 +28,9 @@ reserves the launch and starts a session at that routing. That session's
      Report the message's first line and stop. This is a normal outcome, not a failure.
    - Any other exit 1: report the message's first line and stop.
    - `"result": "requested"`: keep its `launch` id and the number of `aliases`, and go on.
+   - `"result": "pending"`: an earlier daily request no dispatcher has taken yet. Nothing new
+     was recorded; keep its `launch` id and the number of `aliases`, and go on, so the
+     dispatcher is woken for it again.
 2. **Find the dispatcher**, as the `issues-dashboard` skill finds it:
    `BIN --root ROOT launches --live` and keep every `dispatcher` id in its rows; then
    `mcp__ccd_session_mgmt__list_sessions` (`limit: 200`). Candidates: sessions titled `TITLE`
@@ -47,9 +50,10 @@ reserves the launch and starts a session at that routing. That session's
    If `SendMessage` is unavailable or refused, try `mcp__ccd_session_mgmt__send_message`
    with the same session id and text. If that fails too, the result is "pending".
 4. **Report** in one line: `requested LAUNCH (N items); dispatcher woken` or
-   `requested LAUNCH (N items); pending: <why>`. A pending request is not lost: it stays
-   `requested` in the ledger (`BIN --root ROOT launches --requested`) and the dispatcher can
-   reserve it on its next wake.
+   `requested LAUNCH (N items); pending: <why>` (`still pending LAUNCH …` for a step-1
+   `pending` result). A pending request is not lost: it stays `requested` in the ledger
+   (`BIN --root ROOT launches --requested`), and the next daily run wakes the dispatcher for
+   it again instead of recording another.
 
 ## Never
 

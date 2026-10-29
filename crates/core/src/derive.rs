@@ -489,7 +489,8 @@ fn launch_status(conn: &Connection, project: &str) -> Result<Vec<Value>> {
 }
 
 /// What the page's Run triage… sheet needs (triage spec 5.1, 5.3): the routing each launch kind
-/// gets, the backends any evaluation measured, and the items each scope would ask about now.
+/// gets, the backends any evaluation measured, and the items each scope would ask about now
+/// (in the 2.2 order, uncapped).
 fn triage_meta(conn: &Connection, config: &ConfigSet, project: &str, now: &str) -> Result<Value> {
     let routing = |kind: &str| -> Result<Value> {
         Ok(match config.routing(project, kind) {
@@ -507,9 +508,10 @@ fn triage_meta(conn: &Connection, config: &ConfigSet, project: &str, now: &str) 
     }
     let p = config.project(project)?;
     let max = p.max_triage_items.unwrap_or(crate::config::MAX_TRIAGE_ITEMS) as usize;
+    // Uncapped: the page keeps the items of the repos in view and only then caps at
+    // `max_triage_items`, so one busy repo cannot hide another's due items.
     let queue = |scope| -> Result<Vec<String>> {
-        let mut c = crate::triage::select(conn, config, project, scope, now)?;
-        c.truncate(max);
+        let c = crate::triage::select(conn, config, project, scope, now)?;
         Ok(c.into_iter().map(|c| c.item).collect())
     };
     Ok(json!({

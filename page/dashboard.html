@@ -794,6 +794,7 @@ footer .wrap { padding-block: 0 32px; font-size: .82rem; color: var(--muted); di
 
   function renderQueue() {
     const states = D.launchStates(S.launches, S.statuses);
+    const fixStates = D.fixLaunchStates(S.launches, S.statuses);
     const list = shown();
     const q = D.queue(list, D.inbox(list));
     const f = S.queueFilter;
@@ -806,7 +807,7 @@ footer .wrap { padding-block: 0 32px; font-size: .82rem; color: var(--muted); di
     const head = h("div", { class: "pills" }, pill("all", "All"), pill("p0", "p0"), pill("over", "Over time limit"), pill("progress", "In progress"), pill("bug", "Bugs"), pill("todo", "Todo"), pill("decision", "Decisions"), pill("docs", "Docs"), pill("pr", "Pull requests"), search);
     const row = (i) => {
       const line = decisionLine(i);
-      const st = states[i.id];
+      const st = fixStates[i.id];
       const launchable = S.owner && i.kind === "issue" && (!st || st.state === "not_sent");
       const noRecipe = launchable ? D.fixLaunchFields([i], repoInfo(D.repoOf(i.alias)), null).error : null;
       return h("div", { class: "row", tabindex: "0", "data-nav": "1", "data-gh": ghUrl(i), "data-id": i.id },
@@ -894,6 +895,8 @@ footer .wrap { padding-block: 0 32px; font-size: .82rem; color: var(--muted); di
     return h("div", { class: "list" }, h("div", { class: "pills" }, period, based),
       h("div", { class: "panels" }, flow, limits),
       h("div", { class: "panels" }, table("By group", byGroup, "group"), table("By repo", byRepo, "repo")),
+      S.owner ? h("div", { class: "pills" }, h("button", { class: "btn", onclick: () => openEvaluate((S.meta && S.meta.routing && S.meta.routing.triage) || { model: "claude-opus-5-5", effort: "medium" }) }, "Evaluate…"),
+        h("span", { class: "muted" }, "Measure a backend's triage answers against the recorded truth (triage spec 3.2).")) : null,
       h("div", { class: "note" }, "Outside response times, decision accuracy and session outcomes arrive with their data in phase 2."));
   }
 
@@ -1132,7 +1135,7 @@ footer .wrap { padding-block: 0 32px; font-size: .82rem; color: var(--muted); di
       // The anchor is taken now, inside the gesture (comments.d.ts).
       const anchor = S.comments.anchorFor(go);
       const f = o.fields(routing());
-      if (f.error) { status.textContent = f.error; return; }
+      if (f.error) { status.textContent = f.error; go.disabled = false; return; }
       status.textContent = "Recording the launch…";
       const r = await D.launch({
         db: S.db, comments: S.comments, who: who(), now: () => new Date(), rand: Math.random, anchor: () => anchor,

@@ -97,3 +97,48 @@ test("the Inbox offers Run triage… to the owner, off while live, and the sheet
   assert.match(html, /This routing has no evaluation/);
   assert.match(html, /"Evaluate…"/);
 });
+
+test("a send the page recorded as refused is not live, even once the tracker reports it requested", () => {
+  const mine = { id: "L1", kind: "triage", items: ["I_1"] };
+  const notSent = { id: "L2", not_sent: { launch: "L1", error: "upstream_error" } };
+  const requested = [{ launch: "L1", kind: "triage", state: "requested" }];
+  assert.equal(D.triageLive([mine, notSent], requested), false);
+  // A later transition outranks the page's record: a dispatcher has it.
+  assert.equal(D.triageLive([mine, notSent], [{ launch: "L1", kind: "triage", state: "reserved" }]), true);
+  // Without the record, requested is live.
+  assert.equal(D.triageLive([mine], requested), true);
+});
+
+test("a triage, closure check or eval over an item leaves its fix launch available", () => {
+  const launches = [
+    { id: "T1", kind: "triage", items: ["I_1"] },
+    { id: "R1", kind: "recommend_closures", items: ["I_2"] },
+    { id: "S1", kind: "stronger_look", items: ["I_3"] },
+    { id: "F1", kind: "fix", items: ["I_4"] },
+  ];
+  const statuses = ["T1", "R1", "S1", "F1"].map((l) => ({ launch: l, state: "released" }));
+  assert.deepEqual(Object.keys(D.fixLaunchStates(launches, statuses)), ["I_4"]);
+  assert.equal(D.fixLaunchStates(launches, statuses).I_4.state, "released");
+  // The rows still show every launch's state.
+  assert.deepEqual(Object.keys(D.launchStates(launches, statuses)).sort(), ["I_1", "I_2", "I_3", "I_4"]);
+});
+
+test("the cap applies after the repos in view are kept, so one repo cannot hide another's", () => {
+  const OTHER = "yuvalrakavy/airzoned";
+  const capped = { triage_queue: { full: ["I_1", "I_2", "I_3", "I_7", "I_8"] }, max_triage_items: 2 };
+  const inView = [issue(7, { alias: OTHER + "#7" }), issue(8, { alias: OTHER + "#8" })];
+  assert.deepEqual(D.triageLaunchFields(inView, capped, "full", routing).fields.items, ["I_7", "I_8"]);
+  const all = [issue(1), issue(2), issue(3), ...inView];
+  assert.deepEqual(D.triageLaunchFields(all, capped, "full", routing).fields.items, ["I_1", "I_2"]);
+  // With no cap in meta, the tracker's default of 40.
+  const many = Array.from({ length: 45 }, (_, k) => issue(100 + k));
+  const m = { triage_queue: { full: many.map((i) => i.id) } };
+  assert.equal(D.triageLaunchFields(many, m, "full", routing).fields.items.length, 40);
+});
+
+test("Trends offers the owner Evaluate…, and a refused Launch on the sheet can be pressed again", () => {
+  const html = fs.readFileSync(path.join(__dirname, "dashboard.html"), "utf8");
+  assert.match(html, /S\.owner \? h\("div", \{ class: "pills" \}, h\("button", \{ class: "btn", onclick: \(\) => openEvaluate\(/);
+  assert.match(html, /if \(f\.error\) \{ status\.textContent = f\.error; go\.disabled = false; return; \}/);
+  assert.match(html, /const st = fixStates\[i\.id\];/);
+});

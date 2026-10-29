@@ -33,15 +33,33 @@ pub enum TriageRequested {
         /// The same request was already recorded (the same items at the same instant).
         repeat: bool,
     },
+    /// An earlier daily request is still `requested`: no dispatcher has taken it. Nothing new is
+    /// recorded; the caller wakes the dispatcher for this one again (5.2 "pending").
+    Pending {
+        project: String,
+        launch: String,
+        aliases: Vec<String>,
+        routing: Routing,
+    },
     /// No item has a question due: nothing was recorded.
     NothingToTriage { project: String },
 }
 
-/// `triage-request --project P` (5.2): refused while a triage launch of `project` is live;
-/// with nothing eligible, records nothing.
+/// `triage-request --project P` (5.2): refused while a triage launch of `project` is live,
+/// except an earlier daily request no dispatcher took, which is returned as pending; with
+/// nothing eligible, records nothing.
 pub fn request(tx: &mut Tx<'_>, config: &ConfigSet, project: &str) -> Result<TriageRequested> {
     let p = config.project(project)?;
-    if let Some(l) = launch::live_triage(tx.conn(), project)? {
+    let now = tx.now().to_string();
+    if let Some(l) = launch::live_triage(tx.conn(), project, &now)? {
+        if l.state == launch::State::Requested && l.request.author == SCHEDULE_AUTHOR {
+            return Ok(TriageRequested::Pending {
+                project: project.to_string(),
+                launch: l.id,
+                aliases: l.request.aliases,
+                routing: l.request.routing,
+            });
+        }
         return Err(Error::refused(format!(
             "triage launch {} of project {project} is live ({}); the daily run requests nothing until it ends",
             l.id, l.state
@@ -49,7 +67,6 @@ pub fn request(tx: &mut Tx<'_>, config: &ConfigSet, project: &str) -> Result<Tri
     }
     let routing = config.routing(project, "triage")?;
     let max = p.max_triage_items.unwrap_or(MAX_TRIAGE_ITEMS) as usize;
-    let now = tx.now().to_string();
     let mut picked = triage::select(tx.conn(), config, project, TriageScope::Full, &now)?;
     picked.truncate(max);
     if picked.is_empty() {

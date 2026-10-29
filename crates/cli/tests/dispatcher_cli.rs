@@ -466,20 +466,34 @@ fn the_daily_run_from_request_to_reservation() {
         "requested is not live"
     );
 
-    // A second run while it is live is refused, and records nothing.
-    let m = t.refused(&["triage-request", "--project", "home"]);
-    assert!(
-        m.contains(&format!(
-            "triage launch {id} of project home is live (requested); the daily run requests nothing until it ends"
-        )),
-        "{m}"
+    // A second run while no dispatcher has taken it records nothing: it is pending, and the
+    // task wakes the dispatcher for it again.
+    let p = t.ok(&["triage-request", "--project", "home"]);
+    assert_eq!(
+        (p["result"].clone(), p["launch"].clone()),
+        (json!("pending"), json!(id)),
+        "{p}"
     );
+    assert_eq!(p["aliases"], r["aliases"]);
     assert_eq!(t.ok(&["launches"])["launches"].as_array().unwrap().len(), 1);
 
     // The dispatcher reserves it as it reserves the owner's.
     let res = t.ok(&["reserve", "--launch", &id, "--dispatcher", D]);
     assert_eq!(res["result"], "reserved", "{res}");
     let token = res["token"].as_str().unwrap().to_string();
+    assert_eq!(
+        t.ok(&["launches", "--requested"])["launches"],
+        json!([]),
+        "a reserved launch is no longer requested"
+    );
+    // Now a run is refused while it is live.
+    let m = t.refused(&["triage-request", "--project", "home"]);
+    assert!(
+        m.contains(&format!(
+            "triage launch {id} of project home is live (reserved); the daily run requests nothing until it ends"
+        )),
+        "{m}"
+    );
     let b = t.ok(&["brief", "--launch", &id]);
     assert_eq!(b["title"], json!(format!("Triage (40) {token}")));
     let text = b["text"].as_str().unwrap();
@@ -515,7 +529,8 @@ fn the_daily_run_from_request_to_reservation() {
     assert_eq!(d["meta"]["routing"]["stronger_look"]["effort"], "high");
     assert_eq!(d["meta"]["max_triage_items"], 40);
     assert_eq!(d["meta"]["evaluated_backends"], json!([]));
-    assert_eq!(d["meta"]["triage_queue"]["full"].as_array().unwrap().len(), 40);
+    // Uncapped: the page caps after keeping the repos in view.
+    assert_eq!(d["meta"]["triage_queue"]["full"].as_array().unwrap().len(), 82);
 }
 
 #[test]

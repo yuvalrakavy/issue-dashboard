@@ -17,7 +17,7 @@ use issue_dashboard_core::ingest::{self, Pages};
 use issue_dashboard_core::launch::{self, State, Via};
 use issue_dashboard_core::root::format_time;
 use issue_dashboard_core::triage::{self, Stage};
-use issue_dashboard_core::{Result, ledger};
+use issue_dashboard_core::{Result, brief, cycle, ledger};
 use serde_json::{Value, json};
 
 fn config(t: &TempRoot) -> ConfigSet {
@@ -115,12 +115,21 @@ fn the_daily_run_records_a_schedule_triage_launch_at_the_default_routing() {
 #[test]
 fn the_daily_run_is_refused_while_a_triage_launch_is_live_and_requests_again_once_it_ends() {
     let tr = tracked();
-    let id = requested_id(&request(&tr.t, 5).unwrap());
-    let m = refused(request(&tr.t, 6));
+    let first = request(&tr.t, 5).unwrap();
+    let id = requested_id(&first);
+    // Its own request, still waiting for a dispatcher: pending, nothing new recorded.
+    let pending = serde_json::to_value(request(&tr.t, 6).unwrap()).unwrap();
     assert_eq!(
-        m,
-        format!("triage launch {id} of project home is live (requested); the daily run requests nothing until it ends")
+        (
+            pending["result"].clone(),
+            pending["launch"].clone(),
+            pending["project"].clone()
+        ),
+        (json!("pending"), json!(id), json!("home"))
     );
+    assert_eq!(pending["aliases"], serde_json::to_value(&first).unwrap()["aliases"]);
+    assert_eq!(pending["routing"]["model"], "claude-opus-5-5");
+    assert_eq!(tr.t.root.read(|l| launch::all(l.conn())).unwrap().len(), 1);
     let token =
         tr.t.root
             .mutate(at(7), |tx| match launch::reserve(tx, &id, D1, &cap)? {
@@ -128,7 +137,10 @@ fn the_daily_run_is_refused_while_a_triage_launch_is_live_and_requests_again_onc
                 other => panic!("expected a reservation, got {other:?}"),
             })
             .unwrap();
-    assert!(refused(request(&tr.t, 8)).contains("is live (reserved)"));
+    assert_eq!(
+        refused(request(&tr.t, 8)),
+        format!("triage launch {id} of project home is live (reserved); the daily run requests nothing until it ends")
+    );
     tr.t.root
         .mutate(at(9), |tx| {
             launch::started(tx, &token, "local_triage")?;
@@ -490,4 +502,219 @@ fn an_owner_request_before_the_last_answer_does_not_make_the_item_due() {
         .map(|c| c.item)
         .collect();
     assert!(!ids.contains(&item));
+}
+
+// --- gate round 1: what a live launch is, and the selection's filters ------------------------
+
+#[test]
+fn an_owner_triage_request_no_dispatcher_took_for_a_day_stops_blocking_the_daily_run() {
+    let tr = tracked();
+    // The owner's request, written at 2026-10-23T08:00:00Z (launch_doc), never reserved: its
+    // send was refused, and the not_sent record is not ingested.
+    let doc = launch_of("R1", LaunchKind::Triage, &tr.items[..1]);
+    tr.t.root
+        .mutate(at(2), |tx| launch::request(tx, &doc, Via::Ingest))
+        .unwrap();
+    // at(1282) is 2026-10-24T07:59:46Z, less than a day after: still live.
+    assert_eq!(
+        refused(request(&tr.t, 1282)),
+        "triage launch R1 of project home is live (requested); the daily run requests nothing until it ends"
+    );
+    // at(1283) is 2026-10-24T08:00:46Z: unheard for a day, it no longer counts.
+    let id = requested_id(&request(&tr.t, 1283).unwrap());
+    assert_ne!(id, "R1");
+    assert_eq!(load(&tr.t, "R1").state, State::Requested);
+}
+
+#[test]
+fn a_schedule_request_does_not_age_the_next_daily_run_wakes_for_it_again() {
+    let tr = tracked();
+    let id = requested_id(&request(&tr.t, 5).unwrap());
+    let v = serde_json::to_value(request(&tr.t, 5 + 3 * 24 * 60).unwrap()).unwrap();
+    assert_eq!(
+        (v["result"].clone(), v["launch"].clone()),
+        (json!("pending"), json!(id))
+    );
+    assert_eq!(tr.t.root.read(|l| launch::all(l.conn())).unwrap().len(), 1);
+}
+
+#[test]
+fn a_triage_launch_of_another_project_does_not_block_this_one() {
+    let tr = tracked();
+    let mut doc = launch_doc("K1", "kernel", &[], READ_ONLY_RECIPE);
+    doc.kind = LaunchKind::Triage;
+    doc.items = vec![tr.items[0].0.clone()];
+    doc.aliases = vec![tr.items[0].1.clone()];
+    tr.t.root
+        .mutate(at(2), |tx| launch::request(tx, &doc, Via::Ingest))
+        .unwrap();
+    assert_eq!(load(&tr.t, "K1").state, State::Requested);
+    let id = requested_id(&request(&tr.t, 3).unwrap());
+    assert_ne!(id, "K1");
+}
+
+#[test]
+fn a_recommend_closures_request_records_no_scope_and_still_reads_as_closures() {
+    let tr = tracked();
+    let doc = launch_of("R1", LaunchKind::RecommendClosures, &tr.items[..1]);
+    tr.t.root
+        .mutate(at(2), |tx| launch::request(tx, &doc, Via::Ingest))
+        .unwrap();
+    let e =
+        tr.t.root
+            .read(|c| ledger::latest(c.conn(), "R1", Kind::Launch))
+            .unwrap()
+            .unwrap();
+    assert_eq!(e.data.get("scope"), None, "{}", e.data);
+    assert_eq!(load(&tr.t, "R1").request.triage_scope(), Some(TriageScope::Closures));
+}
+
+#[test]
+fn an_owner_request_in_another_project_does_not_make_the_item_due_here() {
+    let tr = tracked();
+    let item = tr.items[0].0.clone();
+    answered(&tr, "T1", &tr.items[..1], 2);
+    let c = config(&tr.t);
+    let pages = Pages {
+        requests: vec![json!({
+            "id": "R_20261029_080000_cccccccc", "project": "kernel", "author": OWNER,
+            "created_at": "2026-10-29T08:00:00Z", "kind": "triage", "items": [item],
+        })],
+        ..Pages::default()
+    };
+    tr.t.root
+        .mutate(at(5), |tx| ingest::ingest(tx, &c, "kernel", OWNER, &pages))
+        .unwrap();
+    let n =
+        tr.t.root
+            .read(|l| ledger::events_by_kind(l.conn(), Kind::Request))
+            .unwrap()
+            .len();
+    assert_eq!(n, 1, "the kernel request was recorded");
+    let ids: Vec<String> = select(&tr.t, TriageScope::Full, 6)
+        .into_iter()
+        .map(|c| c.item)
+        .collect();
+    assert!(!ids.contains(&item), "{ids:?}");
+}
+
+#[test]
+fn the_closures_selection_asks_closures_only_and_the_full_one_labels_too() {
+    let tr = tracked();
+    let item = tr.items[0].0.clone();
+    let mut doc = launch_of("T1", LaunchKind::Triage, &tr.items[..1]);
+    doc.scope = Some(TriageScope::Closures);
+    tr.t.root
+        .mutate(at(2), |tx| {
+            launch::request(tx, &doc, Via::Reserve)?;
+            launch::reserve(tx, "T1", D1, &cap)
+        })
+        .unwrap();
+    let p = prepare(&tr.t, "T1", BACKEND, Stage::First, 3).unwrap();
+    record(&tr.t, "T1", answer_all(&p), 3).unwrap();
+    let ids = |scope| -> Vec<String> { select(&tr.t, scope, 4).into_iter().map(|c| c.item).collect() };
+    assert!(!ids(TriageScope::Closures).contains(&item), "its closures are answered");
+    assert!(ids(TriageScope::Full).contains(&item), "its labels are not");
+}
+
+#[test]
+fn a_closed_issue_is_never_selected() {
+    let tr = tracked();
+    let r = cycle::cycle(&tr.t.root, &gh(), "home", &no_pages(), &move || at(1), PAGE).unwrap();
+    let d: Value = serde_json::from_str(&fs::read_to_string(&r.outbox).unwrap()).unwrap();
+    let closed: Vec<String> = d["issues"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|i| i["state"] != "open" && i["kind"] == "issue")
+        .map(|i| i["id"].as_str().unwrap().to_string())
+        .collect();
+    assert!(!closed.is_empty(), "the fixture holds closed issues");
+    let picked = select(&tr.t, TriageScope::Full, 2);
+    assert!(!picked.is_empty());
+    let wrong: Vec<&String> = picked.iter().map(|c| &c.item).filter(|i| closed.contains(i)).collect();
+    assert!(wrong.is_empty(), "closed issues selected: {wrong:?}");
+}
+
+#[test]
+fn a_repo_the_account_cannot_write_to_is_not_selected() {
+    for (permission, store_selected) in [("READ", false), ("WRITE", true)] {
+        let t = fixture_root();
+        let gh = gh_with(move |req, v| {
+            let mut v = v?;
+            if req.name == "repo" && req.variables["name"] == "Store" {
+                v["data"]["repository"]["viewerPermission"] = json!(permission);
+            }
+            Ok(v)
+        });
+        cycle::cycle(&t.root, &gh, "home", &no_pages(), &move || at(0), PAGE).unwrap();
+        let picked = select(&t, TriageScope::Full, 1);
+        let store = picked.iter().any(|c| c.alias.starts_with("yuvalrakavy/Store#"));
+        let airzoned = picked.iter().any(|c| c.alias.starts_with("yuvalrakavy/airzoned#"));
+        assert_eq!((store, airzoned), (store_selected, true), "{permission}");
+    }
+}
+
+#[test]
+fn a_closures_brief_says_closures_and_has_no_priority_stage() {
+    let tr = tracked();
+    let items = &tr.items[..2];
+    for (id, scope) in [("T1", TriageScope::Closures), ("T2", TriageScope::Full)] {
+        let mut doc = launch_of(id, LaunchKind::Triage, items);
+        doc.scope = Some(scope);
+        let token =
+            tr.t.root
+                .mutate(at(2), |tx| {
+                    launch::request(tx, &doc, Via::Reserve)?;
+                    match launch::reserve(tx, id, D1, &cap)? {
+                        launch::Reservation::Reserved { token, .. } => {
+                            launch::started(tx, &token, &format!("local_{id}"))?;
+                            launch::ended(tx, &token, launch::EndState::Landed)?;
+                            Ok(token)
+                        }
+                        other => panic!("expected a reservation, got {other:?}"),
+                    }
+                })
+                .unwrap();
+        let c = config(&tr.t);
+        let b =
+            tr.t.root
+                .read(|l| brief::brief_with(l.conn(), &c, id, "issue-dashboard"))
+                .unwrap();
+        let closures = scope == TriageScope::Closures;
+        let want = if closures {
+            format!("Triage closures (2) {token}")
+        } else {
+            format!("Triage (2) {token}")
+        };
+        assert_eq!(b.title, want);
+        assert_eq!(b.text.contains("--stage priority"), !closures, "{}", b.text);
+    }
+}
+
+#[test]
+fn the_page_hears_only_this_project_s_evaluated_backends() {
+    let tr = tracked();
+    let meta = |minutes: i64| -> Value {
+        let r = cycle::cycle(&tr.t.root, &gh(), "home", &no_pages(), &move || at(minutes), PAGE).unwrap();
+        let d: Value = serde_json::from_str(&fs::read_to_string(&r.outbox).unwrap()).unwrap();
+        d["meta"]["evaluated_backends"].clone()
+    };
+    let evaluated = |project: &str, backend: &str, minutes: i64| {
+        tr.t.root
+            .mutate(at(minutes), |tx| {
+                tx.record(
+                    Kind::Evaluated,
+                    &format!("{project}|{backend}"),
+                    json!({"n": minutes}),
+                    json!({"project": project, "backend": backend}),
+                    ledger::Dedupe::Latest,
+                )
+            })
+            .unwrap();
+    };
+    evaluated("kernel", "claude-haiku-4-5@low", 2);
+    assert_eq!(meta(3), json!([]));
+    evaluated("home", "claude-sonnet-5@high", 4);
+    assert_eq!(meta(5), json!(["claude-sonnet-5@high"]));
 }
