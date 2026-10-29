@@ -974,6 +974,12 @@ pub fn prepare_with(
     ));
     let now = tx.now().to_string();
     let asked = asked(tx.conn())?;
+    // A stronger look asks exactly what the issue documents list (2.5).
+    let marked = if stronger {
+        crate::suggest::stronger_look_open(tx.conn(), &project)?
+    } else {
+        BTreeMap::new()
+    };
     let by_owner = owner_asked(tx.conn(), &project)?;
 
     let mut questions = Vec::new();
@@ -1002,7 +1008,9 @@ pub fn prepare_with(
         for f in cat.decisions() {
             let last = asked.get(&(id.clone(), f.decision.clone()));
             let wanted = if stronger {
-                last.is_some_and(|a| needs_stronger_look(&a.suggestion))
+                marked
+                    .get(id)
+                    .is_some_and(|v| v.iter().any(|m| m["decision"] == f.decision.as_str()))
             } else {
                 match stage {
                     Stage::First => f.decision != "priority" && (scope == Scope::Full || f.scope == Scope::Both),

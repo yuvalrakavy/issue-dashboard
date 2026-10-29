@@ -18,7 +18,7 @@ use issue_dashboard_core::brief;
 use issue_dashboard_core::config::ConfigSet;
 use issue_dashboard_core::decision::{self, DecidedData};
 use issue_dashboard_core::derive;
-use issue_dashboard_core::docs::{Action, Decision, DecisionValue, LaunchKind, Target};
+use issue_dashboard_core::docs::{Action, CloseReason, CloseValue, Decision, DecisionValue, LaunchKind, Target};
 use issue_dashboard_core::eval;
 use issue_dashboard_core::event::Kind;
 use issue_dashboard_core::launch;
@@ -417,9 +417,13 @@ fn a_support_question_answered_true_carries_its_drafted_reply_to_the_card() {
 // --- Metrics (4.4) ---------------------------------------------------------------------------
 
 fn evaluate_type(t: &TempRoot, minutes: i64, accuracy: f64) {
+    evaluate_type_of(t, "home", minutes, accuracy);
+}
+
+fn evaluate_type_of(t: &TempRoot, project: &str, minutes: i64, accuracy: f64) {
     let hash = Catalogue::embedded().question_hash("type", &[]).unwrap();
     let data = eval::EvaluatedData {
-        project: "home".into(),
+        project: project.into(),
         backend: BACKEND.into(),
         decision: "type".into(),
         question_hash: hash.clone(),
@@ -439,7 +443,7 @@ fn evaluate_type(t: &TempRoot, minutes: i64, accuracy: f64) {
         unanswered: 0,
         by_source: BTreeMap::new(),
     };
-    let subject = eval::key_subject("home", BACKEND, "type", &hash);
+    let subject = eval::key_subject(project, BACKEND, "type", &hash);
     t.root
         .mutate(at(minutes), |tx| {
             tx.record_valid(
@@ -541,10 +545,190 @@ fn a_key_s_metrics_count_what_the_owner_did_with_its_suggestions_in_the_last_30_
 #[test]
 fn an_evaluated_key_shows_with_its_accuracy_though_nothing_was_acted_on() {
     let tr = tracked();
+    // Another project's evaluation is not this project's key.
+    evaluate_type_of(&tr.t, "elsewhere", 4, 0.5);
+    assert_eq!(metrics_at(&tr.t, at(90)), Vec::<Value>::new());
     evaluate_type(&tr.t, 5, 0.86);
     let m = metrics_at(&tr.t, at(90));
     assert_eq!(m.len(), 1, "{m:?}");
     assert_eq!(m[0]["decision"], json!("type"));
     assert_eq!(m[0]["of"], json!(0));
     assert_eq!(m[0]["evaluated_accuracy"], json!(0.86));
+}
+
+// --- Round-1 gate fixes ----------------------------------------------------------------------
+
+/// An unsure likely_fixed answer: true at 0.5 (exact in binary), naming a commit.
+fn unsure_fixed() -> Value {
+    json!({"probabilities": {"true": 0.5, "false": 0.5}})
+}
+
+#[test]
+fn a_stronger_look_does_not_re_ask_an_answer_the_owner_dismissed_beside_one_still_listed() {
+    let tr = tracked();
+    let (i0, a0) = tr.items[0].clone();
+    edit(&tr.t, &i0, 5, |c| c["labels"] = json!([]));
+    run(&tr, |item, d| {
+        (item == tr.items[0].1 && (d == "type" || d == "duplicate")).then(|| {
+            if d == "type" {
+                unsure_bug()
+            } else {
+                // A tie answers false (2.3): unsure, and no related issue needed.
+                unsure_fixed()
+            }
+        })
+    });
+    let listed = |t: &TempRoot| -> Vec<String> {
+        let mut v: Vec<String> = issue(t, &i0)["triage"]["stronger_look"]
+            .as_array()
+            .map(|a| a.iter().map(|x| x["decision"].as_str().unwrap().to_string()).collect())
+            .unwrap_or_default();
+        v.sort();
+        v
+    };
+    assert_eq!(listed(&tr.t), vec!["duplicate".to_string(), "type".to_string()]);
+    let d = on(
+        "pd-dismiss",
+        Action::DismissSuggestion,
+        &suggestion_id(&tr.t, &i0, "type"),
+        None,
+        30,
+    );
+    assert_eq!(ingest(&tr.t, &d, 30), None);
+    assert_eq!(listed(&tr.t), vec!["duplicate".to_string()]);
+    launched(&tr.t, "S1", LaunchKind::StrongerLook, &tr.items, 31);
+    let p = prepare(&tr.t, "S1", BACKEND, Stage::First, 32).unwrap();
+    assert_eq!(asked_about(&p, &a0), vec!["duplicate".to_string()]);
+}
+
+#[test]
+fn an_unsure_answer_about_older_facts_is_not_listed_nor_asked_by_a_stronger_look() {
+    let tr = tracked();
+    let (i0, a0) = tr.items[0].clone();
+    launched(&tr.t, "T1", LaunchKind::Triage, &tr.items, 10);
+    let p = prepare(&tr.t, "T1", BACKEND, Stage::First, 11).unwrap();
+    record(&tr.t, "T1", answer_all(&p), 12).unwrap();
+    let p = prepare(&tr.t, "T1", BACKEND, Stage::Priority, 13).unwrap();
+    let unsure_p1 = answer_with(&p, |item, _| {
+        (item == tr.items[0].1).then(|| probs(&[("p0", 0.125), ("p1", 0.5), ("p2", 0.25), ("p3", 0.125)]))
+    });
+    record(&tr.t, "T1", unsure_p1, 14).unwrap();
+    assert_eq!(latest(&tr.t, &i0, "priority")["needs_stronger_look"], json!(true));
+    assert!(issue(&tr.t, &i0)["triage"].get("stronger_look").is_some());
+    // The issue is edited: its stage-one answers are about older facts, so is the priority.
+    edit(&tr.t, &i0, 20, |c| c["body"] = json!("a new body"));
+    assert_eq!(issue(&tr.t, &i0)["triage"].get("stronger_look"), None);
+    launched(&tr.t, "S1", LaunchKind::StrongerLook, &tr.items, 21);
+    let p = prepare(&tr.t, "S1", BACKEND, Stage::First, 22).unwrap();
+    assert_eq!(asked_about(&p, &a0), Vec::<String>::new());
+}
+
+#[test]
+fn a_dismissal_keeps_a_re_answered_unsure_answer_off_the_list_until_the_issue_changes() {
+    let tr = tracked();
+    let i0 = tr.items[0].0.clone();
+    edit(&tr.t, &i0, 5, |c| c["labels"] = json!([]));
+    run(&tr, |item, d| (d == "type" && item == tr.items[0].1).then(unsure_bug));
+    let d = on(
+        "pd-dismiss",
+        Action::DismissSuggestion,
+        &suggestion_id(&tr.t, &i0, "type"),
+        None,
+        30,
+    );
+    assert_eq!(ingest(&tr.t, &d, 30), None);
+    // A second run answers type again about the same facts (a retry repeats the question).
+    launched(&tr.t, "T2", LaunchKind::Triage, &tr.items[..1], 40);
+    let p = prepare(&tr.t, "T2", BACKEND, Stage::First, 41).unwrap();
+    if !asked_about(&p, &tr.items[0].1).contains(&"type".to_string()) {
+        // Not re-asked: nothing can bring it back, which is the property under test.
+        assert_eq!(issue(&tr.t, &i0)["triage"].get("stronger_look"), None);
+        return;
+    }
+    record(&tr.t, "T2", answer_with(&p, |_, d| (d == "type").then(unsure_bug)), 42).unwrap();
+    assert_eq!(issue(&tr.t, &i0)["triage"].get("stronger_look"), None);
+}
+
+#[test]
+fn a_reply_longer_than_the_limit_is_refused() {
+    let tr = tracked();
+    outsider(&tr.t, &tr.items[0].0);
+    launched(&tr.t, "T1", LaunchKind::Triage, &tr.items, 10);
+    let p = prepare(&tr.t, "T1", BACKEND, Stage::First, 11).unwrap();
+    let with = |n: usize| {
+        answer_with(&p, |item, d| {
+            (d == "support_question" && item == tr.items[0].1)
+                .then(|| json!({"probabilities": {"true": 0.9, "false": 0.1}, "reply": "x".repeat(n)}))
+        })
+    };
+    let m = refused(record(&tr.t, "T1", with(10_001), 12));
+    assert!(m.contains("a reply is at most 10000 characters"), "{m}");
+    record(&tr.t, "T1", with(10_000), 12).unwrap();
+    // The issue and suggestion documents still validate.
+    docs(&tr.t);
+}
+
+#[test]
+fn a_close_that_approves_a_closure_suggestion_counts_as_its_accept_once() {
+    let tr = tracked();
+    let (i0, a0) = tr.items[0].clone();
+    outsider(&tr.t, &i0);
+    run(&tr, |item, d| {
+        (d == "support_question" && item == tr.items[0].1)
+            .then(|| json!({"probabilities": {"true": 0.9, "false": 0.1}, "reply": "See the settings page."}))
+    });
+    let close = |id: &str, reason: CloseReason, minutes: i64| {
+        let mut d = decision(
+            id,
+            OWNER,
+            Action::Close,
+            Target {
+                item: Some(i0.clone()),
+                alias: Some(a0.clone()),
+                ..Default::default()
+            },
+            Some(DecisionValue {
+                close: Some(CloseValue {
+                    reason,
+                    duplicate_of: None,
+                    comment: "See the settings page.".into(),
+                }),
+                ..Default::default()
+            }),
+        );
+        d.created_at = format_time(at(minutes));
+        d
+    };
+    // Closed as completed: not what a support question suggests.
+    assert_eq!(ingest(&tr.t, &close("pd-c1", CloseReason::Completed, 30), 30), None);
+    let support = |m: &[Value]| m.iter().find(|d| d["decision"] == "support_question").cloned();
+    assert_eq!(support(&metrics_at(&tr.t, at(90))), None);
+    // As not planned, twice, and accepted on the card: one accept.
+    assert_eq!(ingest(&tr.t, &close("pd-c2", CloseReason::NotPlanned, 31), 31), None);
+    assert_eq!(ingest(&tr.t, &close("pd-c3", CloseReason::NotPlanned, 32), 32), None);
+    let s = support(&metrics_at(&tr.t, at(90))).expect("a support_question row");
+    assert_eq!((s["accepted"].clone(), s["of"].clone()), (json!(1), json!(1)));
+    let id = suggestion_id(&tr.t, &i0, "support_question");
+    ingest(&tr.t, &on("pd-a", Action::AcceptSuggestion, &id, None, 33), 33);
+    let s = support(&metrics_at(&tr.t, at(90))).expect("a support_question row");
+    assert_eq!((s["accepted"].clone(), s["of"].clone()), (json!(1), json!(1)));
+    // Past the closure window, a close approves nothing.
+    let tr2 = tracked();
+    let (j0, b0) = tr2.items[0].clone();
+    outsider(&tr2.t, &j0);
+    run(&tr2, |item, d| {
+        (d == "support_question" && item == tr2.items[0].1)
+            .then(|| json!({"probabilities": {"true": 0.9, "false": 0.1}, "reply": "r"}))
+    });
+    let mut late = close("pd-late", CloseReason::NotPlanned, 0);
+    late.target.item = Some(j0.clone());
+    late.target.alias = Some(b0);
+    let when = at(12) + Duration::days(14) + Duration::minutes(1);
+    late.created_at = format_time(when);
+    let c = config(&tr2.t);
+    tr2.t
+        .root
+        .mutate(when, |tx| decision::ingest_checked(tx, &c, "home", OWNER, &late))
+        .unwrap();
+    assert_eq!(support(&metrics_at(&tr2.t, when)), None);
 }

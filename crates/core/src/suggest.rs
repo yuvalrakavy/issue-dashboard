@@ -792,6 +792,9 @@ fn answers(
         // A support question answered true carries the reply drafted for the reporter.
         let reply = a.reply.as_deref().map(str::trim).filter(|r| !r.is_empty());
         match (q.decision == "support_question" && yes, reply) {
+            (true, Some(r)) if r.chars().count() > REPLY_MAX => {
+                c.fail(format!("{what}: a reply is at most {REPLY_MAX} characters"))
+            }
             (true, Some(r)) => body["reply"] = json!(r),
             (true, None) => c.fail(format!(
                 "{what}: a support question answered true needs its drafted reply"
@@ -1236,6 +1239,10 @@ pub fn documents(conn: &Connection, config: &ConfigSet, project: &str) -> Result
     Ok(out)
 }
 
+/// The longest drafted reply a support question may carry: well inside a GitHub comment (65536)
+/// and the page's close sheet, and small beside a published generation.
+pub const REPLY_MAX: usize = 10_000;
+
 /// The latest instructs_agent answer about `item` when it is true (spec 4.2, triage spec 1.4):
 /// the warning its Details and briefs carry. Its `reason`, `backend` and calibrated
 /// `probability` of true.
@@ -1255,11 +1262,80 @@ pub(crate) fn instructs_agent(conn: &Connection, item: &str) -> Result<Option<Va
     }))
 }
 
+/// The answers that need a stronger look (2.5), by item: of each (item, decision) in
+/// [`triage::STRONGER_LOOK_DECISIONS`], `project`'s latest answer when it is marked, about the item
+/// as it is now (an answer about older facts is due for an ordinary run, which re-asks it), the
+/// item open, and the owner has not acted on it: no accept or edit of that answer, and no applied
+/// dismissal of the (item, decision) since the item was last observed (the card's own rule).
+/// Each entry is {decision, answer, confidence (the top calibrated probability), backend,
+/// suggestion}. The issue document lists these, and a stronger look prepares exactly these.
+pub(crate) fn stronger_look_open(conn: &Connection, project: &str) -> Result<BTreeMap<String, Vec<Value>>> {
+    let questions = triage::prepared_questions(conn)?;
+    let mut about: BTreeMap<String, (String, String)> = BTreeMap::new();
+    let mut latest: BTreeMap<(String, String), crate::event::Event> = BTreeMap::new();
+    for e in ledger::events_by_kind(conn, Kind::Suggested)? {
+        let decision = e.distinct["decision"].as_str().unwrap_or_default().to_string();
+        if e.data["project"] != project || !triage::STRONGER_LOOK_DECISIONS.contains(&decision.as_str()) {
+            continue;
+        }
+        let run = e.distinct["run_id"].as_str().unwrap_or_default();
+        about.insert(
+            doc_id(run, &decision, &e.subject),
+            (e.subject.clone(), decision.clone()),
+        );
+        latest.insert((e.subject.clone(), decision), e);
+    }
+    let mut dismissed: BTreeMap<(String, String), i64> = BTreeMap::new();
+    for (seq, d, status) in decision::resolved(conn, project)? {
+        if d.action != Action::DismissSuggestion || status != Status::Applied {
+            continue;
+        }
+        if let Some(key) = d.target.suggestion.as_ref().and_then(|s| about.get(s)) {
+            let at = dismissed.entry(key.clone()).or_insert(seq);
+            *at = (*at).max(seq);
+        }
+    }
+    let acted = layers::layers(conn, project)?.acted;
+    let mut out: BTreeMap<String, Vec<Value>> = BTreeMap::new();
+    for ((item, decision), e) in &latest {
+        let s = &e.data["suggestion"];
+        if !triage::needs_stronger_look(s) {
+            continue;
+        }
+        let Some((seq, true, _)) = observed(conn, item)? else {
+            continue;
+        };
+        let now = s["question"]
+            .as_str()
+            .and_then(|q| questions.get(q))
+            .is_some_and(|(q, _)| q.observed >= seq);
+        let id = doc_id(e.distinct["run_id"].as_str().unwrap_or_default(), decision, item);
+        if !now
+            || acted.contains(&id)
+            || dismissed
+                .get(&(item.clone(), decision.clone()))
+                .is_some_and(|d| seq < *d)
+        {
+            continue;
+        }
+        out.entry(item.clone()).or_default().push(json!({
+            "decision": decision,
+            "answer": s["answer"],
+            "confidence": s["probabilities"]
+                .as_object()
+                .map_or(0.0, |p| p.values().filter_map(Value::as_f64).fold(0.0_f64, f64::max)),
+            "backend": s["backend"],
+            "suggestion": id,
+        }));
+    }
+    Ok(out)
+}
+
 /// The `triage` of each item's issue document (4.5): its latest severity, reach and
 /// detectability answers, each {answer, probabilities, backend, badge, suggestion, edited},
 /// `edited` the owner's Details edit (null: none); its latest estimates; `stronger_look`, the
-/// latest answers that need a stronger look (2.5) while the item is open and the owner has not
-/// accepted, edited or dismissed them; and `instructs_agent`, the warning (spec 4.2).
+/// answers that need a stronger look ([`stronger_look_open`]); and `instructs_agent`, the
+/// warning (spec 4.2).
 pub fn triage_details(conn: &Connection, project: &str, layers: &layers::Layers) -> Result<BTreeMap<String, Value>> {
     let badges = Badges::load(conn, project)?;
     let mut latest: BTreeMap<(String, String), crate::event::Event> = BTreeMap::new();
@@ -1268,46 +1344,21 @@ pub fn triage_details(conn: &Connection, project: &str, layers: &layers::Layers)
         if e.data["project"] == project
             && (layers::DETAIL_DECISIONS.contains(&decision.as_str())
                 || decision == "estimates"
-                || decision == "instructs_agent"
-                || triage::STRONGER_LOOK_DECISIONS.contains(&decision.as_str()))
+                || decision == "instructs_agent")
         {
             latest.insert((e.subject.clone(), decision), e);
         }
     }
-    let dismissed: BTreeSet<String> = crate::decision::effective(conn, project)?
-        .into_iter()
-        .filter(|d| d.action == Action::DismissSuggestion)
-        .filter_map(|d| d.target.suggestion)
-        .collect();
     let mut out: BTreeMap<String, Value> = BTreeMap::new();
+    for (item, list) in stronger_look_open(conn, project)? {
+        out.entry(item).or_insert_with(|| json!({}))["stronger_look"] = json!(list);
+    }
     for ((item, decision), e) in &latest {
         let s = &e.data["suggestion"];
         let run = e.distinct["run_id"].as_str().unwrap_or_default();
         if decision == "instructs_agent" {
             if let Some(w) = instructs_agent(conn, item)? {
                 out.entry(item.clone()).or_insert_with(|| json!({}))["instructs_agent"] = w;
-            }
-            continue;
-        }
-        if triage::STRONGER_LOOK_DECISIONS.contains(&decision.as_str()) {
-            let id = doc_id(run, decision, item);
-            let open = observed(conn, item)?.is_some_and(|(_, open, _)| open);
-            if triage::needs_stronger_look(s) && open && !layers.acted.contains(&id) && !dismissed.contains(&id) {
-                let entry = out.entry(item.clone()).or_insert_with(|| json!({}));
-                let list = entry
-                    .as_object_mut()
-                    .expect("an object")
-                    .entry("stronger_look")
-                    .or_insert_with(|| json!([]));
-                list.as_array_mut().expect("an array").push(json!({
-                    "decision": decision,
-                    "answer": s["answer"],
-                    "confidence": s["probabilities"].as_object().map_or(0.0, |p| {
-                        p.values().filter_map(Value::as_f64).fold(0.0_f64, f64::max)
-                    }),
-                    "backend": s["backend"],
-                    "suggestion": id,
-                }));
             }
             continue;
         }

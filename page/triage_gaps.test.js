@@ -66,4 +66,7 @@ test("Trends shows each triage key's metrics as accepted of acted on, with its a
     { decision: "type", backend: "b2", ratio: "type: 41 of 44", edited: 2, dismissed: 1, bulk: 3, accuracy: "86%", drifting: false, days: 30 },
   ]);
   assert.deepEqual(D.metricsRows(undefined), []);
+  // Rounded to the nearest percent.
+  assert.equal(D.metricsRows([key("type", "b1", { evaluated_accuracy: 0.857 })])[0].accuracy, "86%");
+  assert.equal(D.metricsRows([key("type", "b1", { evaluated_accuracy: 0.854 })])[0].accuracy, "85%");
 });

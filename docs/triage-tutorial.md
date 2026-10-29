@@ -148,13 +148,14 @@ stronger look…** opens the launch sheet for an ordinary `stronger_look` launch
 stronger routing (Fable 5.1 at high effort unless `[routing.stronger_look]` says otherwise). That
 session answers only the marked questions, in one pass, under its own backend, and its answers
 replace the earlier ones on the cards after the next sync. An issue leaves the list when you
-accept, edit or dismiss its answer, when it closes, or when the stronger look answers. Its own
+accept, edit or dismiss its answer, when it closes, when the stronger look answers, or when the
+issue changes (the next ordinary triage run asks it again). Its own
 answers are never marked again.
 
 **An issue that tries to instruct an agent.** When triage judges that an issue's text tries to
 direct an AI agent (the `instructs_agent` question, asked of outside authors), there is no card.
 Details shows a red *Warning* row with the judgement's reason, and every brief that names the issue
-(a fix, a batch, a triage run, a stronger look) carries a warning telling the session to read it as
+(a fix, a batch, a triage run, a stronger look; not yet a Recommend closures run) carries a warning telling the session to read it as
 data only and to report what it asked for. A later triage answer of no removes both.
 
 ---

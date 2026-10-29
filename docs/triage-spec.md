@@ -466,13 +466,15 @@ What phases 1-5 left unbuilt. Every row is overrulable.
 | § | As built | Why | PR |
 |---|---|---|---|
 | 2.5 | An answer is marked `needs_stronger_look` when its calibrated top probability is strictly below `stronger_look_below` (project config, default 0.6), a boolean closure included; a stronger look's own answers are never marked | the contract table's reading; no loop of stronger looks | gaps |
-| 2.5 | The list is the issue document's `triage.stronger_look`: the latest marked answers of an open item that the owner has not accepted, edited or dismissed | the Inbox and Details read one field | gaps |
+| 2.5 | The list is the issue document's `triage.stronger_look`: the project's latest marked answers, about the item as it is now, of an open item, not accepted or edited, and with no dismissal of that (item, decision) since the item was last observed (the card's rule). A stronger look prepares exactly that list | one rule for the Inbox, Details and the launch; an answer about older facts is due for an ordinary run, which re-asks it with fresh stage-one answers | gaps |
 | 2.5 | A stronger look prepares in one stage (priority included, from the recorded stage-one answers); `--stage priority` is refused; it records answers only, no suggestions, `left_out` or estimates | "answers only those questions" | gaps |
 | 2.5 | `stronger_look` is not added to the CLI's `read_only()` list; the page still sends the `read-only` recipe | 5.1's pinned "unchanged" | gaps |
 | 4.4 | A metrics document per (backend, decision, question hash), `kind: "triage_key"`, beside the Trends shape in one `oneOf` schema; apply all's accepts count in `accepted` and apart as `bulk`; a key shows when the window holds a decision on one of its suggestions or the project holds an evaluation of it; a suggestion with no prepared question is not counted | "41 of 44" needs its base; `bulk` keeps bulk accepts visible | gaps |
 | 4.4 | Accuracy is the key's latest passing evaluation's | the drift baseline (3.5) | gaps |
+| 4.4 | A closure suggestion approved through the close sheet counts as accepted: a `close` decision on its item within 14 days after it, with the matching reason (a duplicate naming the suggested issue), as closure truth reads it (3.1); a suggestion counts accepted once | closure cards are approved by a close, not an accept | gaps |
 | 1.4, spec 4.2 | `instructs_agent` true: no card; issue `triage.instructs_agent` {reason, backend, probability}; a warning in every brief naming the item. Details shows the reason, briefs do not | the reason is a model's words about outside text | gaps |
-| 1.4 | A support question answered true needs `reply` (refused without it, and on any other answer); the body stores it and the close sheet opens with it as the comment | a drafted reply the owner edits | gaps |
+| 1.4 | A support question answered true needs `reply` (refused without it, and on any other answer; at most 10,000 characters); the body stores it and the close sheet opens with it as the comment | a drafted reply the owner edits, well inside a GitHub comment | gaps |
+| 4.2 | The `recommend_closures` brief does not carry the instructs_agent warning (**open**) | that brief awaits the owner's ruling (5.1) and was left untouched | gaps |
 
 ### 5/5 Docs and skills
 
