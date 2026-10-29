@@ -815,17 +815,23 @@
   const TRIAGE_KINDS = ["triage", "recommend_closures"];
   const READ_ONLY_KINDS = ["triage", "recommend_closures", "stronger_look", "eval"];
   const MAX_TRIAGE_ITEMS = 40;
+  const UNHEARD_REQUEST_HOURS = 24;
   const LIVE_STATES = ["requested", "queued", "reserved", "unconfirmed", "started"];
 
   // Whether a triage launch is live: one the tracker reports in a live state (the daily run's
   // included, which the page did not write), or one the page wrote that the tracker has not
   // reported yet and that was sent. As in launchStates, the tracker's `requested` does not
-  // outrank the page's record of a refused send: that launch never reached a dispatcher.
-  function triageLive(launches, statuses) {
+  // outrank the page's record of a refused send: that launch never reached a dispatcher. Nor
+  // does a page launch still `requested` a day after the page wrote it: the tracker stops
+  // counting it then (launch.rs UNHEARD_REQUEST_HOURS), and so does the button.
+  function triageLive(launches, statuses, now) {
     const status = new Map((statuses || []).map((s) => [s.launch, s]));
     const notSent = new Set((launches || []).filter((l) => l.not_sent).map((l) => l.not_sent.launch));
+    const written = new Map((launches || []).filter((l) => l.created_at).map((l) => [l.id, Date.parse(l.created_at)]));
+    const unheard = (s) => s.state === "requested" && s.author !== "schedule" && now && written.has(s.launch) &&
+      now.getTime() - written.get(s.launch) >= UNHEARD_REQUEST_HOURS * 3600 * 1000;
     for (const s of statuses || []) {
-      if (TRIAGE_KINDS.includes(s.kind) && LIVE_STATES.includes(s.state) && !(s.state === "requested" && notSent.has(s.launch))) return true;
+      if (TRIAGE_KINDS.includes(s.kind) && LIVE_STATES.includes(s.state) && !(s.state === "requested" && notSent.has(s.launch)) && !unheard(s)) return true;
     }
     return (launches || []).some((l) => TRIAGE_KINDS.includes(l.kind) && !status.has(l.id) && !notSent.has(l.id));
   }

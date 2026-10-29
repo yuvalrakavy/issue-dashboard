@@ -658,7 +658,7 @@ footer .wrap { padding-block: 0 32px; font-size: .82rem; color: var(--muted); di
     if (S.inboxFilter === "untriaged") cards = cards.filter((c) => c.why === "untriaged");
     const pill = (k, label) => h("button", { class: "chip" + (S.inboxFilter === k ? " on" : ""), onclick: () => { S.inboxFilter = k; S.sel = 0; render(); } }, label);
     // Run triage… (triage spec 5.1): the owner's; off while a triage launch is live.
-    const live = D.triageLive(S.launches, S.statuses);
+    const live = D.triageLive(S.launches, S.statuses, new Date());
     const runTriage = S.owner
       ? h("button", { class: "btn", disabled: live, title: live ? "A triage launch is live; wait for it to end." : "", onclick: openTriage }, "Run triage…")
       : null;

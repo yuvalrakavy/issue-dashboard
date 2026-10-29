@@ -109,6 +109,17 @@ test("a send the page recorded as refused is not live, even once the tracker rep
   assert.equal(D.triageLive([mine], requested), true);
 });
 
+test("a page launch no dispatcher took for a day stops disabling Run triage, as the tracker stops counting it", () => {
+  const mine = { id: "L1", kind: "triage", items: ["I_1"], created_at: "2026-10-28T08:00:00Z" };
+  const requested = [{ launch: "L1", kind: "triage", author: "user_1", state: "requested" }];
+  assert.equal(D.triageLive([mine], requested, new Date("2026-10-29T07:59:59Z")), true);
+  assert.equal(D.triageLive([mine], requested, new Date("2026-10-29T08:00:00Z")), false);
+  // Taken by a dispatcher, it is live whatever its age; and the schedule's request never ages.
+  assert.equal(D.triageLive([mine], [{ launch: "L1", kind: "triage", author: "user_1", state: "reserved" }], new Date("2026-10-30T08:00:00Z")), true);
+  const daily = { id: "L2", kind: "triage", items: ["I_1"], created_at: "2026-10-28T08:00:00Z" };
+  assert.equal(D.triageLive([daily], [{ launch: "L2", kind: "triage", author: "schedule", state: "requested" }], new Date("2026-10-30T08:00:00Z")), true);
+});
+
 test("a triage, closure check or eval over an item leaves its fix launch available", () => {
   const launches = [
     { id: "T1", kind: "triage", items: ["I_1"] },
@@ -141,4 +152,5 @@ test("Trends offers the owner Evaluate…, and a refused Launch on the sheet can
   assert.match(html, /S\.owner \? h\("div", \{ class: "pills" \}, h\("button", \{ class: "btn", onclick: \(\) => openEvaluate\(/);
   assert.match(html, /if \(f\.error\) \{ status\.textContent = f\.error; go\.disabled = false; return; \}/);
   assert.match(html, /const st = fixStates\[i\.id\];/);
+  assert.match(html, /const live = D\.triageLive\(S\.launches, S\.statuses, new Date\(\)\);/);
 });

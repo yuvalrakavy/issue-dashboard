@@ -61,7 +61,7 @@
       "minimum": 1
     },
     "triage_queue": {
-      "description": "The items a triage launch of each scope would name now, in the 2.2 order, capped at max_triage_items.",
+      "description": "The items a triage launch of each scope would name now, in the 2.2 order, uncapped: the page keeps the items in view, then caps them at max_triage_items.",
       "type": "object",
       "additionalProperties": false,
       "required": [
