@@ -3,7 +3,7 @@
 Status: **chapters 1–6 approved 2026-10-25; the fresh-context verification is folded** (T2;
 dispositions in the rationale, "Verification"). Extends `docs/spec.md` §5.7–5.8, §6.7, §7.1–7.6
 and §8; where this file and `spec.md` differ, this file is the newer decision and `spec.md` is
-corrected when it lands. Alternatives weighed and the probes behind them:
+corrected when it lands. What was built differently is the "As built" table at the end. Alternatives weighed and the probes behind them:
 [triage-spec-rationale.md](triage-spec-rationale.md).
 
 ## Intent
@@ -407,3 +407,60 @@ Inline, one pre-merge deep gate; phases 1–2 may merge before 3–4.
   never a shorter window.
 - **Thin truth:** area and sparse repos may never reach 100; they stay unevaluated, visibly.
 - **Circular labels:** measured per provenance, excludable. **Cost:** one daily run, ≤ 40 items.
+
+---
+
+## As built
+
+Where the code differs from this spec, the code is current. One row per divergence, by phase.
+"Open" marks a ruling the owner has not made. Section references are to this file.
+
+### 1/5 Seam (#25)
+
+| § | As built | Why | PR |
+|---|---|---|---|
+| 1.3 | A backend is `model@effort` with the app's model id, `claude-opus-5-5@medium` | it is the routing's own two fields | #25 |
+| 1.4 | The commit-exists check is a read-only GraphQL lookup whose returned `oid` must start with the hash named | a ref can pose as a hash | #25 |
+| 1.1 | Live inputs carry no comment bodies | the sync reads none yet | #25 |
+| 2.3 | Probabilities are clipped, then normalised; a boolean tie answers false | one rule for every kind | #25 |
+| 2.2 | A new commit mentioning an item does not make its closure decisions due again; the recheck clock does | no commit-mention signal in `due()`; open S2 | #25, #32 |
+
+### 2/5 Eval (#26)
+
+| § | As built | Why | PR |
+|---|---|---|---|
+| 3.2 | A history records its window and the member filter; a resume or eval under another is refused | results stay comparable | #26 |
+| 3.1 | A single choice takes the latest value still standing; closure exclusions apply before the latest verdict | an excluded verdict must not leave an older one behind | #26 |
+| 3.2 | Manifest paths are percent-encoded; `score` refuses another key's manifest and exclusions unlike the manifest's | no collisions; no silent re-prepare | #26 |
+| 3.3 | Tag identity is per project, deduped against the latest tag only | a changed tag records again | #26 |
+| 3.5 | Drift counts closure keys too | their records are owner records | #26 |
+| 3.4 | The split hash is 15 hex digits; `refresh-history` takes no lock | enough bits; it only reads | #26 |
+
+### 3/5 Page (#31)
+
+| § | As built | Why | PR |
+|---|---|---|---|
+| 4.1 | A combined card is two suggestion documents sharing `card`; the second-opinion cap counts the run's latest opinions | acting on one must not bring a sixth | #31 |
+| 4.2 | An acted card hides and a run no longer re-answers it; the stale check covers accept, edit and a second opinion's dismissal | an accept must not change underfoot | #31 |
+| 4.3 | Apply all needs the card's own map's Bulk, the key's latest Bulk and no drift, for every part of a combined card | an unread error is the cost | #31 |
+| 4.5 | `doc-issue` also carries `type_source`, `areas_source`; a pre-phase suggestion has no `current` and no card | Details says "not written"; nothing to compare | #31 |
+| 4.1 | Estimates are display-only in Details (**open**: the table says editable) | 4.2 and 4.6 give the value three fields | #31 |
+| 4.4 | Trends metrics and the `instructs_agent` warning are not built | later | #31 |
+
+### 4/5 Launch (#32)
+
+| § | As built | Why | PR |
+|---|---|---|---|
+| 4.6 | The schedule request goes through `launch::request` (`Via::Schedule`), not `record_doc`; `reserve --launch` checks the author | same effect | #32 |
+| 5.1 | Only `triage` takes a `scope`; an eval names no items; triage, the alias and eval must use the `read-only` recipe | the table was ambiguous | #32 |
+| 5.2 | `triage-request` also returns `pending`; an owner request unheard for 24 h stops counting as live; `launches --requested` | an unheard request blocked every run | #32 |
+| 5.3 | The strongest model is `claude-fable-5-1`; `[routing.<kind>]` overrides; the warning keys on any evaluation of the backend | defaults must exist | #32 |
+| 2.2 | "Untriaged" is the page's definition; read-only members are excluded; **Request triage** makes an item due | one definition | #32 |
+| 5.1 | `recommend_closures` keeps its phase-1 brief (**open**) | the scoped brief drops its batching, which tests pin | #32 |
+| 2.5, 5.2 | No "needs a stronger look" item; the task is not registered, and whether it can message the dispatcher is unchecked | after approval | #32 |
+
+### 5/5 Docs and skills
+
+| § | As built | Why | PR |
+|---|---|---|---|
+| 6.2 | The triage skill is `skills/issue-dashboard-triage-session`; `docs/closing-recommendations.md` stays, because the alias brief compiles it in | removing it needs a code change | 5/5 |

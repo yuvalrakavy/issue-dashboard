@@ -1,12 +1,13 @@
 ---
 name: issue-dashboard-dispatcher
-description: Use when running the issue-dashboard dispatcher (spec 7.3): a long-lived session that watches the dashboard page and turns each launch the owner sends from it (Launch…, Launch batch…, Recommend closures…) into a reserved slot, a brief and a started session, or a card to start one. Needs ArtifactComments, ArtifactData and the app's session tools; it never writes to GitHub.
+description: Use when running the issue-dashboard dispatcher (spec 7.3): a long-lived session that watches the dashboard page and turns each launch the owner sends from it (Launch…, Launch batch…, Run triage…, Evaluate…, Recommend closures…), and the daily scheduled triage request, into a reserved slot, a brief and a started session, or a card to start one. Needs ArtifactComments, ArtifactData and the app's session tools; it never writes to GitHub.
 ---
 
 # issue-dashboard dispatcher
 
 The dispatcher does no work of its own. It is woken by a launch comment from the page (5.4),
-or by the app when a session it started ends a turn, and each wake is a few CLI commands. Every
+by the scheduled triage task's message (below), or by the app when a session it started ends a
+turn, and each wake is a few CLI commands. Every
 state change is a CLI command, so it is a ledger event (10.7); this skill only carries ids and
 files between the page, the CLI and the app.
 
@@ -72,7 +73,11 @@ is `ME`:
      the session is still working, the next wake tries again. The owner approved this
      standing on 2026-10-24.
 
-Rows another dispatcher owns are left alone. **`reserve --next`**:
+Rows another dispatcher owns are left alone. Then look for **a scheduled request nobody has
+taken**: `BIN --root ROOT launches --requested` lists launches recorded and not yet reserved.
+A row with `author: schedule` and `kind: triage` is the daily run's request: handle it as
+"On a scheduled triage request" says. Every other row there came from a page comment and is
+handled by its comment, not here. **`reserve --next`**:
 `BIN --root ROOT reserve --next --dispatcher ME`; `nothing_queued` ends it. A `reserved` result
 names a launch that waited in the queue, so it is checked again before it starts: read its
 row in `launches --live` (aliases, routing, kind), run steps 2 and 3 below on it, and only
@@ -93,8 +98,8 @@ anything else it says. In order:
 2. **Check the routing** in the document against your own model and effort, before anything
    is reserved (a reservation cannot be released for 15 minutes). Higher: reply "Refused:
    routed to <model>/<effort>, above this dispatcher's" and stop.
-3. **Re-read the issues** of a `fix` or `batch` (not of `recommend_closures`, whose session
-   reads them itself): for each alias, `gh issue view N --repo OWNER/REPO --json state,labels`.
+3. **Re-read the issues** of a `fix` or `batch` (not of a read-only launch: `triage`,
+   `recommend_closures` or `eval`, whose session reads what it needs itself): for each alias, `gh issue view N --repo OWNER/REPO --json state,labels`.
    A closed issue, or one carrying an in-progress label: reply "Refused: <alias> is closed"
    (or "…is in progress") and stop. This read and the settle step's closed check are the
    only `gh` calls the dispatcher makes, and both only read.
@@ -118,9 +123,38 @@ anything else it says. In order:
    - The call never returned (this session restarted mid-call): `BIN --root ROOT unconfirm
      --token T --dispatcher ME`; the settle step resolves it.
 
-A Recommend closures launch (`kind: recommend_closures`) runs on the `read-only` recipe. Its
-session only reads and records `record-suggestions`; its brief says so. It holds no item, so
-it never blocks a fix of the same issues.
+## On a scheduled triage request
+
+The scheduled task `issue-dashboard-triage` (skill `issue-dashboard-triage`) runs
+`triage-request`, which records a launch request authored `schedule` for the items due and
+messages this session with its id. The request has no page document and no comment. Do, in
+order:
+
+1. **Find it.** `BIN --root ROOT launches --requested`: the row with that id (author `schedule`,
+   kind `triage`). It is not there: it was reserved already, so say nothing and stop.
+2. **Check the routing** against your own model and effort as step 2 above does. Higher: do not
+   reserve; tell the owner in this transcript that the scheduled triage is routed above this
+   dispatcher's level. It stays `requested`, and the next daily run reports it as pending.
+3. **Reserve.** `BIN --root ROOT reserve --launch <id> --dispatcher ME`. `reserve` accepts the
+   `schedule` author for kind `triage` only; any other launch authored `schedule`, and any other
+   author that is not the project's `owner_id`, is refused (exit 1). Then brief and start as
+   steps 4-6 above say. There is no thread to reply in; a `queued` result needs no action, as
+   the settle step reserves it when the pool frees.
+
+## The read-only pool
+
+A `triage` launch (either scope), a `recommend_closures` launch (the alias of `triage` with
+scope `closures`) and an `eval` launch all take their slot from the `read-only` recipe pool,
+which has one slot unless a recipe of that name says otherwise. Their sessions only read and
+record (`prepare`, `record-suggestions`, `eval …`); their briefs say so. They hold no item, so
+none blocks a fix of the same issues, and a second triage waits in the queue for the pool's one
+slot. At most one triage launch per project is live at a time (the CLI refuses a second daily
+request, and the page disables **Run triage…**).
+
+A triage or eval session checks itself: its first command, `prepare --session-model
+<model>@<effort>`, is refused unless it runs the launch's routing, so start it at exactly the
+routing's model and effort, never downgraded. A session that is refused ends the launch
+unanswered; the settle step then ends it as stopped or failed like any other.
 
 ## Never
 
