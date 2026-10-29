@@ -1,0 +1,336 @@
+{
+  "name": "history_issues",
+  "response": {
+    "data": {
+      "repository": {
+        "issues": {
+          "nodes": [
+            {
+              "author": {
+                "login": "yuvalrakavy"
+              },
+              "authorAssociation": "OWNER",
+              "body": "> **Status 2026-10-23:** still open, checked against `7b4623f`. The `producer_handle` field (`src/player.rs:663`) is only `take()`n at 1189 and 3595; nothing polls `is_finished()`. Since filing, `2fef4e9` installed a panic hook (`src/logging.rs:198`), so a producer panic now reaches the log and logmon, but the state is still not reported on the wire (it still says `Playing`), which is the actual defect. The gap is also documented in place at `src/engine/producer.rs:106-111` and `src/engine/switch.rs:117`.\n\nFound by a pre-merge gate while reviewing airzoned#32 rev 4. Pre-existing.\n\n## What happens\n\nNothing polls `producer_handle.is_finished()`. If the producer thread panics, the session stays\nalive with its members connected and its ring frozen — and every instrument agrees it is healthy:\n\n* member health is fine (the receivers are connected and asking for timing);\n* `silent_packets` is FROZEN, not climbing, because the thread that increments it is the one that\n  died — so the rev 4 silence verdict cannot fire either.\n\nThe room is silent and the retained State topic says `Playing`, forever.\n\n## Why it matters more after rev 4\n\nRev 4's whole argument for metering silence at the producer is that *\"every way a source can fail\narrives at this one point identically — including ways nobody has thought of.\"* A dead producer is\nthe counterexample: it is not a way the SOURCE fails, it is the meter itself going away. The doc\nhas been corrected to name this limit; this issue is the fix.\n\nSame class as the renderer wedge-watchdog in the Store repo: a component that stops reporting is\nindistinguishable from one reporting \"fine\", unless something outside it checks liveness.\n\n## Sketch\n\n`check_health` (`src/player.rs:2756`) already runs per session per tick and already reads `producer_ctl`. Adding a\n`producer_handle.is_finished()` check there costs nothing and gives an unambiguous verdict —\n`Failed` with a reason naming the producer rather than the source, since the music is not the thing\nthat broke. The handle is `Option<JoinHandle<()>>` on `ActiveSession` and is only taken by\n`stop_producer`, so \"finished while we still hold it\" is exactly the abnormal case.\n\nWorth also asking whether the thread should be RESTARTED rather than only reported: the source is\nmoved into it and is unreachable afterwards, so a restart means rebuilding the source, which is the\nsame work as a fresh open. Reporting first is the smaller, safer step.\n\n",
+              "closedAt": null,
+              "comments": {
+                "nodes": [],
+                "totalCount": 0
+              },
+              "createdAt": "2026-08-15T12:19:58Z",
+              "id": "I_kwDOTBQnEM8AAAABM4Ucjw",
+              "labels": {
+                "nodes": [
+                  {
+                    "name": "bug"
+                  },
+                  {
+                    "name": "p2"
+                  },
+                  {
+                    "name": "self-contained"
+                  },
+                  {
+                    "name": "player"
+                  }
+                ],
+                "totalCount": 4
+              },
+              "number": 36,
+              "repository": {
+                "nameWithOwner": "yuvalrakavy/airzoned"
+              },
+              "state": "OPEN",
+              "stateReason": null,
+              "timelineItems": {
+                "nodes": [
+                  {
+                    "__typename": "LabeledEvent",
+                    "actor": {
+                      "login": "yuvalrakavy"
+                    },
+                    "createdAt": "2026-10-23T20:22:13Z",
+                    "id": "LE_lADOTBQnEM8AAAABM4Ucj88AAAAH79mNMA",
+                    "label": {
+                      "name": "bug"
+                    }
+                  },
+                  {
+                    "__typename": "LabeledEvent",
+                    "actor": {
+                      "login": "yuvalrakavy"
+                    },
+                    "createdAt": "2026-10-23T20:22:13Z",
+                    "id": "LE_lADOTBQnEM8AAAABM4Ucj88AAAAH79mNcg",
+                    "label": {
+                      "name": "p2"
+                    }
+                  },
+                  {
+                    "__typename": "LabeledEvent",
+                    "actor": {
+                      "login": "yuvalrakavy"
+                    },
+                    "createdAt": "2026-10-23T20:22:13Z",
+                    "id": "LE_lADOTBQnEM8AAAABM4Ucj88AAAAH79mNsg",
+                    "label": {
+                      "name": "player"
+                    }
+                  },
+                  {
+                    "__typename": "LabeledEvent",
+                    "actor": {
+                      "login": "yuvalrakavy"
+                    },
+                    "createdAt": "2026-10-23T20:22:13Z",
+                    "id": "LE_lADOTBQnEM8AAAABM4Ucj88AAAAH79mOAA",
+                    "label": {
+                      "name": "self-contained"
+                    }
+                  }
+                ],
+                "totalCount": 4
+              },
+              "title": "A dead producer thread is indistinguishable from a healthy one",
+              "updatedAt": "2026-10-23T20:22:13Z"
+            },
+            {
+              "author": {
+                "login": "yuvalrakavy"
+              },
+              "authorAssociation": "OWNER",
+              "body": "airzoned caps MQTT packets at **10 KB in both directions**, which blocks\npublishing cover art to the Store.\n\n`rumqttc` 0.24.0 (MQTT 3.1.1) defaults both:\n\n```rust\nmax_incoming_packet_size: 10 * 1024,\nmax_outgoing_packet_size: 10 * 1024,\n```\n\n(`rumqttc-0.24.0/src/lib.rs:502-503`.)\n\nThe **outgoing** one is the blocker here — airzoned is the publisher, so an\nartwork payload fails at the publish call before the broker ever sees it. Cover\nart arriving as DMAP over `SET_PARAMETER` has no URL to hand out instead: the\ndaemon holds the bytes, so MQTT is the transport.\n\nNote this is a different code path from the Store's, which is `rumqttc` 0.25.1 on\n**MQTT v5** — different major, different protocol version, same 10 KB default.\nBoth need raising; neither raise implies the other.\n\n## The broker is not the constraint\n\nMeasured against mosquitto 2.1.2 with bare defaults: a 200 KB message round-trips\non both 3.1.1 and 5, no configuration. mosquitto's ceiling is the protocol\nmaximum, 256 MB.\n\n```\npayload:      200000 bytes\nv311  received 200001 bytes\nv5    received 200001 bytes\n```\n\n## Companion\n\n`yuvalrakavy/Store` carries the receiving half plus a dispatch-queue byte budget\nthat has to land with it — the Store's queue bounds are item counts, which are\nonly byte bounds while the packet cap is small.\n\n## Sizing\n\nPick the ceiling with the Store's side rather than independently: the Store's\ningest path has its own source-byte ceiling, and base64 inflates by 4/3, so two\nindependently-chosen limits produce an effective ceiling neither repo states.\n",
+              "closedAt": "2026-09-15T19:11:19Z",
+              "comments": {
+                "nodes": [
+                  {
+                    "author": {
+                      "login": "yuvalrakavy"
+                    },
+                    "authorAssociation": "OWNER",
+                    "body": "Companions in the Store repo: yuvalrakavy/Store#200 (the receiving cap) and yuvalrakavy/Store#201 (the dispatch-queue byte budget).",
+                    "createdAt": "2026-08-19T20:10:41Z"
+                  },
+                  {
+                    "author": {
+                      "login": "yuvalrakavy"
+                    },
+                    "authorAssociation": "OWNER",
+                    "body": "Closing as already fixed — the cap this issue reports was raised when the art lane shipped, and the issue was never closed.\n\n**Evidence, read from `main`:**\n\n- `src/mqtt.rs:69` — `pub const MAX_PACKET_BYTES: usize = 34 * 1024 * 1024;`\n- `src/mqtt.rs:152` — `opts.set_max_packet_size(MAX_PACKET_BYTES, MAX_PACKET_BYTES);` — both directions, replacing rumqttc 0.24.0's 10 KB defaults that this issue quotes.\n- Introduced by `c36535a` *feat(lanes): now-playing facts and art, progress, and the catalog resolve lane (Store spec §5.1-§5.4)* — the commit that made cover art travel over MQTT at all.\n\n34 MiB is the ceiling the audio-app spec §5.3 names; the art lane itself caps a picture at 4 MiB below it. The Store-side companions (yuvalrakavy/Store#200, yuvalrakavy/Store#201) are separate issues and are not affected by this close.",
+                    "createdAt": "2026-09-15T19:11:18Z"
+                  }
+                ],
+                "totalCount": 2
+              },
+              "createdAt": "2026-08-19T20:10:22Z",
+              "id": "I_kwDOTBQnEM8AAAABNb-eLg",
+              "labels": {
+                "nodes": [
+                  {
+                    "name": "enhancement"
+                  }
+                ],
+                "totalCount": 1
+              },
+              "number": 37,
+              "repository": {
+                "nameWithOwner": "yuvalrakavy/airzoned"
+              },
+              "state": "CLOSED",
+              "stateReason": "COMPLETED",
+              "timelineItems": {
+                "nodes": [
+                  {
+                    "__typename": "LabeledEvent",
+                    "actor": {
+                      "login": "yuvalrakavy"
+                    },
+                    "createdAt": "2026-08-19T20:10:23Z",
+                    "id": "LE_lADOTBQnEM8AAAABNb-eLs8AAAAG6pW8rA",
+                    "label": {
+                      "name": "enhancement"
+                    }
+                  }
+                ],
+                "totalCount": 1
+              },
+              "title": "MQTT packet caps are 10 KB in both directions, blocking cover-art publish",
+              "updatedAt": "2026-09-15T19:11:19Z"
+            },
+            {
+              "author": {
+                "login": "yuvalrakavy"
+              },
+              "authorAssociation": "OWNER",
+              "body": "Found while building the member transition (Store spec 2026-09-06 §5.1a): `RTSP_READ_TIMEOUT` (15 s) is PER READ, so a receiver that accepts the TCP connection and then sends one byte every few hundred milliseconds keeps every single read succeeding while the reply never completes. `BufReader::read_line` / `read_exact` loop over those reads with no total bound, and the session worker services one command at a time, so nothing else for that session is serviced while it waits.\n\nA member MOVE now bounds every read and write of the arriving members' handshakes with an absolute deadline (`DeadlineStream` in `rtsp.rs`, the move's `TransferTimeout`), and a test (`a_dribbling_destination_cannot_stretch_the_handshake_past_the_deadline`) pins it. An ORDINARY connect — a fresh session's first members, an unresolved member finally resolving, a demoted member reconnecting — still has no total budget. Measured: the same test with no deadline set ran past 10 minutes before it was killed.\n\nProposed: a total handshake budget for every connect (60 s would be generous; a real handshake is well under 5 s), applied through the same `DeadlineStream`, with the connect failing as `ConnectFailed` and the member landing in pending with the normal backoff. Not part of the transition feature, which only made the per-move case safe.",
+              "closedAt": "2026-09-07T06:12:19Z",
+              "comments": {
+                "nodes": [
+                  {
+                    "author": {
+                      "login": "yuvalrakavy"
+                    },
+                    "authorAssociation": "OWNER",
+                    "body": "Fixed on feat/member-transition at dc431e2: every connect now runs under a handshake budget (AudioParams.handshake_budget, default 30 s) and every RTSP request/reply exchange under a request budget (REQUEST_BUDGET, 20 s), both through the DeadlineStream that re-arms the socket timeout before each read and write. Pinned by a_dribbling_receiver_outside_a_move_is_bounded_by_the_handshake_budget: a receiver that accepts and dribbles one byte per 100 ms fails the connect within the budget and the member lands in pending with the ordinary retry. Closes with the branch merge.",
+                    "createdAt": "2026-09-07T06:12:18Z"
+                  }
+                ],
+                "totalCount": 1
+              },
+              "createdAt": "2026-09-07T05:47:59Z",
+              "id": "I_kwDOTBQnEM8AAAABQBxuYA",
+              "labels": {
+                "nodes": [],
+                "totalCount": 0
+              },
+              "number": 38,
+              "repository": {
+                "nameWithOwner": "yuvalrakavy/airzoned"
+              },
+              "state": "CLOSED",
+              "stateReason": "COMPLETED",
+              "timelineItems": {
+                "nodes": [],
+                "totalCount": 0
+              },
+              "title": "A receiver that dribbles bytes can stall the session worker indefinitely outside a member move",
+              "updatedAt": "2026-09-07T06:12:19Z"
+            },
+            {
+              "author": {
+                "login": "yuvalrakavy"
+              },
+              "authorAssociation": "OWNER",
+              "body": "Raised by both Codex rounds of the receiver now-playing gate (Store #88; branch `feat/receiver-now-playing`, spec `Store/docs/superpowers/specs/2026-09-07-receiver-now-playing-dmap-design.md` §9a residuals). Not attempted at the end of a gate because the fix is a connection-lifecycle change, not a local one.\n\n## The defect\n\nThe artwork push is one `SET_PARAMETER` with a body of up to 512 KiB, written with `write_all` on the member's `RtspClient`. If the write fails after the header and part of the body have gone out (a receiver that stalls, a deadline that fires mid-body), the client stays in use: the receiver is still reading the image's remainder, so the bytes of every later exchange on that connection — progress lines, the next track's metadata, even `TEARDOWN` — are consumed as picture data. UDP timing keeps answering, so nothing marks the member unhealthy and nothing reconnects; the receiver simply never shows anything again and never fails.\n\n## Shape of a fix\n\nTreat a partial body write as fatal to the connection: drop the `RtspClient` (or mark it poisoned) and let the existing reconnect/re-handshake path rebuild it, the same way a failed handshake is handled today. A test on the fake RAOP rig: make a receiver stop reading mid-body, then assert the member reconnects and the next metadata push arrives on a fresh connection.\n\n## Related, pre-existing\n\n- `rtsp.rs::read_reply` reads response headers unbounded.\n- `rtsp.rs::request` (~336-350) discards the original request error when `clear_deadline()?` fails.\n",
+              "closedAt": "2026-09-16T22:47:06Z",
+              "comments": {
+                "nodes": [
+                  {
+                    "author": {
+                      "login": "yuvalrakavy"
+                    },
+                    "authorAssociation": "OWNER",
+                    "body": "**Merged into #40 — closing.** Triaged 2026-09-17: this is the other half of the same change. Same RTSP control connection, same serial sweep, same two functions (`push_now_playing` / `push_progress` in `src/engine/member.rs`), and both want the same fake-rig test — a receiver that stalls after accepting a header.\n\nStill valid as written, and carried over to #40: `request_bounded` sends header and body in one `write_all` (`src/rtsp.rs:410-443`); there is no poison flag anywhere, so after a partial body write the client stays in use and later metadata or TEARDOWN replies are read as picture bytes (`push_now_playing` logs and keeps the client, `src/engine/member.rs:383-400`). Related and also still open: reply *bodies* are clamped by `MAX_REPLY_BODY` (`src/rtsp.rs:54`) but the header loop (`:445-470`) is not, and `request` discards the original error via `clear_deadline()?` (`:389-408`).\n\nAn aggregate sweep deadline (#40) and poison-on-partial-write (this) are best landed together.",
+                    "createdAt": "2026-09-16T22:47:05Z"
+                  }
+                ],
+                "totalCount": 1
+              },
+              "createdAt": "2026-09-07T19:29:24Z",
+              "id": "I_kwDOTBQnEM8AAAABQJNUZg",
+              "labels": {
+                "nodes": [],
+                "totalCount": 0
+              },
+              "number": 39,
+              "repository": {
+                "nameWithOwner": "yuvalrakavy/airzoned"
+              },
+              "state": "CLOSED",
+              "stateReason": "COMPLETED",
+              "timelineItems": {
+                "nodes": [],
+                "totalCount": 0
+              },
+              "title": "A partial artwork body write leaves the RTSP connection desynced — later metadata and TEARDOWN are read as picture bytes",
+              "updatedAt": "2026-09-16T22:47:06Z"
+            },
+            {
+              "author": {
+                "login": "yuvalrakavy"
+              },
+              "authorAssociation": "OWNER",
+              "body": "> **Status 2026-10-23:** still fully open (absorbs #39), checked against `7b4623f`. Title widened to cover the continuous 5 s progress sweep and #39. Corrected cost from the 2026-09-17 comment, folded in:\n\n- `publish_progress` (`src/player.rs:2009-2055`) runs every `PROGRESS_INTERVAL` = 5 s (`src/player.rs:4543`) and walks `senders.values_mut()` serially calling `push_progress`, each under `with_budget(METADATA_BUDGET = 2 s)` (`src/engine/member.rs:58, 427-451`; `src/rtsp.rs:336`). So N stalled receivers cost about **2N s every 5 s, per session**, on the single worker thread that serves the whole house; MQTT commands queue behind it. This is the one open issue where one bad receiver degrades every room. `push_now_playing` (`member.rs:394-422`) pays two exchanges.\n- #39 (merged here): `request_bounded` (`src/rtsp.rs:418-452`) has no poison-on-partial-write, so a partial body write leaves the client in use. Land an aggregate sweep deadline (defer members past it) together with poison-on-partial-write; both want a fake-rig receiver that stalls after accepting a header.\n- Triage recommendation (2026-09-17): fix before deploy, estimated hours.\n\nRaised by the depth round of the receiver placeholder-art change (branch merged as `e075329`; spec `Store/docs/superpowers/specs/2026-09-07-receiver-now-playing-dmap-design.md` §12). Recorded as a residual there; this is the tracker entry.\n\n## The gap\n\nThe now-playing sweep pushes metadata and artwork to members SERIALLY, and the RTSP budget (`with_budget(2s)`) re-arms per exchange rather than bounding the whole push. A receiver that accepts the write and never answers therefore costs about two seconds per exchange, and N such receivers block the worker for roughly 2N seconds per track generation — about 16 s at eight rooms — with commands queued behind the sweep.\n\n## Why it is newly exposed\n\nBefore the placeholder every coverless track wrote NO artwork, so radio and untagged libraries never took the artwork exchange at all. Now every track writes one, which puts those sources on the same path as tagged ones and doubles the exchanges per generation. The pre-existing partial-write desync (#39) sits on the same path.\n\n## Two independent fixes, either one enough\n\n- One deadline shared across a member's metadata + artwork exchanges, so a stalled member costs at most one budget per generation.\n- An aggregate sweep deadline with deferred members: a member that does not answer inside the sweep's budget is skipped this generation and retried on the next, so the worker never blocks for the sum.\n\nNeither is the placeholder branch's size; both want a test on the fake rig with a receiver that stalls after accepting the header.\n\n",
+              "closedAt": null,
+              "comments": {
+                "nodes": [
+                  {
+                    "author": {
+                      "login": "yuvalrakavy"
+                    },
+                    "authorAssociation": "OWNER",
+                    "body": "**Absorbs #39, and the cost is larger than this body says.** Triaged 2026-09-17.\n\nThe body frames the stall as roughly 2N seconds per track generation. It is continuous: `publish_progress` (`src/player.rs:1902-1940`) runs every `PROGRESS_INTERVAL` — **5 s** (`src/player.rs:4207`) — and walks `senders.values_mut()` calling `push_progress`, each under `with_budget(METADATA_BUDGET = 2s)` (`src/engine/member.rs:404-413`, `src/rtsp.rs:333-338`). So N stalled receivers cost about **2N s every 5 s, per session**, on the single worker thread that serves the whole house, and MQTT commands queue behind it. This is the one open issue where a single bad receiver degrades every room rather than its own.\n\n#39 (merged here) is the same connection from the other side: a partial body write leaves the client in use with no poison flag. Land an aggregate sweep deadline (defer members past it) together with poison-on-partial-write; both want the same rig — a receiver that stalls after accepting a header.\n\nTriage recommendation: **fix before deploy**, estimated hours.\n",
+                    "createdAt": "2026-09-16T22:47:07Z"
+                  }
+                ],
+                "totalCount": 1
+              },
+              "createdAt": "2026-09-07T20:04:49Z",
+              "id": "I_kwDOTBQnEM8AAAABQJcVNg",
+              "labels": {
+                "nodes": [
+                  {
+                    "name": "bug"
+                  },
+                  {
+                    "name": "p1"
+                  },
+                  {
+                    "name": "receiver"
+                  }
+                ],
+                "totalCount": 3
+              },
+              "number": 40,
+              "repository": {
+                "nameWithOwner": "yuvalrakavy/airzoned"
+              },
+              "state": "OPEN",
+              "stateReason": null,
+              "timelineItems": {
+                "nodes": [
+                  {
+                    "__typename": "LabeledEvent",
+                    "actor": {
+                      "login": "yuvalrakavy"
+                    },
+                    "createdAt": "2026-10-23T20:22:11Z",
+                    "id": "LE_lADOTBQnEM8AAAABQJcVNs8AAAAH79mC_g",
+                    "label": {
+                      "name": "bug"
+                    }
+                  },
+                  {
+                    "__typename": "LabeledEvent",
+                    "actor": {
+                      "login": "yuvalrakavy"
+                    },
+                    "createdAt": "2026-10-23T20:22:11Z",
+                    "id": "LE_lADOTBQnEM8AAAABQJcVNs8AAAAH79mDTQ",
+                    "label": {
+                      "name": "p1"
+                    }
+                  },
+                  {
+                    "__typename": "LabeledEvent",
+                    "actor": {
+                      "login": "yuvalrakavy"
+                    },
+                    "createdAt": "2026-10-23T20:22:11Z",
+                    "id": "LE_lADOTBQnEM8AAAABQJcVNs8AAAAH79mDhA",
+                    "label": {
+                      "name": "receiver"
+                    }
+                  }
+                ],
+                "totalCount": 3
+              },
+              "title": "One stalled receiver costs the worker ~2 s every 5 s per session (serial pushes, per-exchange budget); a partial write desyncs the connection",
+              "updatedAt": "2026-10-23T20:22:11Z"
+            }
+          ],
+          "pageInfo": {
+            "endCursor": "Y3Vyc29yOnYyOpK0MjAyNi0wOS0wN1QyMDowNDo0OVrPAAAAAUCXFTY=",
+            "hasNextPage": true
+          }
+        }
+      }
+    }
+  },
+  "variables": {
+    "after": "Y3Vyc29yOnYyOpK0MjAyNi0wOC0xNVQxMjoxOTo1N1rPAAAAATOFHF8=",
+    "first": 5,
+    "name": "airzoned",
+    "owner": "yuvalrakavy",
+    "since": "2024-10-29T12:00:00.000Z"
+  }
+}

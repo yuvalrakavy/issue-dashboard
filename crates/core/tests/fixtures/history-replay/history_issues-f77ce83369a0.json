@@ -1,0 +1,298 @@
+{
+  "name": "history_issues",
+  "response": {
+    "data": {
+      "repository": {
+        "issues": {
+          "nodes": [
+            {
+              "author": {
+                "login": "yuvalrakavy"
+              },
+              "authorAssociation": "OWNER",
+              "body": "Found by the pre-merge deep gate on `feat/m3-streaming-sources` (concurrency lens). **Structurally present, not empirically reproduced** — 600 stress iterations of two concurrent reaps against a 2 ms teardown showed a worst-case latency of 78 ms, so it is rare on this machine.\n\n## The gap\n\n`reap` evaluates the predicate under the pool guard inside a scoped block, the guard drops at the end of that block, and `wait_until` then **re-acquires** the lock to call `wait_timeout`. A `notify_all` landing in that window is lost. `Reservation::drop` widens it by notifying *after* releasing the lock.\n\nThe consequence is worst on the `TearingDown` arm, where `step` returns `Step::Wait(hard)`: a missed notify sleeps for the full remaining `MAX_TEARDOWN_WAIT` — a **10 s silent stall on a Play** after the teardown it was waiting for had already finished.\n\nAnd it can be worse than slow. If another member was parked on that IP meanwhile, the pass that finally wakes at `hard` has `forced == true`, so it **force-takes that member un-drained** — which is the condition the drain rule exists to prevent. (Since `658aee7` that at least gets logged and counted as an undrained teardown rather than reported as a clean drain.)\n\n## Fix\n\nHold the guard from the predicate check through into the wait — i.e. have `step` return the guard, or move the wait inside the same critical section — so there is no window. Alternatively notify under the lock, which narrows but does not close it.\n\nThe textbook shape is `while !predicate { guard = condvar.wait(guard) }` with the guard never released in between; the current code releases it between the two.\n",
+              "closedAt": "2026-08-05T08:52:07Z",
+              "comments": {
+                "nodes": [
+                  {
+                    "author": {
+                      "login": "yuvalrakavy"
+                    },
+                    "authorAssociation": "OWNER",
+                    "body": "Fixed by 42e4240 — reap now carries one guard from predicate through into the wait, and Condvar::wait_timeout releases it atomically. Verified: 15/17 retire tests went red under a negative control that reintroduced the release, then reverted. Merged to main in 4320cf8 (fix/airzoned-defect-band, full band).",
+                    "createdAt": "2026-08-05T08:52:07Z"
+                  }
+                ],
+                "totalCount": 1
+              },
+              "createdAt": "2026-08-02T21:30:57Z",
+              "id": "I_kwDOTBQnEM8AAAABLK3E_g",
+              "labels": {
+                "nodes": [
+                  {
+                    "name": "bug"
+                  }
+                ],
+                "totalCount": 1
+              },
+              "number": 16,
+              "repository": {
+                "nameWithOwner": "yuvalrakavy/airzoned"
+              },
+              "state": "CLOSED",
+              "stateReason": "COMPLETED",
+              "timelineItems": {
+                "nodes": [
+                  {
+                    "__typename": "LabeledEvent",
+                    "actor": {
+                      "login": "yuvalrakavy"
+                    },
+                    "createdAt": "2026-08-02T21:30:58Z",
+                    "id": "LE_lADOTBQnEM8AAAABLK3E_s8AAAAGuBrpRQ",
+                    "label": {
+                      "name": "bug"
+                    }
+                  }
+                ],
+                "totalCount": 1
+              },
+              "title": "Lost wakeup: reap releases the pool lock between the predicate check and the wait",
+              "updatedAt": "2026-08-05T08:52:07Z"
+            },
+            {
+              "author": {
+                "login": "yuvalrakavy"
+              },
+              "authorAssociation": "OWNER",
+              "body": "Found while running the settle A/B on hardware (2026-08-03). Affects **every** `[audio]` knob, not just the new one.\n\n## Observation\n\nI set `IdleHold = 0` through the store's admin surface, verified the daemon applied it, restarted the daemon, and the value was silently back at the compiled default — with `AudioConfig.Status` reading `Applied` the whole time, so nothing looked wrong.\n\nThe tell was in an experiment that measured nothing: `joined_lines=0` and no `SETUP` line, because the warm hold I thought I had disarmed was still armed.\n\n## Two mechanisms, both live\n\n**1. A restart discards operator config.** The daemon is the config source of truth and publishes its own params at startup. Started without `--config`, those params are the compiled defaults, so the startup publish overwrites the retained `{Root}/Config` that carried the operator's values, and the store ingests the defaults back. `write_audio_toml` cannot help — it is a no-op with no `--config` path.\n\n**2. An omitted key is applied as the default, not ignored.** `ConfigDoc` carries `#[serde(default)]` (`src/config.rs`), and `apply_config` replaces the whole params block from the parsed doc. So a `{Root}/Config` doc missing a key sets that knob to the compiled default rather than leaving it alone. Both gate lenses found this independently, with an executed repro:\n\n```rust\nlet doc: ConfigDoc = serde_json::from_slice(payload)?;   // no \"IdleHold\"\nassert_eq!(doc.idle_hold_ms, 10_000);                    // materialised from the default\n// ...and then applied over an operator-tuned 3s, and persisted.\n```\n\nReachable store-side too: `AudioConfig` deliberately carries no SDL defaults (\"the daemon's publish IS the source of truth\") and `to_layout` omits unset optionals, so an admin **Publish** before the daemon's first config ingest sends a doc missing every param.\n\n## Why it matters more now\n\n`IdleHold = 0` is documented as a kill-switch A/B on one binary — the way to disarm the warm hold without a rebuild. A switch that silently re-arms itself on restart is not a kill switch. The same argument applies to anyone tuning fades or volume from the admin UI and expecting it to survive a power cut.\n\n## Fix directions\n\n- Make the fields `Option<T>` and apply only keys actually present. The code already names this as the right fix at `player.rs` (\"dedup incoming against the last *published* doc\").\n- Or persist applied config unconditionally (a state file, not only the `--config` TOML), so a restart republishes what the operator chose rather than what was compiled in.\n\nEither way, log the effective value: `config applied` now includes `idle_hold`, but the revert itself is still silent.\n",
+              "closedAt": "2026-08-05T08:50:44Z",
+              "comments": {
+                "nodes": [
+                  {
+                    "author": {
+                      "login": "yuvalrakavy"
+                    },
+                    "authorAssociation": "OWNER",
+                    "body": "Node **MP-303** in the Store repo's media port DAG (`docs/media-port-dag.md`) — part of the MP-3xx reliability band of the live-frontier mission.",
+                    "createdAt": "2026-08-03T10:23:48Z"
+                  }
+                ],
+                "totalCount": 1
+              },
+              "createdAt": "2026-08-03T09:09:54Z",
+              "id": "I_kwDOTBQnEM8AAAABLOS7_A",
+              "labels": {
+                "nodes": [
+                  {
+                    "name": "bug"
+                  }
+                ],
+                "totalCount": 1
+              },
+              "number": 17,
+              "repository": {
+                "nameWithOwner": "yuvalrakavy/airzoned"
+              },
+              "state": "CLOSED",
+              "stateReason": "COMPLETED",
+              "timelineItems": {
+                "nodes": [
+                  {
+                    "__typename": "LabeledEvent",
+                    "actor": {
+                      "login": "yuvalrakavy"
+                    },
+                    "createdAt": "2026-08-03T09:09:55Z",
+                    "id": "LE_lADOTBQnEM8AAAABLOS7_M8AAAAGuUKH4A",
+                    "label": {
+                      "name": "bug"
+                    }
+                  }
+                ],
+                "totalCount": 1
+              },
+              "title": "Operator config silently reverts to compiled defaults (daemon restart, or any doc omitting a key)",
+              "updatedAt": "2026-08-05T08:50:44Z"
+            },
+            {
+              "author": {
+                "login": "yuvalrakavy"
+              },
+              "authorAssociation": "OWNER",
+              "body": "From the pre-merge gate on the warm idle-hold (`5047330`).\n\n## The claim\n\n`engine/mod.rs`'s `IDLE_HOLD` doc states the speaker is free within `idle_hold + ≤POLL_TIMEOUT (6s) + render_delay (~1.25s)` — ~17.5s at the 10s default, which is what justifies the default against the user's stated 10–20s requirement.\n\n## Why it is not a bound\n\n`expire_idle_holds` runs on the MQTT loop thread, and the loop body can block for far longer than one poll interval:\n\n- `free_receivers` → `reap_all` → `reap` blocks up to `MAX_TEARDOWN_WAIT` (10s) **per receiver IP**, plus RTSP socket timeouts.\n- `create_session` → `open_source` → `decode_file` decodes an entire track synchronously.\n\nSo one room's Play can push a *different* room's hold past 20s. Modelling the code's own terms gives 17.3s with no slack before any RTSP round trip — the arithmetic is right, but it describes the quiet case only.\n\n## Options\n\n- Say so in the comment: the figure is the quiet-path expectation, not a bound.\n- Or move `expire_idle_holds` off the blocking path so the granularity claim holds.\n\nLow priority — the consequence is a speaker held somewhat longer than advertised, not a failure — but the doc currently reads as a guarantee.\n",
+              "closedAt": "2026-08-05T08:50:43Z",
+              "comments": {
+                "nodes": [],
+                "totalCount": 0
+              },
+              "createdAt": "2026-08-03T09:09:55Z",
+              "id": "I_kwDOTBQnEM8AAAABLOS8sw",
+              "labels": {
+                "nodes": [
+                  {
+                    "name": "bug"
+                  }
+                ],
+                "totalCount": 1
+              },
+              "number": 18,
+              "repository": {
+                "nameWithOwner": "yuvalrakavy/airzoned"
+              },
+              "state": "CLOSED",
+              "stateReason": "COMPLETED",
+              "timelineItems": {
+                "nodes": [
+                  {
+                    "__typename": "LabeledEvent",
+                    "actor": {
+                      "login": "yuvalrakavy"
+                    },
+                    "createdAt": "2026-08-03T09:09:56Z",
+                    "id": "LE_lADOTBQnEM8AAAABLOS8s88AAAAGuUKOBw",
+                    "label": {
+                      "name": "bug"
+                    }
+                  }
+                ],
+                "totalCount": 1
+              },
+              "title": "The idle-hold occupancy figure is not a bound — expire_idle_holds rides a blocking loop",
+              "updatedAt": "2026-08-05T08:50:43Z"
+            },
+            {
+              "author": {
+                "login": "yuvalrakavy"
+              },
+              "authorAssociation": "OWNER",
+              "body": "From the pre-merge gate on the warm idle-hold (`5047330`). A UX consequence, not a defect.\n\n## The behaviour\n\nThe hold freezes the source READ POSITION, so a pause/resume inside the window continues mid-track. Outside it, the session is torn down and the replay builds a fresh source, so the track restarts — and for a playlist, shuffle re-rolls from the top.\n\nAt the 10s default that is a hard cliff at ten seconds:\n\n| resume at | result |\n|---|---|\n| 9s | continues where you left off |\n| 11s | restarts the track |\n\nBefore the warm hold existed every resume restarted, so the behaviour was at least uniform. Now it is uniform only within the window.\n\n## Why the store cannot smooth it over\n\n`AudioSession`'s outbound `[Json]` set is `Transport / Sources / Members / Shuffle / Loop / CrossfadeSeconds`. `Position` exists only inbound, on `AudioSessionStatus`, and never travels store→daemon — so the store cannot ask for a resume at an offset.\n\n## Worth knowing when tuning `IdleHold`\n\nThis pulls the default in the opposite direction from the occupancy argument: longer holds mean more resumes feel continuous, shorter holds free shared speakers sooner. 10s was chosen from occupancy alone. If position-preservation turns out to matter more in daily use, that is the trade to revisit — and the honest fix is to make `Position` a two-way field so a cold replay can seek, which removes the cliff entirely rather than moving it.\n",
+              "closedAt": "2026-08-10T01:58:55Z",
+              "comments": {
+                "nodes": [
+                  {
+                    "author": {
+                      "login": "yuvalrakavy"
+                    },
+                    "authorAssociation": "OWNER",
+                    "body": "Node **MP-310** in the Store repo's media port DAG (`docs/media-port-dag.md`) — part of the MP-3xx reliability band of the live-frontier mission.",
+                    "createdAt": "2026-08-03T10:23:58Z"
+                  },
+                  {
+                    "author": {
+                      "login": "yuvalrakavy"
+                    },
+                    "authorAssociation": "OWNER",
+                    "body": "## Closed by `c7faa41` (daemon) + Store `97e3973f`\n\nThis issue says outright it is *\"a UX consequence, not a defect\"*, and it establishes that the cliff **cannot** be smoothed from the store. So what it needed was not code — it was for its finding to survive somewhere a person tuning the knob would actually look. Closing it without that would have thrown the finding away, which was the only real risk it carried.\n\n### What was missing\n\n`IdleHold`'s documentation covered exactly **one** of the two forces acting on it — shorter frees a shared speaker sooner. The other is the one this issue found: the hold freezes the source read position, so a resume inside the window continues mid-track while one outside restarts the track and re-rolls a playlist's shuffle.\n\n**10 s was chosen from occupancy alone**, so the default was set with half the picture. That is the sentence worth keeping.\n\n### Where it now lives\n\n- `AudioParams::idle_hold` — for whoever reads the daemon, including the two-way-`Position` note so nobody re-derives why the store cannot help.\n- The store's `AudioConfig.IdleHold` **description** — because this knob is tuned from the admin UI, where a Rust doc comment is invisible. It now says what a resume inside versus outside the window actually does.\n\n### Kept because it is the useful framing\n\nBefore the hold existed every resume restarted, so the behaviour was uniform. It is now uniform only *within* the window — and \"it sometimes resumes and sometimes restarts\" reads as a bug to anyone who does not know why.\n\n### If it ever does matter\n\nThe honest fix is the one this issue names: make `Position` two-way so a **cold** replay can seek. That removes the cliff rather than moving it, and it is a wire addition — `Position` sits on `AudioSessionStatus`, the observed doc, travelling daemon→store only. Not filed as a node: the trade should be re-argued from daily use rather than pre-committed.",
+                    "createdAt": "2026-08-10T02:00:02Z"
+                  }
+                ],
+                "totalCount": 2
+              },
+              "createdAt": "2026-08-03T09:09:56Z",
+              "id": "I_kwDOTBQnEM8AAAABLOS9VA",
+              "labels": {
+                "nodes": [
+                  {
+                    "name": "enhancement"
+                  }
+                ],
+                "totalCount": 1
+              },
+              "number": 19,
+              "repository": {
+                "nameWithOwner": "yuvalrakavy/airzoned"
+              },
+              "state": "CLOSED",
+              "stateReason": "COMPLETED",
+              "timelineItems": {
+                "nodes": [
+                  {
+                    "__typename": "LabeledEvent",
+                    "actor": {
+                      "login": "yuvalrakavy"
+                    },
+                    "createdAt": "2026-08-03T09:09:58Z",
+                    "id": "LE_lADOTBQnEM8AAAABLOS9VM8AAAAGuUKRxQ",
+                    "label": {
+                      "name": "enhancement"
+                    }
+                  }
+                ],
+                "totalCount": 1
+              },
+              "title": "Pause/resume position preservation is a hard cliff at IdleHold",
+              "updatedAt": "2026-08-10T02:00:02Z"
+            },
+            {
+              "author": {
+                "login": "yuvalrakavy"
+              },
+              "authorAssociation": "OWNER",
+              "body": "## Observed\n\n`{Root}/Config` is written by BOTH parties: the admin/store publishes an edit to it, and the daemon\npublishes its effective config to the same retained topic. That shared ownership is the direct cause of\n#17's first mechanism — the daemon's startup publish overwrote the operator's retained value.\n\n#17 is fixed by deferring the daemon's publish until after the retained ingest, so what it publishes is\nwhat it actually runs. That removes the symptom, but the topic is still co-owned, so correctness still\nrests on *ordering* rather than on structure.\n\n## Expected\n\nEvery other lane in this daemon already separates desired from observed:\n\n| Desired (store → daemon) | Observed (daemon → store) |\n|---|---|\n| `{Root}/Session/{id}` | `{Root}/State/{id}` |\n| `{Root}/Config` | *(nothing — shares the desired topic)* |\n\nThe config lane should follow the same convention: the store owns `{Root}/Config`, and the daemon\npublishes its effective config to a separate topic it alone writes.\n\n## Confirmed\n\n- Both parties write `{Root}/Config`: the daemon at `Player::publish_config` (`src/player.rs`), the\n  store as an admin edit. Confirmed by the #17 reproduction.\n- The daemon publishes exactly once per connection, deliberately — re-publishing on every apply caused\n  a documented feedback runaway that never reached a fixed point. Any redesign must preserve that.\n- **The daemon's publish carries information nothing else has.** `ConfigDoc::to_params` CLAMPS\n  (`clamp_preroll`, `clamp_idle_hold` in `src/config.rs`), so \"what was asked for\" and \"what runs\" can\n  legitimately differ. The clamp on `Preroll` exists because the units are a live trap: `Preroll` is in\n  milliseconds while the compiled default is in frames, so publishing `44100` asks for a 44 s preroll.\n  This is why the daemon cannot simply stop publishing.\n- Config is per-tenant by design (`src/config.rs`: \"the full per-tenant config (mdns realm, library\n  root, spotify accounts)\"), and multi-tenant service is planned (`src/mqtt.rs`: \"the per-tenant tokio\n  actor hierarchy (spec §5.1) is M2\"). A topic root is therefore the correct per-tenant key, and the\n  per-process `--config` TOML is NOT — one process serving N tenants cannot hold N configs in one file.\n  Any option that makes on-disk state the source of truth is ruled out by this.\n\n## Why this is worth doing\n\n- The clobber becomes impossible **by construction** rather than by ordering.\n- The clamp feedback becomes explicit instead of implicit: the store can show \"you asked for X, the\n  daemon is running Y\", which is what `Applied` vs `Modified` already tries to mean.\n- Per-tenant by topic root, so it scales to M2 with no new mechanism.\n- It matches a convention this codebase already uses, so there is less to explain, not more.\n\n## Cost\n\nTwo repos. The store side currently ingests the daemon's truth from `{Root}/Config`; it would read the\nnew observed topic instead, and its `Applied`/`Modified` comparison would compare the two topics rather\nthan one topic against itself. That is why this was not bundled into the #17 fix.\n\n## Hypotheses — UNVERIFIED, do not trust\n\n- The new topic is probably best named for the existing convention (`State` is taken per-session), but\n  the naming has not been checked against the store's property model.\n- It is *possible* that once the two topics are separate, the once-per-connection restriction on the\n  daemon's publish can be relaxed — the runaway needed both parties on one topic. Not verified, and it\n  should not be assumed while designing.\n\nRelated: #17 (the defect this would make structurally impossible).\n",
+              "closedAt": "2026-09-16T22:47:04Z",
+              "comments": {
+                "nodes": [
+                  {
+                    "author": {
+                      "login": "yuvalrakavy"
+                    },
+                    "authorAssociation": "OWNER",
+                    "body": "**Closing: no live defect, and it belongs to a decision that has not been made yet.**\n\nTriaged 2026-09-17. The facts in the body still hold — `publish_config` writes the co-owned `{Root}/Config` (`src/player.rs:3700-3702`) and the daemon subscribes to it (`src/mqtt.rs:82`, `:113`) — but nothing is broken by it: #17's ordering fix holds. This is an architecture prerequisite for running several tenants from one daemon, not a bug, and as an open issue it reads as debt that is actionable when it is not.\n\nWhether it is ever needed depends on Store#92 (MP-601, the deployment host). airzoned is single-tenant today (`src/config.rs:17-32`: one broker, one topic root, one realm), and the triage there recommends **one daemon per site**, which makes a multi-tenant config — and this split — unnecessary. If #92 goes the other way, reopen this as part of that design.",
+                    "createdAt": "2026-09-16T22:47:03Z"
+                  }
+                ],
+                "totalCount": 1
+              },
+              "createdAt": "2026-08-04T20:00:36Z",
+              "id": "I_kwDOTBQnEM8AAAABLdyVPw",
+              "labels": {
+                "nodes": [
+                  {
+                    "name": "enhancement"
+                  }
+                ],
+                "totalCount": 1
+              },
+              "number": 20,
+              "repository": {
+                "nameWithOwner": "yuvalrakavy/airzoned"
+              },
+              "state": "CLOSED",
+              "stateReason": "NOT_PLANNED",
+              "timelineItems": {
+                "nodes": [
+                  {
+                    "__typename": "LabeledEvent",
+                    "actor": {
+                      "login": "yuvalrakavy"
+                    },
+                    "createdAt": "2026-08-04T20:00:37Z",
+                    "id": "LE_lADOTBQnEM8AAAABLdyVP88AAAAGvtmfvQ",
+                    "label": {
+                      "name": "enhancement"
+                    }
+                  }
+                ],
+                "totalCount": 1
+              },
+              "title": "Split the config lane into desired and observed topics, as every other lane already is",
+              "updatedAt": "2026-09-16T22:47:04Z"
+            }
+          ],
+          "pageInfo": {
+            "endCursor": "Y3Vyc29yOnYyOpK0MjAyNi0wOC0wNFQyMDowMDozNlrPAAAAAS3clT8=",
+            "hasNextPage": true
+          }
+        }
+      }
+    }
+  },
+  "variables": {
+    "after": "Y3Vyc29yOnYyOpK0MjAyNi0wOC0wMlQyMTozMDo1NVrPAAAAASytxME=",
+    "first": 5,
+    "name": "airzoned",
+    "owner": "yuvalrakavy",
+    "since": "2024-10-29T12:00:00.000Z"
+  }
+}

@@ -1,0 +1,70 @@
+{
+  "name": "history_nodes",
+  "response": {
+    "data": {
+      "nodes": [
+        {
+          "__typename": "Issue",
+          "author": {
+            "login": "yuvalrakavy"
+          },
+          "authorAssociation": "CONTRIBUTOR",
+          "body": "**Version:** rhai 1.25.1, features `sync`, `internals`, `metadata`; Rust stable, macOS (aarch64).\n\n**What happens.** When a native function is not registered as a method but its first argument is a\nvariable, `exec_native_fn_call` swaps a copy into `args[0]` through `ArgBackup::change_first_arg_to_copy`\n(`src/func/call.rs:380-385`), and restores it only on the normal-return path (`:415-417`). If the native\nfunction panics, the unwind drops the `ArgBackup` unrestored. `Drop for ArgBackup` asserts\n`orig_mut.is_none()` (`:103-110`), and a panic inside a destructor during an unwind aborts the\nprocess (`panic_in_cleanup`). The host cannot contain it with `catch_unwind`, so one buggy native\nfunction — or one script that provokes a panic inside rhai — takes down the whole embedding process.\n\n**A script that triggers it with no host bug.** A closure that captures its receiver turns the receiver\ninto a shared cell, and method-call syntax write-locks that cell for the duration of the call\n(`src/eval/target.rs:405-427`). If the native function then calls the closure with the wrong number of\narguments, building the \"Function not found\" message calls `Dynamic::type_id` on the captured,\nwrite-locked cell, which does `locked_read(cell).unwrap()` (`src/types/dynamic.rs:345`). The `unwrap`\npanics, and the `ArgBackup` assertion turns that panic into an abort. (With a closure of the right\narity the same capture reports a clean `ErrorDataRace`.)\n\n**Minimal reproduction** (exits with 134 on 1.25.1):\n\n```rust\nuse rhai::{Dynamic, Engine, EvalAltResult, FnPtr, NativeCallContext, Scope};\n\n#[derive(Clone)]\nstruct Thing(i64);\n\nfn with_arg(ctx: NativeCallContext, t: Thing, f: FnPtr) -> Result<Dynamic, Box<EvalAltResult>> {\n    f.call_within_context(&ctx, (t,))\n}\n\nfn main() {\n    let mut e = Engine::new();\n    e.register_type_with_name::<Thing>(\"Thing\");\n    e.register_fn(\"with_arg\", with_arg);\n    e.register_fn(\"get\", |t: &mut Thing| t.0);\n    let mut scope = Scope::new();\n    scope.push(\"t\", Thing(7));\n    // `||` takes no argument but `with_arg` passes one; `t` is captured and write-locked.\n    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {\n        e.eval_with_scope::<Dynamic>(&mut scope, \"t.with_arg(|| t.get())\")\n    }));\n    println!(\"not reached: the process aborts with exit 134\");\n}\n```\n\nA native function that simply panics shows the same thing: `fn buggy(_t: Thing) -> i64 { panic!() }`,\ncalled as `t.buggy()` or `buggy(t)`, aborts the process even inside `catch_unwind`.\n\n**Suggested fixes:**\n\n1. In `exec_native_fn_call`, restore the swapped first argument through the same `defer!` guard the\n   script-function path already uses (`src/func/call.rs` around `:658-668`), instead of restoring only on\n   the normal-return path. The guard runs on unwind too, so the assertion in `Drop for ArgBackup` can stay.\n   A three-line patch against 1.25.1, which we carry, is\n   https://github.com/yuvalrakavy/rhai/commit/438b8554af7bdeed0df197b8e40dc1d601d1de54 — with it every case\n   above becomes an ordinary panic that `catch_unwind` contains, and the test suite passes\n   (`cargo test --features sync,internals,metadata`).\n2. `Dynamic::type_id` (and the type-name path used when building error messages): do not `unwrap` a\n   failed `locked_read`, so a data race reports `ErrorDataRace` (as `Target::try_from` already does)\n   instead of panicking.\n",
+          "closedAt": "2026-10-17T23:44:51Z",
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "yuvalrakavy"
+                },
+                "authorAssociation": "CONTRIBUTOR",
+                "body": "Proposed fix: https://github.com/rhaiscript/rhai/pull/1189. It has two commits: the restore-on-unwind fix for the abort, and a separate one for the `sync` panic behind it (`is_locked` under `sync`), which changes a documented method and is left for you to shape.",
+                "createdAt": "2026-10-16T17:51:28Z"
+              }
+            ],
+            "totalCount": 1
+          },
+          "createdAt": "2026-10-16T12:38:43Z",
+          "id": "I_kwDOAyYOjc8AAAABXrsslw",
+          "labels": {
+            "nodes": [
+              {
+                "name": "bug"
+              }
+            ],
+            "totalCount": 1
+          },
+          "number": 1188,
+          "repository": {
+            "nameWithOwner": "rhaiscript/rhai"
+          },
+          "state": "CLOSED",
+          "stateReason": "COMPLETED",
+          "timelineItems": {
+            "nodes": [
+              {
+                "__typename": "LabeledEvent",
+                "actor": {
+                  "login": "schungx"
+                },
+                "createdAt": "2026-10-17T00:15:13Z",
+                "id": "LE_lADOAyYOjc8AAAABXrssl88AAAAHzF1Tqg",
+                "label": {
+                  "name": "bug"
+                }
+              }
+            ],
+            "totalCount": 1
+          },
+          "title": "A panic inside a native function called with a variable first argument aborts the process (ArgBackup::drop asserts during unwinding)",
+          "updatedAt": "2026-10-17T23:44:51Z"
+        }
+      ]
+    }
+  },
+  "variables": {
+    "ids": [
+      "I_kwDOAyYOjc8AAAABXrsslw"
+    ]
+  }
+}

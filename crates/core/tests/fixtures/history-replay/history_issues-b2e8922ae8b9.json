@@ -1,0 +1,434 @@
+{
+  "name": "history_issues",
+  "response": {
+    "data": {
+      "repository": {
+        "issues": {
+          "nodes": [
+            {
+              "author": {
+                "login": "yuvalrakavy"
+              },
+              "authorAssociation": "OWNER",
+              "body": "> **Status 2026-10-23:** **partially fixed by `60082c7`.** It added `a_repaired_member_dropped_by_the_document_answers_with_its_parked_fade` (`src/player.rs:8183`), which drives the no-sender `else` branch of `remove_inner` (`src/engine/mod.rs:852-876`) through the `parked_repairs` record and asserts a `T/Quiet/m1/live`, covering the repair half (by reading; not mutation-run). **Residual:** the never-connected fallback (`unwrap_or_else(|| Departed { silent: true, drain: ZERO })`, `mod.rs:867-873`) is still unasserted, and the three tests named below (`src/player/tests/idle_rig/transition_tests.rs:261, 591, 1351`) still never look at `published_quiet`.\n\nA mutation gate (2026-09-11) measured the exit-handshake test net and found this path with a\nliterally empty net: **deleting it leaves all 478 tests green.**\n\n## The mechanism\n\n`Engine::remove` pushes a `Departed` record before parking the member, because the `silent` and\n`drain` flags can only be sampled while we still hold the sender. There is a second path for the\ncase where there is **no sender at all** — it pushes an already-silent, zero-drain entry, which is\nwhat makes the contract *total*: every removal owes exactly one `Quiet`.\n\n## Why it matters\n\nThe code comment states the stake itself: without it \"the room holds its hardware up until a\nbackstop that was never armed\". The orchestrator carries **no timeout by design** (Store#288), so\nthis is not a slow exit, it is a permanent one.\n\n## What the gate measured\n\n- Mutation: delete the no-sender path. Result: **478 passed, 0 failed** (as of 2026-09-11).\n- The tests that drive exactly this state — `a_rejected_arrival_does_not_claim_its_receiver_on_a_redelivered_document`,\n  `after_a_held_failure_a_source_change_does_not_readd_the_rejected_arrival`,\n  `deadline_with_nothing_heard_fails_holds_and_stops_retrying_the_arrivals` — all release\n  unconnected members and **none of them looks at `published_quiet`.**\n\n## The fix\n\nAdd an assertion to one of those three (or a new test): release a member that never connected, and\nassert a `Quiet` is published for it. The rig already has everything needed.\n\nDeferred from the gate-2 test-net repair, which closed the wire-topic and duplicate-ack holes.\nReport: `gate2-mutation-report.md`.\n\n",
+              "closedAt": null,
+              "comments": {
+                "nodes": [],
+                "totalCount": 0
+              },
+              "createdAt": "2026-09-11T09:53:52Z",
+              "id": "I_kwDOTBQnEM8AAAABQzuQzQ",
+              "labels": {
+                "nodes": [
+                  {
+                    "name": "todo"
+                  },
+                  {
+                    "name": "p2"
+                  },
+                  {
+                    "name": "self-contained"
+                  },
+                  {
+                    "name": "partial"
+                  },
+                  {
+                    "name": "player"
+                  }
+                ],
+                "totalCount": 5
+              },
+              "number": 41,
+              "repository": {
+                "nameWithOwner": "yuvalrakavy/airzoned"
+              },
+              "state": "OPEN",
+              "stateReason": null,
+              "timelineItems": {
+                "nodes": [
+                  {
+                    "__typename": "LabeledEvent",
+                    "actor": {
+                      "login": "yuvalrakavy"
+                    },
+                    "createdAt": "2026-09-11T09:53:53Z",
+                    "id": "LE_lADOTBQnEM8AAAABQzuQzc8AAAAHNZN7HA",
+                    "label": {
+                      "name": "bug"
+                    }
+                  },
+                  {
+                    "__typename": "UnlabeledEvent",
+                    "actor": {
+                      "login": "yuvalrakavy"
+                    },
+                    "createdAt": "2026-10-23T20:22:08Z",
+                    "id": "UNLE_lADOTBQnEM8AAAABQzuQzc8AAAAH79l2Lg",
+                    "label": {
+                      "name": "bug"
+                    }
+                  },
+                  {
+                    "__typename": "LabeledEvent",
+                    "actor": {
+                      "login": "yuvalrakavy"
+                    },
+                    "createdAt": "2026-10-23T20:22:08Z",
+                    "id": "LE_lADOTBQnEM8AAAABQzuQzc8AAAAH79l2bA",
+                    "label": {
+                      "name": "todo"
+                    }
+                  },
+                  {
+                    "__typename": "LabeledEvent",
+                    "actor": {
+                      "login": "yuvalrakavy"
+                    },
+                    "createdAt": "2026-10-23T20:22:08Z",
+                    "id": "LE_lADOTBQnEM8AAAABQzuQzc8AAAAH79l2sQ",
+                    "label": {
+                      "name": "p2"
+                    }
+                  },
+                  {
+                    "__typename": "LabeledEvent",
+                    "actor": {
+                      "login": "yuvalrakavy"
+                    },
+                    "createdAt": "2026-10-23T20:22:08Z",
+                    "id": "LE_lADOTBQnEM8AAAABQzuQzc8AAAAH79l28w",
+                    "label": {
+                      "name": "player"
+                    }
+                  },
+                  {
+                    "__typename": "LabeledEvent",
+                    "actor": {
+                      "login": "yuvalrakavy"
+                    },
+                    "createdAt": "2026-10-23T20:22:08Z",
+                    "id": "LE_lADOTBQnEM8AAAABQzuQzc8AAAAH79l3Mg",
+                    "label": {
+                      "name": "partial"
+                    }
+                  },
+                  {
+                    "__typename": "LabeledEvent",
+                    "actor": {
+                      "login": "yuvalrakavy"
+                    },
+                    "createdAt": "2026-10-23T20:22:08Z",
+                    "id": "LE_lADOTBQnEM8AAAABQzuQzc8AAAAH79l3aQ",
+                    "label": {
+                      "name": "self-contained"
+                    }
+                  }
+                ],
+                "totalCount": 7
+              },
+              "title": "The never-connected removal fallback owes a Quiet and no test checks it",
+              "updatedAt": "2026-10-23T20:22:08Z"
+            },
+            {
+              "author": {
+                "login": "yuvalrakavy"
+              },
+              "authorAssociation": "OWNER",
+              "body": "> **Status 2026-10-23:** **partially fixed by `f1aa278`** (2026-09-11, that evening). `reaping_many_members_costs_one_render_delay_not_n` (`src/engine/retire.rs:1376-1410`) now builds `RetiringPool::new()` and asserts `elapsed >= SETTLE_MS`, so a removed `await_settle` goes red. **Remaining:** that bound is the constant itself, so with `SETTLE_MS = 0` it reads `>= 0 ms` and stays green (from reading; not mutation-run). `a_torn_down_receiver_is_left_alone_for_the_settle` (`retire.rs:1424-1426`) still injects its own settle. Fix: assert against a literal floor, e.g. `RetiringPool::new().settle >= 250 ms`. The `AIRZONED_SETTLE_MS` `OnceLock` (`retire.rs:97-118`) leak warning still applies.\n\nA mutation gate (2026-09-11) found the post-teardown settle is **bounded above but not below**:\nsetting `SETTLE_MS` to 0 is silently green across all 478 tests (count as of 2026-09-11; stale now).\n\n## Why that is the wrong way round\n\nThe settle exists because the receiver has a physical **relay**, and a SETUP arriving hard on the\nheels of a TEARDOWN is the condition most associated with a wedged receiver. It is a deliberate\n500 ms default, chosen by the user with the reasoning recorded verbatim:\n\n> \"Since (by the noise) there is a relay in the receiver, a non zero settle time makes sense, 500ms\n> seems to be a good value. I would set this to be the default; finding the minimum value is a call\n> for flakey behaviour.\"\n\nSo \"not zero\" is the decision, and right now it is protected by a comment and nothing else.\nDeleting the mechanism is a silent, green change.\n\n## What the gate measured\n\n- `SETTLE_MS = 0` → **478 passed** (suite time 37.4s → 33.7s, so the settle is genuinely being paid,\n  just never asserted).\n- `SETTLE_MS = 5000` → **1 failed**: `a_reap_meeting_an_in_flight_teardown_waits_it_out_without_giving_up`,\n  with \"the second reap took 5.2s, most of MAX_TEARDOWN_WAIT (10s)\". The upper bound IS defended.\n- `a_torn_down_receiver_is_left_alone_for_the_settle` is named for this mechanism and **cannot test\n  it**: it injects its own 300 ms via `RetiringPool { settle, ..without_settle() }`, never reads\n  `SETTLE_MS`, and never constructs `RetiringPool::new()`. Sixteen other tests DO call\n  `RetiringPool::new()` and pay the real settle; none assert it.\n\n## The fix\n\nAssert that a pool built by `RetiringPool::new()` carries a non-zero settle, and that a\nreap-before-connect actually waits it. Also untested: the `AIRZONED_SETTLE_MS` override, whose\n`OnceLock` means a test that set it would leak into the whole binary — worth noting in whatever\ntest is added.\n\nReport: `gate2-mutation-report.md`.\n\n",
+              "closedAt": null,
+              "comments": {
+                "nodes": [],
+                "totalCount": 0
+              },
+              "createdAt": "2026-09-11T09:53:53Z",
+              "id": "I_kwDOTBQnEM8AAAABQzuRnw",
+              "labels": {
+                "nodes": [
+                  {
+                    "name": "todo"
+                  },
+                  {
+                    "name": "p3"
+                  },
+                  {
+                    "name": "self-contained"
+                  },
+                  {
+                    "name": "partial"
+                  },
+                  {
+                    "name": "retire"
+                  }
+                ],
+                "totalCount": 5
+              },
+              "number": 42,
+              "repository": {
+                "nameWithOwner": "yuvalrakavy/airzoned"
+              },
+              "state": "OPEN",
+              "stateReason": null,
+              "timelineItems": {
+                "nodes": [
+                  {
+                    "__typename": "LabeledEvent",
+                    "actor": {
+                      "login": "yuvalrakavy"
+                    },
+                    "createdAt": "2026-09-11T09:53:55Z",
+                    "id": "LE_lADOTBQnEM8AAAABQzuRn88AAAAHNZOBMQ",
+                    "label": {
+                      "name": "bug"
+                    }
+                  },
+                  {
+                    "__typename": "UnlabeledEvent",
+                    "actor": {
+                      "login": "yuvalrakavy"
+                    },
+                    "createdAt": "2026-10-23T20:22:05Z",
+                    "id": "UNLE_lADOTBQnEM8AAAABQzuRn88AAAAH79lqTg",
+                    "label": {
+                      "name": "bug"
+                    }
+                  },
+                  {
+                    "__typename": "LabeledEvent",
+                    "actor": {
+                      "login": "yuvalrakavy"
+                    },
+                    "createdAt": "2026-10-23T20:22:05Z",
+                    "id": "LE_lADOTBQnEM8AAAABQzuRn88AAAAH79lqYQ",
+                    "label": {
+                      "name": "todo"
+                    }
+                  },
+                  {
+                    "__typename": "LabeledEvent",
+                    "actor": {
+                      "login": "yuvalrakavy"
+                    },
+                    "createdAt": "2026-10-23T20:22:05Z",
+                    "id": "LE_lADOTBQnEM8AAAABQzuRn88AAAAH79lqlQ",
+                    "label": {
+                      "name": "p3"
+                    }
+                  },
+                  {
+                    "__typename": "LabeledEvent",
+                    "actor": {
+                      "login": "yuvalrakavy"
+                    },
+                    "createdAt": "2026-10-23T20:22:05Z",
+                    "id": "LE_lADOTBQnEM8AAAABQzuRn88AAAAH79lq0A",
+                    "label": {
+                      "name": "retire"
+                    }
+                  },
+                  {
+                    "__typename": "LabeledEvent",
+                    "actor": {
+                      "login": "yuvalrakavy"
+                    },
+                    "createdAt": "2026-10-23T20:22:05Z",
+                    "id": "LE_lADOTBQnEM8AAAABQzuRn88AAAAH79lrAw",
+                    "label": {
+                      "name": "partial"
+                    }
+                  },
+                  {
+                    "__typename": "LabeledEvent",
+                    "actor": {
+                      "login": "yuvalrakavy"
+                    },
+                    "createdAt": "2026-10-23T20:22:05Z",
+                    "id": "LE_lADOTBQnEM8AAAABQzuRn88AAAAH79lrQQ",
+                    "label": {
+                      "name": "self-contained"
+                    }
+                  }
+                ],
+                "totalCount": 7
+              },
+              "title": "SETTLE_MS = 0 still passes: the settle test asserts against the constant, not a floor",
+              "updatedAt": "2026-10-23T20:22:05Z"
+            },
+            {
+              "author": {
+                "login": "yuvalrakavy"
+              },
+              "authorAssociation": "OWNER",
+              "body": "> **Status 2026-10-23:** still open, checked against `7b4623f`. Blocks #13 (agreed order: #43, then #13, then Store#83). See the added paragraph on the 20 s per-exchange budget.\n\n**Blocks #13.**\n\nRe-filed from #14 (triaged 2026-09-17), which had four bullets of which two have landed.\n\n## The defect\n\nAt shutdown, `RetiringPool::reap_all` (`src/engine/retire.rs:575-611`; the serial loop is at 605-607) is already partly parallel: it cuts every member to silence up front so their drains overlap, and since `f1aa278` it pays the settle once for the batch rather than once per receiver. But the TEARDOWNs themselves are still sent in a plain serial loop:\n\n```rust\nfor ip in ips {\n    self.reap_inner(*ip, false);\n}\n```\n\nSo each receiver's RTSP TEARDOWN exchange waits for the previous one. A single receiver that is slow to answer — asleep, on a flaky link, mid-reboot — delays every teardown behind it.\n\nIt is worse than \"delays the rest\": each TEARDOWN exchange is bounded only by `REQUEST_BUDGET` = 20 s (`src/rtsp.rs:39`; `teardown` at `src/rtsp.rs:385`), which equals `SHUTDOWN_GRACE`. A single receiver that accepted TCP and then stopped answering RTSP can use the entire grace on its own (plus up to 2 s of `FADE_WAIT_CAP` before it, `src/player.rs:776`), and every receiver after it in the sorted IP list is abandoned un-torn-down.\n\n## Why it matters\n\nShutdown is bounded by `SHUTDOWN_GRACE = 20s` (`src/worker.rs:25`), and that bound works **by abandonment**: past it the worker is left mid-teardown, and the receivers not yet reached are left un-torn-down — which is the un-drained teardown this whole mechanism exists to prevent. With a serial loop, one stalled receiver early in the list can push the rest past the grace window.\n\n## Scope\n\nSend the TEARDOWNs concurrently (or at least bound each one and keep going), preserving the two properties the current code already protects: drains overlap, and no receiver gets its next SETUP sooner than its own settle allows. Severity at the current install size is an annoyance; it grows with the number of receivers.\n\n",
+              "closedAt": null,
+              "comments": {
+                "nodes": [],
+                "totalCount": 0
+              },
+              "createdAt": "2026-09-16T22:46:50Z",
+              "id": "I_kwDOTBQnEM8AAAABRq0NOA",
+              "labels": {
+                "nodes": [
+                  {
+                    "name": "bug"
+                  },
+                  {
+                    "name": "p2"
+                  },
+                  {
+                    "name": "retire"
+                  }
+                ],
+                "totalCount": 3
+              },
+              "number": 43,
+              "repository": {
+                "nameWithOwner": "yuvalrakavy/airzoned"
+              },
+              "state": "OPEN",
+              "stateReason": null,
+              "timelineItems": {
+                "nodes": [
+                  {
+                    "__typename": "LabeledEvent",
+                    "actor": {
+                      "login": "yuvalrakavy"
+                    },
+                    "createdAt": "2026-10-23T20:22:03Z",
+                    "id": "LE_lADOTBQnEM8AAAABRq0NOM8AAAAH79lhTw",
+                    "label": {
+                      "name": "bug"
+                    }
+                  },
+                  {
+                    "__typename": "LabeledEvent",
+                    "actor": {
+                      "login": "yuvalrakavy"
+                    },
+                    "createdAt": "2026-10-23T20:22:03Z",
+                    "id": "LE_lADOTBQnEM8AAAABRq0NOM8AAAAH79lhjQ",
+                    "label": {
+                      "name": "p2"
+                    }
+                  },
+                  {
+                    "__typename": "LabeledEvent",
+                    "actor": {
+                      "login": "yuvalrakavy"
+                    },
+                    "createdAt": "2026-10-23T20:22:03Z",
+                    "id": "LE_lADOTBQnEM8AAAABRq0NOM8AAAAH79lh0w",
+                    "label": {
+                      "name": "retire"
+                    }
+                  }
+                ],
+                "totalCount": 3
+              },
+              "title": "Shutdown sends TEARDOWN serially: one slow receiver delays the rest past SHUTDOWN_GRACE",
+              "updatedAt": "2026-10-23T20:22:03Z"
+            },
+            {
+              "author": {
+                "login": "yuvalrakavy"
+              },
+              "authorAssociation": "OWNER",
+              "body": "> **Status 2026-10-23:** still open, checked against `7b4623f`. Line refs below updated (they had moved); `exit_on_second_signal` named as the reusable piece.\n\nRe-filed from #14 (triaged 2026-09-17).\n\n## The defect\n\nThe daemon registers SIGTERM and SIGINT onto a single shutdown flag (`src/mqtt.rs:314-322` (`register_stop_signals`)):\n\n```rust\nfor sig in [signal_hook::consts::SIGTERM, signal_hook::consts::SIGINT] {\n    if let Err(e) = signal_hook::flag::register(sig, Arc::clone(&shutdown)) { … }\n}\n```\n\nA second Ctrl-C just sets the same flag again, so an operator who has decided not to wait for a graceful shutdown has no way to say so short of `SIGKILL` — which skips every RTSP TEARDOWN, the worst outcome for the receivers.\n\n## The fix already exists in this repo\n\nThe one-shot `airzoned play` path handles exactly this correctly (`src/main.rs:317-339`): the first signal starts a graceful stop, and a second one is taken as an explicit \"I do not want to wait\" — honoured, with a message saying what is being skipped. The daemon should do the same, reusing the shared helper `exit_on_second_signal` (`src/main.rs:116`, which also flushes the log). Estimated as a small change: copy that pattern into the daemon's signal setup.\n\n## Why it is worth doing\n\nShutdown is bounded by `SHUTDOWN_GRACE = 20s` (`src/worker.rs:25`), so a hung shutdown does end — but twenty seconds is long when someone is at the terminal during development, and the practical alternative people reach for is `kill -9`, which is precisely the un-drained teardown the retire machinery exists to prevent. A second-signal escape hatch keeps the operator on the path that still tries to tear down cleanly.\n\n",
+              "closedAt": null,
+              "comments": {
+                "nodes": [],
+                "totalCount": 0
+              },
+              "createdAt": "2026-09-16T22:46:51Z",
+              "id": "I_kwDOTBQnEM8AAAABRq0Nog",
+              "labels": {
+                "nodes": [
+                  {
+                    "name": "todo"
+                  },
+                  {
+                    "name": "p3"
+                  },
+                  {
+                    "name": "self-contained"
+                  },
+                  {
+                    "name": "daemon"
+                  }
+                ],
+                "totalCount": 4
+              },
+              "number": 44,
+              "repository": {
+                "nameWithOwner": "yuvalrakavy/airzoned"
+              },
+              "state": "OPEN",
+              "stateReason": null,
+              "timelineItems": {
+                "nodes": [
+                  {
+                    "__typename": "LabeledEvent",
+                    "actor": {
+                      "login": "yuvalrakavy"
+                    },
+                    "createdAt": "2026-10-23T20:22:00Z",
+                    "id": "LE_lADOTBQnEM8AAAABRq0Nos8AAAAH79lXQg",
+                    "label": {
+                      "name": "todo"
+                    }
+                  },
+                  {
+                    "__typename": "LabeledEvent",
+                    "actor": {
+                      "login": "yuvalrakavy"
+                    },
+                    "createdAt": "2026-10-23T20:22:01Z",
+                    "id": "LE_lADOTBQnEM8AAAABRq0Nos8AAAAH79lXfQ",
+                    "label": {
+                      "name": "p3"
+                    }
+                  },
+                  {
+                    "__typename": "LabeledEvent",
+                    "actor": {
+                      "login": "yuvalrakavy"
+                    },
+                    "createdAt": "2026-10-23T20:22:01Z",
+                    "id": "LE_lADOTBQnEM8AAAABRq0Nos8AAAAH79lXtw",
+                    "label": {
+                      "name": "daemon"
+                    }
+                  },
+                  {
+                    "__typename": "LabeledEvent",
+                    "actor": {
+                      "login": "yuvalrakavy"
+                    },
+                    "createdAt": "2026-10-23T20:22:01Z",
+                    "id": "LE_lADOTBQnEM8AAAABRq0Nos8AAAAH79lYGA",
+                    "label": {
+                      "name": "self-contained"
+                    }
+                  }
+                ],
+                "totalCount": 4
+              },
+              "title": "A second Ctrl-C cannot abort the daemon's graceful shutdown",
+              "updatedAt": "2026-10-23T20:22:01Z"
+            }
+          ],
+          "pageInfo": {
+            "endCursor": "Y3Vyc29yOnYyOpK0MjAyNi0wOS0xNlQyMjo0Njo1MVrPAAAAAUatDaI=",
+            "hasNextPage": false
+          }
+        }
+      }
+    }
+  },
+  "variables": {
+    "after": "Y3Vyc29yOnYyOpK0MjAyNi0wOS0wN1QyMDowNDo0OVrPAAAAAUCXFTY=",
+    "first": 5,
+    "name": "airzoned",
+    "owner": "yuvalrakavy",
+    "since": "2024-10-29T12:00:00.000Z"
+  }
+}

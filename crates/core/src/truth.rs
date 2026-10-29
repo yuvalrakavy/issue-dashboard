@@ -121,11 +121,25 @@ pub fn label_provenance(item: &HistoryItem, e: &LabelChange, tags: &BTreeMap<Str
     Ok(if filed { "filed" } else { "github_later" }.to_string())
 }
 
-/// The records an issue's label events give, in time order.
+/// The records an issue's label events give, in time order. A value stays while any label
+/// meaning it is on the issue: removing `enhancement` beside a `todo` label (both todo) is no
+/// removal, whichever of the two events GitHub lists first.
 pub fn label_records(t: &Translation, item: &HistoryItem, tags: &BTreeMap<String, String>) -> Result<Vec<Record>> {
     let mut out = Vec::new();
+    let mut on: Vec<&str> = Vec::new();
     for e in &item.label_events {
+        if e.added {
+            on.push(&e.label);
+        } else {
+            on.retain(|l| !l.eq_ignore_ascii_case(&e.label));
+        }
         for (decision, value) in label_meaning(t, &e.label) {
+            let still = on
+                .iter()
+                .any(|l| label_meaning(t, l).iter().any(|(d, v)| *d == decision && *v == value));
+            if !e.added && still {
+                continue;
+            }
             out.push(Record {
                 item: item.id.clone(),
                 decision: decision.to_string(),

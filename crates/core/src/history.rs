@@ -181,7 +181,7 @@ pub fn load(root: &Path, repo: &str) -> Result<Option<RepoHistory>> {
 }
 
 /// Writes `h` whole, through a temporary file, so a stopped run never leaves half a file.
-fn save(root: &Path, h: &RepoHistory) -> Result<()> {
+pub fn save(root: &Path, h: &RepoHistory) -> Result<()> {
     let path = file(root, &h.repo);
     fs::create_dir_all(path.parent().expect("a history file has a directory"))?;
     let tmp = path.with_extension("json.tmp");
