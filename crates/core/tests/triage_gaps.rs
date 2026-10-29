@@ -637,16 +637,37 @@ fn a_dismissal_keeps_a_re_answered_unsure_answer_off_the_list_until_the_issue_ch
         30,
     );
     assert_eq!(ingest(&tr.t, &d, 30), None);
-    // A second run answers type again about the same facts (a retry repeats the question).
+    // The owner asks for the item again (Triage…), so a second run re-asks type about the
+    // same facts, and the backend is unsure again.
+    let c = config(&tr.t);
+    let pages = issue_dashboard_core::ingest::Pages {
+        requests: vec![json!({
+            "id": "R_20261029_080000_aaaaaaaa", "project": "home", "author": OWNER,
+            "created_at": format_time(at(35)), "kind": "triage", "items": [i0.clone()],
+        })],
+        ..issue_dashboard_core::ingest::Pages::default()
+    };
+    tr.t.root
+        .mutate(at(35), |tx| {
+            issue_dashboard_core::ingest::ingest(tx, &c, "home", OWNER, &pages)
+        })
+        .unwrap();
     launched(&tr.t, "T2", LaunchKind::Triage, &tr.items[..1], 40);
     let p = prepare(&tr.t, "T2", BACKEND, Stage::First, 41).unwrap();
-    if !asked_about(&p, &tr.items[0].1).contains(&"type".to_string()) {
-        // Not re-asked: nothing can bring it back, which is the property under test.
-        assert_eq!(issue(&tr.t, &i0)["triage"].get("stronger_look"), None);
-        return;
-    }
+    assert!(
+        asked_about(&p, &tr.items[0].1).contains(&"type".to_string()),
+        "re-asked"
+    );
     record(&tr.t, "T2", answer_with(&p, |_, d| (d == "type").then(unsure_bug)), 42).unwrap();
+    // The new answer is marked, but the item has not been observed since the dismissal.
     assert_eq!(issue(&tr.t, &i0)["triage"].get("stronger_look"), None);
+    // Once the issue changes, the next unsure answer is listed again.
+    edit(&tr.t, &i0, 50, |c| c["labels"] = json!(["docs"]));
+    launched(&tr.t, "T3", LaunchKind::Triage, &tr.items[..1], 60);
+    let p = prepare(&tr.t, "T3", BACKEND, Stage::First, 61).unwrap();
+    record(&tr.t, "T3", answer_with(&p, |_, d| (d == "type").then(unsure_bug)), 62).unwrap();
+    let listed = issue(&tr.t, &i0)["triage"]["stronger_look"].clone();
+    assert_eq!(listed[0]["decision"], json!("type"), "{listed}");
 }
 
 #[test]
@@ -731,4 +752,26 @@ fn a_close_that_approves_a_closure_suggestion_counts_as_its_accept_once() {
         .mutate(when, |tx| decision::ingest_checked(tx, &c, "home", OWNER, &late))
         .unwrap();
     assert_eq!(support(&metrics_at(&tr2.t, when)), None);
+    // Dismissed on the card, then closed as not planned: a dismissal, not also an accept.
+    let tr3 = tracked();
+    let (k0, c0) = tr3.items[0].clone();
+    outsider(&tr3.t, &k0);
+    run(&tr3, |item, d| {
+        (d == "support_question" && item == tr3.items[0].1)
+            .then(|| json!({"probabilities": {"true": 0.9, "false": 0.1}, "reply": "r"}))
+    });
+    let id = suggestion_id(&tr3.t, &k0, "support_question");
+    assert_eq!(
+        ingest(&tr3.t, &on("pd-d", Action::DismissSuggestion, &id, None, 30), 30),
+        None
+    );
+    let mut after = close("pd-c4", CloseReason::NotPlanned, 31);
+    after.target.item = Some(k0.clone());
+    after.target.alias = Some(c0);
+    assert_eq!(ingest(&tr3.t, &after, 31), None);
+    let s = support(&metrics_at(&tr3.t, at(90))).expect("a support_question row");
+    assert_eq!(
+        (s["accepted"].clone(), s["dismissed"].clone(), s["of"].clone()),
+        (json!(0), json!(1), json!(1))
+    );
 }

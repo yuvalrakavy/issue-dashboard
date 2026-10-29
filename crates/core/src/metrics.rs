@@ -12,7 +12,8 @@
 //! A closure suggestion is approved through the close sheet, not an accept: a `close` decision
 //! on its item within [`truth::CLOSURE_WINDOW_DAYS`] after it, with the matching reason (a
 //! duplicate naming the suggested issue), counts as its accept, as closure truth reads it (3.1).
-//! A suggestion is counted accepted once, however many decisions approve it.
+//! A suggestion is counted accepted once, however many decisions approve it, and a close does
+//! not count for a suggestion the owner dismissed or edited before it.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -64,7 +65,19 @@ pub fn documents(conn: &Connection, project: &str, now: DateTime<Utc>) -> Result
     let window = Duration::days(truth::CLOSURE_WINDOW_DAYS);
     let mut counts: BTreeMap<Key, Counts> = BTreeMap::new();
     let mut accepted: BTreeSet<String> = BTreeSet::new();
-    for d in decision::effective(conn, project)? {
+    let effective = decision::effective(conn, project)?;
+    // When the owner first dismissed or edited each suggestion: a later close is not its accept.
+    let mut judged: BTreeMap<String, DateTime<Utc>> = BTreeMap::new();
+    for d in &effective {
+        if matches!(d.action, Action::DismissSuggestion | Action::EditSuggestion)
+            && let Some(id) = d.target.suggestion.as_ref()
+        {
+            let at = parse_time(&d.created_at)?;
+            let first = judged.entry(id.clone()).or_insert(at);
+            *first = (*first).min(at);
+        }
+    }
+    for d in effective {
         let at = parse_time(&d.created_at)?;
         if at <= since || at > now {
             continue;
@@ -76,8 +89,9 @@ pub fn documents(conn: &Connection, project: &str, now: DateTime<Utc>) -> Result
             };
             let approved = found
                 .iter()
-                .filter(|(_, s)| {
+                .filter(|(id, s)| {
                     Some(s.item.as_str()) == d.target.item.as_deref()
+                        && judged.get(*id).is_none_or(|j| *j > at)
                         && s.body["answer"] == json!(true)
                         && s.at <= at
                         && at - s.at <= window
