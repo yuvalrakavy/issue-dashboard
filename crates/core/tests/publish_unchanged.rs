@@ -359,6 +359,24 @@ fn a_generation_published_before_fingerprints_or_with_another_one_is_published_i
 }
 
 #[test]
+fn an_active_generation_written_before_packing_is_republished_even_when_unchanged() {
+    // The page reads only packed generations; on a quiet tracker an `unchanged` run would leave
+    // it on one it cannot read until the content next changes.
+    let (a, b) = two_quiet_cycles();
+    let active = published(&a, 7);
+    let g = a["meta"]["generation"].as_str().unwrap().to_string();
+    let marker = |m: Value| BTreeMap::from([(g.clone(), m)]);
+    let legacy = marker(json!({"generation": g, "sequence": a["sequence"], "counts": {"issues": 3}}));
+    let out = tempfile::tempdir().unwrap();
+    let s = publish::plan_with_heartbeat(&b, Some(&active), Some(&beat(3)), &legacy, now(), out.path()).unwrap();
+    assert_eq!(s["decision"], "publish", "{s}");
+    let packed = marker(json!({"generation": g, "sequence": a["sequence"], "parts": 3, "length": 9000}));
+    let out = tempfile::tempdir().unwrap();
+    let s = publish::plan_with_heartbeat(&b, Some(&active), Some(&beat(3)), &packed, now(), out.path()).unwrap();
+    assert_eq!(s["decision"], "unchanged", "{s}");
+}
+
+#[test]
 fn a_stop_still_wins_over_unchanged() {
     let (a, b) = two_quiet_cycles();
     let active = published(&b, 7);

@@ -41,7 +41,8 @@ fn marker(seq: i64, created: DateTime<Utc>) -> (String, Value) {
             "sequence": seq,
             "project": "home",
             "created_at": created.to_rfc3339(),
-            "counts": {"issues": 3, "acks": 0, "launch_status": 1, "suggestions": 0, "plans": 0, "forks": 0, "metrics": 0},
+            "parts": 2,
+            "length": 1000,
         }),
     )
 }
@@ -70,8 +71,28 @@ fn out_dir() -> tempfile::TempDir {
     tempfile::tempdir().unwrap()
 }
 
+/// The parts a plan writes, in the order of their `index`, and the marker it writes first.
+fn parts_of(bs: &[Vec<Value>], name: &str) -> (Value, Vec<Value>) {
+    let all: Vec<&Value> = bs.iter().flatten().collect();
+    let m = read(all[0]["file_path"].as_str().unwrap());
+    assert_eq!((all[0]["collection"].as_str(), all[0]["doc_id"].as_str()), (Some("gens"), Some(name)));
+    let mut parts: Vec<Value> = all[1..]
+        .iter()
+        .map(|w| {
+            assert_eq!(w["collection"], json!(format!("gens/{name}/parts")), "{w}");
+            read(w["file_path"].as_str().unwrap())
+        })
+        .collect();
+    parts.sort_by_key(|p| p["index"].as_u64().unwrap());
+    (m, parts)
+}
+
+fn joined(parts: &[Value]) -> String {
+    parts.iter().map(|p| p["text"].as_str().unwrap()).collect()
+}
+
 #[test]
-fn a_first_publish_writes_the_marker_first_then_every_document_in_bounded_batches_and_an_unpinned_switch() {
+fn a_first_publish_writes_the_marker_and_the_outbox_packed_into_parts_in_one_batch_and_an_unpinned_switch() {
     let outbox = real_outbox();
     let seq = outbox["sequence"].as_i64().unwrap();
     let name = format!("gen-{seq}");
@@ -80,43 +101,26 @@ fn a_first_publish_writes_the_marker_first_then_every_document_in_bounded_batche
     assert_eq!(s["decision"], "publish", "{s}");
     assert_eq!(s["generation"], json!(name));
     let bs = batches(&s, "batches");
-    assert!(bs.len() >= 3, "{} batches", bs.len());
-    let first = &bs[0][0];
-    assert_eq!(first["op"], "set");
-    assert_eq!(first["collection"], "gens");
-    assert_eq!(first["doc_id"], json!(name));
-    let m = read(first["file_path"].as_str().unwrap());
+    assert_eq!(bs.len(), 1, "a whole outbox is one batch: {:?}", bs.iter().map(Vec::len).collect::<Vec<_>>());
+    let mut ids = BTreeSet::new();
+    for w in &bs[0] {
+        assert_eq!(w["op"], "set");
+        // A generation is only ever created: no entry is pinned, so one that exists is refused.
+        assert_eq!(w.get("if_version"), None, "{w}");
+        assert!(Path::new(w["file_path"].as_str().unwrap()).is_absolute());
+        assert!(ids.insert((w["collection"].to_string(), w["doc_id"].to_string())), "{w}");
+    }
+    let (m, parts) = parts_of(&bs, &name);
     assert_eq!(m["sequence"], json!(seq));
-    assert_eq!(m["counts"]["issues"], json!(outbox["issues"].as_array().unwrap().len()));
-    let mut seen: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-    for b in &bs {
-        assert!(b.len() <= BATCH_WRITES, "{}", b.len());
-        let bytes: u64 = b
-            .iter()
-            .map(|w| fs::metadata(w["file_path"].as_str().unwrap()).unwrap().len())
-            .sum();
-        assert!(bytes as usize <= BATCH_BYTES, "{bytes}");
-        for w in b {
-            // A generation is only ever created: no entry is pinned, so one that exists is refused.
-            assert_eq!(w.get("if_version"), None, "{w}");
-            assert!(Path::new(w["file_path"].as_str().unwrap()).is_absolute());
-            let c = w["collection"].as_str().unwrap().to_string();
-            assert!(
-                seen.entry(c)
-                    .or_default()
-                    .insert(w["doc_id"].as_str().unwrap().to_string())
-            );
-        }
-    }
-    for (collection, docs) in outbox.as_object().unwrap() {
-        let Some(docs) = docs.as_array() else { continue };
-        let c = format!("gens/{name}/{collection}");
-        let ids: BTreeSet<String> = docs.iter().map(|d| d["id"].as_str().unwrap().to_string()).collect();
-        assert_eq!(seen.get(&c).cloned().unwrap_or_default(), ids, "{c}");
-    }
-    let issue = &outbox["issues"][0];
-    let path = bs.iter().flatten().find(|w| w["doc_id"] == issue["id"]).unwrap()["file_path"].clone();
-    assert_eq!(&read(path.as_str().unwrap()), issue);
+    assert_eq!(m["parts"], json!(parts.len()));
+    assert_eq!(
+        parts.iter().map(|p| p["index"].as_u64().unwrap()).collect::<Vec<_>>(),
+        (1..=parts.len() as u64).collect::<Vec<_>>()
+    );
+    // The page joins the parts and parses the outbox back, exactly.
+    let text = joined(&parts);
+    assert_eq!(m["length"], json!(text.encode_utf16().count()));
+    assert_eq!(serde_json::from_str::<Value>(&text).unwrap(), outbox);
     let switch = batches(&s, "switch");
     assert_eq!(switch.len(), 1);
     let sw = &switch[0][0];
@@ -186,24 +190,50 @@ fn cleanup_keeps_the_new_and_the_previous_generation_and_an_attempt_still_in_fli
         .map(|c| c["generation"].as_str().unwrap())
         .collect();
     assert_eq!(clean, ["gen-300", "gen-390", "gen-450"]);
-    // Only the collections the marker says hold documents need listing.
-    assert_eq!(
-        s["clean"][0]["list"],
-        json!(["gens/gen-300/issues", "gens/gen-300/launch_status"])
-    );
+    // A packed generation holds only its parts.
+    assert_eq!(s["clean"][0]["list"], json!(["gens/gen-300/parts"]));
 }
 
 #[test]
-fn a_marker_without_counts_or_a_readable_time_is_listed_in_full_and_counts_as_old() {
+fn a_marker_without_parts_or_a_readable_time_is_listed_in_full_and_counts_as_old() {
     let outbox = with_sequence(real_outbox(), 500);
     let out = out_dir();
     let markers = BTreeMap::from([
         marker(400, now()),
         ("gen-450".to_string(), json!({"generation": "gen-450", "sequence": 450})),
+        // A generation published before packing: a document per outbox document.
+        (
+            "gen-460".to_string(),
+            json!({"generation": "gen-460", "sequence": 460, "created_at": now().to_rfc3339(),
+                   "counts": {"issues": 3, "acks": 0}}),
+        ),
     ]);
     let s = publish::plan(&outbox, Some(&active(400, 3)), &markers, now(), out.path()).unwrap();
     assert_eq!(s["clean"][0]["generation"], "gen-450");
-    assert_eq!(s["clean"][0]["list"].as_array().unwrap().len(), 7);
+    let full = json!([
+        "gens/gen-450/parts",
+        "gens/gen-450/issues",
+        "gens/gen-450/acks",
+        "gens/gen-450/launch_status",
+        "gens/gen-450/suggestions",
+        "gens/gen-450/plans",
+        "gens/gen-450/forks",
+        "gens/gen-450/metrics"
+    ]);
+    assert_eq!(s["clean"][0]["list"], full);
+    // gen-460 is newer than the active one and young, so it is kept; it is not asked about here.
+    assert_eq!(s["clean"].as_array().unwrap().len(), 1, "{s}");
+}
+
+#[test]
+fn a_legacy_generation_older_than_the_active_one_is_listed_in_every_collection() {
+    let outbox = with_sequence(real_outbox(), 500);
+    let out = out_dir();
+    let legacy = json!({"generation": "gen-300", "sequence": 300, "created_at": now().to_rfc3339(),
+                        "counts": {"issues": 3, "acks": 0}});
+    let markers = BTreeMap::from([marker(400, now()), ("gen-300".to_string(), legacy)]);
+    let s = publish::plan(&outbox, Some(&active(400, 3)), &markers, now(), out.path()).unwrap();
+    assert_eq!(s["clean"][0]["list"].as_array().unwrap().len(), 8, "{s}");
 }
 
 fn listing(dir: &Path, generation: &str, docs: &[(&str, &str)]) {
@@ -269,23 +299,40 @@ fn cleanup_refuses_a_plan_that_did_not_publish() {
     assert_eq!(publish::cleanup(&p, out.path(), out.path()).unwrap_err().exit_code(), 1);
 }
 
+/// Text that serializes larger than it reads: the outbox's JSON already escapes quotes,
+/// backslashes, newlines and control characters, so packing that text escapes them a second
+/// time, and multi-byte characters take several bytes.
+const AWKWARD: &str = "é\"\\\n\u{1}😀 plain ";
+
 #[test]
-fn an_outbox_document_without_an_id_or_with_one_the_database_cannot_name_is_refused() {
-    for bad in [
-        json!({"title": "no id"}),
-        json!({"id": "a/b"}),
-        json!({"id": "x".repeat(201)}),
-    ] {
-        let mut outbox = real_outbox();
-        outbox["acks"] = json!([bad]);
-        let out = out_dir();
-        let e = publish::plan(&outbox, None, &BTreeMap::new(), now(), out.path()).unwrap_err();
-        assert_eq!(e.exit_code(), 1, "{e}");
+fn every_part_stays_under_240_kib_once_serialized_and_no_part_splits_a_character() {
+    let mut outbox = real_outbox();
+    // One document far over the database's limit: packing splits it across parts.
+    outbox["issues"][0]["body"] = json!(AWKWARD.repeat(60_000));
+    let name = format!("gen-{}", outbox["sequence"]);
+    let out = out_dir();
+    let s = publish::plan(&outbox, None, &BTreeMap::new(), now(), out.path()).unwrap();
+    let bs = batches(&s, "batches");
+    for w in bs.iter().flatten().skip(1) {
+        let size = fs::metadata(w["file_path"].as_str().unwrap()).unwrap().len();
+        assert!(size <= 240 * 1024, "{} is {size} bytes", w["doc_id"]);
+    }
+    let (m, parts) = parts_of(&bs, &name);
+    assert!(parts.len() >= 4, "{} parts", parts.len());
+    // A part read back is valid JSON text on its own (no half character), and the parts
+    // join back to the outbox.
+    let text = joined(&parts);
+    assert_eq!(serde_json::from_str::<Value>(&text).unwrap(), outbox);
+    assert_eq!(m["length"], json!(text.encode_utf16().count()));
+    // Packed tightly: every part but the last is within a few bytes of the limit.
+    for w in &bs.iter().flatten().skip(1).collect::<Vec<_>>()[..parts.len() - 1] {
+        let size = fs::metadata(w["file_path"].as_str().unwrap()).unwrap().len();
+        assert!(size > 240 * 1024 - 80, "{} is only {size} bytes", w["doc_id"]);
     }
 }
 
 #[test]
-fn large_documents_split_a_batch_by_size_before_it_reaches_fifty_entries() {
+fn an_outbox_larger_than_a_batch_splits_into_batches_by_size() {
     let mut outbox = real_outbox();
     let issues = outbox["issues"].as_array_mut().unwrap();
     issues.truncate(20);
@@ -295,20 +342,16 @@ fn large_documents_split_a_batch_by_size_before_it_reaches_fifty_entries() {
     let out = out_dir();
     let s = publish::plan(&outbox, None, &BTreeMap::new(), now(), out.path()).unwrap();
     let bs = batches(&s, "batches");
-    assert!(
-        bs.len() >= 5,
-        "20 documents of 200 KiB need at least 5 batches: {}",
-        bs.len()
-    );
-}
-
-#[test]
-fn a_document_over_the_database_limit_is_refused() {
-    let mut outbox = real_outbox();
-    outbox["issues"][0]["title"] = json!("x".repeat(300 * 1024));
-    let out = out_dir();
-    let e = publish::plan(&outbox, None, &BTreeMap::new(), now(), out.path()).unwrap_err();
-    assert!(e.to_string().contains("256 KiB"), "{e}");
+    // About 4 MiB of text: 17 parts of 240 KiB, three to a 900 KiB batch.
+    assert!(bs.len() >= 5, "{} batches", bs.len());
+    for b in &bs {
+        assert!(b.len() <= BATCH_WRITES);
+        let bytes: u64 = b
+            .iter()
+            .map(|w| fs::metadata(w["file_path"].as_str().unwrap()).unwrap().len())
+            .sum();
+        assert!(bytes as usize <= BATCH_BYTES, "{bytes}");
+    }
 }
 
 #[test]

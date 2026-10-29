@@ -42,16 +42,19 @@ function fakeDb(docs, onList) {
   return db;
 }
 
-function generation(seq, issues, extra) {
+// A packed generation (publish.rs): the outbox's JSON text cut into `parts` documents
+// `{index, text}` under `gens/<g>/parts/`, and a marker naming how many and the text's length.
+function generation(seq, issues, extra, parts) {
   const g = "gen-" + seq;
+  const outbox = Object.assign({ project: "home", sequence: seq, meta: meta(seq), issues, acks: [], launch_status: [] }, extra);
+  const text = JSON.stringify(outbox);
+  const n = parts || 3;
+  const size = Math.ceil(text.length / n);
   const docs = {};
-  const counts = { issues: issues.length, acks: 0, launch_status: 0, suggestions: 0, plans: 0, forks: 0, metrics: 0 };
-  for (const i of issues) docs["gens/" + g + "/issues/" + i.id] = i;
-  for (const [c, list] of Object.entries(extra || {})) {
-    counts[c] = list.length;
-    for (const d of list) docs["gens/" + g + "/" + c + "/" + d.id] = d;
+  for (let k = 0; k < n; k++) {
+    docs["gens/" + g + "/parts/p" + String(k + 1).padStart(4, "0")] = { index: k + 1, text: text.slice(k * size, (k + 1) * size) };
   }
-  docs["gens/" + g] = { generation: g, sequence: seq, counts };
+  docs["gens/" + g] = { generation: g, sequence: seq, parts: n, length: text.length };
   return docs;
 }
 
@@ -77,14 +80,54 @@ function issue(n, more) {
   );
 }
 
-test("a generation loads whole from the meta, marker and counted collections", async () => {
-  const db = fakeDb(Object.assign({ "meta/active": meta(4) }, generation(4, [issue(1), issue(2)])));
+test("a generation loads whole from the meta, the marker and its joined parts", async () => {
+  const acks = [{ id: "D_1", cycle: 4 }];
+  const db = fakeDb(Object.assign({ "meta/active": meta(4) }, generation(4, [issue(1), issue(2)], { acks })));
   const r = await D.loadGeneration(db);
   assert.equal(r.status, "ok");
   assert.equal(r.generation, "gen-4");
+  assert.deepEqual(r.data.issues, [issue(1), issue(2)]);
+  assert.deepEqual(r.data.acks, acks);
+  // A collection the outbox does not carry loads as empty.
+  assert.deepEqual(r.data.metrics, []);
+  assert.deepEqual(db.lists, ["gens/gen-4/parts"], "one listing reads the whole generation");
+});
+
+test("parts are joined in index order, whatever order the listing returns", async () => {
+  const docs = Object.assign({ "meta/active": meta(4) }, generation(4, [issue(1), issue(2)]));
+  // Swap the first and last parts' ids: the listing (sorted by id) now returns them reversed.
+  const a = docs["gens/gen-4/parts/p0001"];
+  docs["gens/gen-4/parts/p0001"] = docs["gens/gen-4/parts/p0003"];
+  docs["gens/gen-4/parts/p0003"] = a;
+  const r = await D.loadGeneration(fakeDb(docs));
+  assert.equal(r.status, "ok", r.why);
   assert.deepEqual(r.data.issues.map((i) => i.id), ["I_1", "I_2"]);
-  // A collection the marker counts as empty is never listed.
-  assert.deepEqual(db.lists, ["gens/gen-4/issues"]);
+});
+
+test("a joined text of another length than the marker's, or one that does not parse, is partial", async () => {
+  const long = Object.assign({ "meta/active": meta(4) }, generation(4, [issue(1)]));
+  long["gens/gen-4"].length += 1;
+  const r = await D.loadGeneration(fakeDb(long), { attempts: 2 });
+  assert.equal(r.status, "partial");
+  assert.equal(r.attempts, 2, "retried: a switch may be under way");
+  assert.match(r.why, /gen-4 is \d+ of \d+ characters/);
+  assert.equal(r.data, undefined, "a partial load leaves what the page shows");
+  const bad = Object.assign({ "meta/active": meta(4) }, generation(4, [issue(1)]));
+  const p = bad["gens/gen-4/parts/p0002"];
+  p.text = p.text.slice(0, -1) + "\u0000";
+  const b = await D.loadGeneration(fakeDb(bad), { attempts: 1 });
+  assert.equal(b.status, "partial");
+  assert.match(b.why, /gen-4 does not parse/);
+});
+
+test("a marker without parts is a generation this page cannot read, and is not retried", async () => {
+  const docs = { "meta/active": meta(4), "gens/gen-4": { generation: "gen-4", sequence: 4, counts: { issues: 1 } } };
+  const db = fakeDb(docs);
+  const r = await D.loadGeneration(db, { attempts: 3 });
+  assert.equal(r.status, "partial");
+  assert.equal(r.attempts, 1);
+  assert.match(r.why, /gen-4 is not packed/);
+  assert.deepEqual(db.lists, []);
 });
 
 test("no meta/active is an empty database, not an error", async () => {
@@ -95,11 +138,11 @@ test("a generation cleaned up mid-read sends the read back to meta/active", asyn
   const docs = Object.assign({ "meta/active": meta(4) }, generation(4, [issue(1), issue(2)]), generation(5, [issue(1), issue(2), issue(3)]));
   let first = true;
   const db = fakeDb(docs, (c, store) => {
-    if (first && c === "gens/gen-4/issues") {
+    if (first && c === "gens/gen-4/parts") {
       first = false;
-      // The sync run switched to gen-5 and deleted one of gen-4's documents.
+      // The sync run switched to gen-5 and deleted one of gen-4's parts.
       store.set("meta/active", meta(5));
-      store.delete("gens/gen-4/issues/I_2");
+      store.delete("gens/gen-4/parts/p0002");
     }
   });
   const r = await D.loadGeneration(db);
@@ -128,12 +171,20 @@ test("a marker already deleted sends the read back to meta/active", async () => 
 
 test("a generation that stays short is partial and says what is missing", async () => {
   const docs = Object.assign({ "meta/active": meta(4) }, generation(4, [issue(1), issue(2)]));
-  delete docs["gens/gen-4/issues/I_2"];
+  delete docs["gens/gen-4/parts/p0002"];
   const r = await D.loadGeneration(fakeDb(docs), { attempts: 3 });
   assert.equal(r.status, "partial");
   assert.equal(r.attempts, 3);
-  assert.match(r.why, /gen-4\/issues has 1 of 2/);
-  assert.equal(r.data.issues.length, 1);
+  assert.match(r.why, /gen-4 has 2 of 3 parts/);
+  assert.equal(r.data, undefined);
+});
+
+test("a part out of sequence is missing, even when the count matches", async () => {
+  const docs = Object.assign({ "meta/active": meta(4) }, generation(4, [issue(1), issue(2)]));
+  docs["gens/gen-4/parts/p0002"].index = 3;
+  const r = await D.loadGeneration(fakeDb(docs), { attempts: 1 });
+  assert.equal(r.status, "partial");
+  assert.match(r.why, /gen-4 has 2 of 3 parts/);
 });
 
 test("a meta naming no generation is partial without listing anything", async () => {
@@ -143,17 +194,16 @@ test("a meta naming no generation is partial without listing anything", async ()
   assert.equal(r.why, "meta/active names no generation");
   assert.equal(r.attempts, 1, "a bad name is not retried");
   assert.deepEqual(db.lists, []);
+  assert.equal(r.data, undefined, "a partial load leaves what the page shows");
 });
 
-test("a collection over the list limit is partial at once, not retried", async () => {
-  const many = Array.from({ length: D.LIST_LIMIT }, (_, k) => issue(k + 1));
-  const docs = Object.assign({ "meta/active": meta(6) }, generation(6, many));
-  docs["gens/gen-6"].counts.issues = D.LIST_LIMIT + 1;
-  const r = await D.loadGeneration(fakeDb(docs), { attempts: 3 });
+test("a generation whose marker is gone is retried, and a partial leaves what the page shows", async () => {
+  const db = fakeDb({ "meta/active": meta(4) });
+  const r = await D.loadGeneration(db, { attempts: 2 });
   assert.equal(r.status, "partial");
-  assert.equal(r.attempts, 1);
-  assert.match(r.why, /gen-6\/issues holds more than 1000/);
-  assert.equal(r.data.issues.length, D.LIST_LIMIT);
+  assert.equal(r.attempts, 2);
+  assert.equal(r.why, "gen-4 has no marker");
+  assert.equal(r.data, undefined);
 });
 
 test("the tiles use derive.rs's predicates and count only open items", () => {

@@ -13,8 +13,9 @@
   const ACK_DAYS = 30;
 
   // Reads the generation `meta/active` names. A sync run may switch generations and delete
-  // the old one while this read is under way, so a generation that comes back short of its
-  // marker's counts (or without a marker) sends the read back to `meta/active`. Returns
+  // the old one while this read is under way, so a generation whose parts come back short of
+  // the marker's `parts` and `length` (or without a marker) sends the read back to
+  // `meta/active`. The parts joined in index order are the outbox's JSON. Returns
   // { status: "ok" | "empty" | "partial", meta, generation, data, attempts, why }.
   async function loadGeneration(db, opts) {
     const attempts = (opts && opts.attempts) || 3;
@@ -25,30 +26,46 @@
       const meta = active.data();
       const generation = meta && meta.generation;
       if (typeof generation !== "string" || !GENERATION.test(generation)) {
-        return { status: "partial", meta, why: "meta/active names no generation", attempts: attempt, data: emptyData() };
+        return { status: "partial", meta, why: "meta/active names no generation", attempts: attempt };
       }
       const marker = await db.doc("gens/" + generation).get();
       if (!marker.exists) {
-        last = { meta, generation, why: generation + " has no marker", data: emptyData(), attempts: attempt };
+        last = { meta, generation, why: generation + " has no marker", attempts: attempt };
         continue;
       }
-      const counts = (marker.data() || {}).counts || null;
-      const data = emptyData();
-      let why = null;
-      for (const c of COLLECTIONS) {
-        const want = counts && typeof counts[c] === "number" ? counts[c] : null;
-        if (want === 0) continue;
-        const snap = await db.collection("gens/" + generation + "/" + c).limit(LIST_LIMIT).get();
-        data[c] = snap.docs.filter((d) => d.exists).map((d) => d.data());
-        if (want !== null && data[c].length < Math.min(want, LIST_LIMIT)) {
-          why = generation + "/" + c + " has " + data[c].length + " of " + want;
-          break;
-        }
-        if (want !== null && want > LIST_LIMIT) why = generation + "/" + c + " holds more than " + LIST_LIMIT;
+      const m = marker.data() || {};
+      if (typeof m.parts !== "number" || typeof m.length !== "number") {
+        // Written before packed generations: retrying reads the same thing again.
+        return { status: "partial", meta, generation, why: generation + " is not packed", attempts: attempt };
       }
-      if (why === null) return { status: "ok", meta, generation, data, attempts: attempt };
-      last = { meta, generation, why, data, attempts: attempt };
-      if (why.endsWith("more than " + LIST_LIMIT)) break;
+      const snap = await db.collection("gens/" + generation + "/parts").limit(LIST_LIMIT).get();
+      const parts = snap.docs.filter((d) => d.exists).map((d) => d.data() || {});
+      parts.sort((a, b) => a.index - b.index);
+      const whole = parts.length === m.parts && parts.every((p, k) => p.index === k + 1 && typeof p.text === "string");
+      let why = null;
+      let outbox = null;
+      if (!whole) {
+        const held = new Set(parts.map((p) => p.index).filter((i) => Number.isInteger(i) && i >= 1 && i <= m.parts));
+        why = generation + " has " + held.size + " of " + m.parts + " parts";
+      } else {
+        const text = parts.map((p) => p.text).join("");
+        if (text.length !== m.length) {
+          why = generation + " is " + text.length + " of " + m.length + " characters";
+        } else {
+          try {
+            outbox = JSON.parse(text);
+          } catch (e) {
+            why = generation + " does not parse";
+          }
+        }
+      }
+      if (why === null) {
+        const data = emptyData();
+        for (const c of COLLECTIONS) if (Array.isArray(outbox[c])) data[c] = outbox[c];
+        return { status: "ok", meta, generation, data, attempts: attempt };
+      }
+      // No data: a partial load leaves the page showing what it showed.
+      last = { meta, generation, why, attempts: attempt };
     }
     return Object.assign({ status: "partial" }, last);
   }

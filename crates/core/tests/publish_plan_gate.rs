@@ -10,7 +10,7 @@ use std::path::Path;
 use chrono::{DateTime, Duration, Utc};
 use common::fixture::*;
 use issue_dashboard_core::cycle;
-use issue_dashboard_core::publish::{self, Active, BATCH_BYTES, BATCH_WRITES, DOC_BYTES};
+use issue_dashboard_core::publish::{self, BATCH_BYTES, BATCH_WRITES};
 use serde_json::{Value, json};
 
 fn real_outbox() -> Value {
@@ -38,16 +38,10 @@ fn marker(seq: i64, created: DateTime<Utc>) -> (String, Value) {
             "sequence": seq,
             "project": "home",
             "created_at": created.to_rfc3339(),
-            "counts": {"issues": 3, "acks": 0, "launch_status": 1, "suggestions": 0, "plans": 0, "forks": 0, "metrics": 0},
+            "parts": 2,
+            "length": 1000,
         }),
     )
-}
-
-fn active(seq: i64, version: u64) -> Active {
-    Active {
-        meta: json!({"generation": format!("gen-{seq}"), "sequence": seq}),
-        version,
-    }
 }
 
 fn read(path: &str) -> Value {
@@ -83,42 +77,8 @@ fn padded(id: &str, pad: usize) -> Value {
     json!({"id": id, "pad": "x".repeat(pad)})
 }
 
-/// A document of exactly `size` serialized bytes.
-fn sized(id: &str, size: usize) -> Value {
-    let base = serde_json::to_string(&padded(id, 0)).unwrap().len();
-    let d = padded(id, size - base);
-    assert_eq!(serde_json::to_string(&d).unwrap().len(), size);
-    d
-}
-
 fn nested(dir: &tempfile::TempDir) -> std::path::PathBuf {
     dir.path().join("not/yet/there")
-}
-
-// Kills: `id != "."` and `id != ".."` removed from doc_id.
-#[test]
-fn a_document_id_of_dots_cannot_name_a_database_document() {
-    for bad in [".", ".."] {
-        let mut outbox = real_outbox();
-        outbox["acks"] = json!([{"id": bad}]);
-        let out = tempfile::tempdir().unwrap();
-        let e = publish::plan(&outbox, None, &BTreeMap::new(), now(), &nested(&out)).unwrap_err();
-        assert_eq!(e.exit_code(), 1, "{bad}: {e}");
-    }
-}
-
-// Kills: `(1..=200)` widened to `(0..=200)` in doc_id.
-#[test]
-fn an_empty_document_id_is_refused_and_a_200_byte_one_is_not() {
-    let mut outbox = real_outbox();
-    outbox["acks"] = json!([{"id": ""}]);
-    let out = tempfile::tempdir().unwrap();
-    let e = publish::plan(&outbox, None, &BTreeMap::new(), now(), &nested(&out)).unwrap_err();
-    assert_eq!(e.exit_code(), 1, "{e}");
-    let mut ok = real_outbox();
-    ok["acks"] = json!([{"id": "a".repeat(200)}]);
-    let s = publish::plan(&ok, None, &BTreeMap::new(), now(), &nested(&out)).unwrap();
-    assert_eq!(s["decision"], "publish");
 }
 
 // Kills: the meta.generation check removed from plan.
@@ -139,53 +99,6 @@ fn an_outbox_whose_meta_names_another_generation_or_no_meta_is_refused_before_an
     }
 }
 
-// Kills: `size > DOC_BYTES` becoming `>=`; and the check running after files are written.
-#[test]
-fn a_document_of_exactly_the_database_limit_is_accepted_and_one_byte_more_is_refused_before_any_file() {
-    let out = tempfile::tempdir().unwrap();
-    let ok = bare(vec![sized("I_1", DOC_BYTES)]);
-    let s = publish::plan(&ok, None, &BTreeMap::new(), now(), &out.path().join("ok")).unwrap();
-    assert_eq!(s["decision"], "publish");
-    let over = bare(vec![sized("I_1", DOC_BYTES + 1)]);
-    let dir = out.path().join("over");
-    let e = publish::plan(&over, None, &BTreeMap::new(), now(), &dir).unwrap_err();
-    assert!(e.to_string().contains("256 KiB"), "{e}");
-    assert!(
-        !dir.exists(),
-        "an over-limit document is refused before any file is written"
-    );
-}
-
-// Kills: `(bytes + size) > BATCH_BYTES` becoming `>=`.
-#[test]
-fn a_batch_may_hold_exactly_the_byte_limit() {
-    // Learn the marker's size, then fill one batch to exactly BATCH_BYTES.
-    let probe_out = tempfile::tempdir().unwrap();
-    let probe = bare(vec![sized("I_1", 1000)]);
-    let s = publish::plan(&probe, None, &BTreeMap::new(), now(), probe_out.path()).unwrap();
-    let marker_size = fs::metadata(batches(&s, "batches")[0][0]["file_path"].as_str().unwrap())
-        .unwrap()
-        .len() as usize;
-    let rest = BATCH_BYTES - marker_size - 3 * DOC_BYTES;
-    assert!(rest <= DOC_BYTES && rest > 1000);
-    let outbox = bare(vec![
-        sized("I_1", DOC_BYTES),
-        sized("I_2", DOC_BYTES),
-        sized("I_3", DOC_BYTES),
-        sized("I_4", rest),
-    ]);
-    let out = tempfile::tempdir().unwrap();
-    let s = publish::plan(&outbox, None, &BTreeMap::new(), now(), out.path()).unwrap();
-    let bs = batches(&s, "batches");
-    assert_eq!(
-        batch_bytes(&bs[0]),
-        BATCH_BYTES,
-        "the setup must fill the batch exactly"
-    );
-    assert_eq!(bs.len(), 1, "a batch of exactly the limit is not split");
-    assert_eq!(bs[0].len(), 5);
-}
-
 // Kills: `bytes = 0` removed when a batch is started (every later document then gets its own batch).
 #[test]
 fn a_new_batch_starts_counting_bytes_from_zero() {
@@ -204,13 +117,36 @@ fn a_new_batch_starts_counting_bytes_from_zero() {
     for b in &bs {
         assert!(batch_bytes(b) <= BATCH_BYTES);
     }
-    // 4 documents of ~200 KiB fit under 900 KiB, a fifth does not: 20 documents are 5 batches.
-    assert_eq!(bs.len(), 5, "{:?}", bs.iter().map(Vec::len).collect::<Vec<_>>());
-    assert_eq!(
-        bs.iter().map(Vec::len).sum::<usize>(),
-        21,
-        "the marker and 20 documents"
-    );
+    // Three parts of 240 KiB fit under 900 KiB, a fourth does not: every batch but the last
+    // holds three parts (the first one the marker too).
+    let lens: Vec<usize> = bs.iter().map(Vec::len).collect();
+    assert!(lens.len() >= 5, "{lens:?}");
+    assert_eq!(lens[0], 4, "{lens:?}");
+    assert!(lens[1..lens.len() - 1].iter().all(|n| *n == 3), "{lens:?}");
+}
+
+/// The bytes of the files a plan's first batch would send, for an outbox padded by `pad`.
+fn first_batch(pad: usize) -> (usize, usize) {
+    let outbox = bare(vec![padded("I_1", pad)]);
+    let out = tempfile::tempdir().unwrap();
+    let s = publish::plan(&outbox, None, &BTreeMap::new(), now(), out.path()).unwrap();
+    let bs = batches(&s, "batches");
+    (batch_bytes(&bs[0]), bs.len())
+}
+
+// Kills: `(bytes + size) > BATCH_BYTES` becoming `>=`.
+#[test]
+fn a_batch_may_hold_exactly_the_byte_limit() {
+    // Three full parts and a short fourth, then pad the fourth until the batch is exactly full:
+    // one more byte of outbox is one more byte of the last part.
+    let (probe, n) = first_batch(800 * 1024);
+    assert_eq!(n, 1);
+    let pad = 800 * 1024 + (BATCH_BYTES - probe);
+    let (exact, n) = first_batch(pad);
+    assert_eq!(exact, BATCH_BYTES, "the setup must fill the batch exactly");
+    assert_eq!(n, 1, "a batch of exactly the limit is not split");
+    let (_, n) = first_batch(pad + 1);
+    assert_eq!(n, 2, "one byte more is a second batch");
 }
 
 // Kills: the marker's project, created_at.
@@ -225,6 +161,7 @@ fn the_marker_carries_the_project_and_a_creation_time_cleanup_can_read_back() {
     let created = DateTime::parse_from_rfc3339(m["created_at"].as_str().unwrap()).unwrap();
     assert_eq!(created.with_timezone(&Utc), now());
     assert_eq!(m["generation"], "gen-500");
+    assert_eq!(m["parts"], json!(batches(&s, "batches")[0].len() - 1));
 }
 
 fn clean_names(s: &Value) -> Vec<String> {
@@ -257,18 +194,6 @@ fn cleanup_only_plans_well_named_markers_and_waits_for_a_generation_with_no_acti
     assert_eq!(clean_names(&s), ["gen-330"], "{s}");
 }
 
-// Kills: `None => counts.is_none()` becoming `true` (a count missing from a present counts object).
-#[test]
-fn a_collection_missing_from_a_markers_counts_is_not_listed() {
-    let outbox = with_sequence(real_outbox(), 500);
-    let out = tempfile::tempdir().unwrap();
-    let mut m = marker(300, now() - Duration::days(1)).1;
-    m["counts"] = json!({"issues": 2});
-    let markers = BTreeMap::from([marker(400, now()), ("gen-300".to_string(), m)]);
-    let s = publish::plan(&outbox, Some(&active(400, 1)), &markers, now(), out.path()).unwrap();
-    assert_eq!(s["clean"][0]["list"], json!(["gens/gen-300/issues"]));
-}
-
 fn plan_naming(dir: &Path, generation: &str) -> std::path::PathBuf {
     let p = dir.join("plan.json");
     fs::write(
@@ -297,7 +222,7 @@ fn cleanup_refuses_a_clean_entry_that_is_not_a_numbered_generation() {
 fn cleanup_deletes_every_collection_of_a_generation_and_nothing_outside_gens() {
     let dir = tempfile::tempdir().unwrap();
     let list = tempfile::tempdir().unwrap();
-    for c in publish::COLLECTIONS {
+    for c in publish::GENERATION_COLLECTIONS {
         let d = list.path().join("gens/gen-300").join(c);
         fs::create_dir_all(&d).unwrap();
         fs::write(d.join("D_1.json"), "{}").unwrap();
@@ -316,8 +241,8 @@ fn cleanup_deletes_every_collection_of_a_generation_and_nothing_outside_gens() {
     assert_eq!(s["generations"], json!(["gen-300"]));
     let bs = batches(&s, "batches");
     let all: Vec<&Value> = bs.iter().flatten().collect();
-    assert_eq!(all.len(), publish::COLLECTIONS.len() + 1);
-    for c in publish::COLLECTIONS {
+    assert_eq!(all.len(), publish::GENERATION_COLLECTIONS.len() + 1);
+    for c in publish::GENERATION_COLLECTIONS {
         let want = format!("gens/gen-300/{c}");
         assert!(all.iter().any(|w| w["collection"] == want.as_str()), "{want}");
     }

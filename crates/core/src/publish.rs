@@ -2,8 +2,10 @@
 //! tools, so this module plans the writes and the sync skill performs them with `ArtifactData`.
 //!
 //! A cycle's outbox becomes a *generation*: a marker document `gens/gen-<seq>` (written
-//! first), then every document under `gens/gen-<seq>/<collection>/<id>`, then a switch of
-//! `meta/active` pinned to the version the skill read. Generation documents are only ever
+//! first), then the outbox's JSON text cut into a few parts under `gens/gen-<seq>/parts/`,
+//! then a switch of `meta/active` pinned to the version the skill read. Every write entry is
+//! retyped by the model that runs the sync, so a generation is a handful of large documents
+//! rather than one per outbox document (10.10). Generation documents are only ever
 //! created, so no write is pinned and a name already used is refused by the database itself;
 //! a delete of one is pinned to version 1. The switch carries the outbox's fingerprint, and an
 //! outbox with the active generation's fingerprint publishes nothing: it writes `meta/heartbeat`
@@ -28,12 +30,26 @@ use crate::{Error, Result, schema};
 pub const BATCH_WRITES: usize = 50;
 /// Below the 1 MiB batch body, leaving room for the entries themselves.
 pub const BATCH_BYTES: usize = 900 * 1024;
-/// The database's document limit.
-pub const DOC_BYTES: usize = 256 * 1024;
+/// A part's serialized document, under the database's 256 KiB document limit.
+pub const PART_BYTES: usize = 240 * 1024;
+/// What a part's document adds to its text: `{"index":<n>,"text":"…"}`, with room for any index.
+const PART_ENVELOPE: usize = 64;
 /// A generation newer than the active one is another run's until it is this old.
 pub const ABANDONED_AFTER: Duration = Duration::hours(1);
 /// The outbox's document collections, as the page reads them.
 pub const COLLECTIONS: [&str; 7] = [
+    "issues",
+    "acks",
+    "launch_status",
+    "suggestions",
+    "plans",
+    "forks",
+    "metrics",
+];
+/// The collections a generation can hold: `parts`, and one per outbox collection for a
+/// generation published before packing, which cleanup lists for a marker without `parts`.
+pub const GENERATION_COLLECTIONS: [&str; 8] = [
+    "parts",
     "issues",
     "acks",
     "launch_status",
@@ -77,22 +93,31 @@ struct Write {
     if_version: Option<u64>,
 }
 
-/// The database's document id: one path segment of its allowed characters.
-fn doc_id(v: &Value, collection: &str) -> Result<String> {
-    let id = v
-        .get("id")
-        .and_then(Value::as_str)
-        .ok_or_else(|| Error::refused(format!("a {collection} document has no id")))?;
-    let ok = (1..=200).contains(&id.len())
-        && id != "."
-        && id != ".."
-        && id.chars().all(|c| c.is_ascii_alphanumeric() || "_-.~:@+".contains(c));
-    if !ok {
-        return Err(Error::refused(format!(
-            "{collection} document id {id:?} cannot name a database document"
-        )));
+/// What `c` costs inside a JSON string as `serde_json` writes it.
+fn escaped_len(c: char) -> usize {
+    match c {
+        '"' | '\\' | '\n' | '\r' | '\t' | '\u{8}' | '\u{c}' => 2,
+        c if (c as u32) < 0x20 => 6,
+        c => c.len_utf8(),
     }
-    Ok(id.to_string())
+}
+
+/// Cuts `text` into the fewest parts whose documents stay within `PART_BYTES`, each cut on a
+/// character boundary.
+fn pack(text: &str) -> Vec<&str> {
+    let budget = PART_BYTES - PART_ENVELOPE;
+    let mut parts = Vec::new();
+    let (mut start, mut size) = (0, 0);
+    for (i, c) in text.char_indices() {
+        let n = escaped_len(c);
+        if size + n > budget {
+            parts.push(&text[start..i]);
+            (start, size) = (i, 0);
+        }
+        size += n;
+    }
+    parts.push(&text[start..]);
+    parts
 }
 
 fn sequence_of(v: &Value) -> Option<i64> {
@@ -267,8 +292,18 @@ pub fn plan_with_heartbeat(
         }));
     }
     let print = fingerprint(outbox);
+    // An active generation written before packing is one the page cannot read, so it is
+    // replaced even when its content is this outbox's.
+    let unpacked = |a: &Active| {
+        a.meta
+            .get("generation")
+            .and_then(Value::as_str)
+            .and_then(|g| markers.get(g))
+            .is_some_and(|m| m.get("parts").and_then(Value::as_u64).is_none())
+    };
     if let Some(a) = active
         && a.meta.get("fingerprint").and_then(Value::as_str) == Some(print.as_str())
+        && !unpacked(a)
     {
         return unchanged(outbox, a, seq, heartbeat_version, out);
     }
@@ -278,34 +313,18 @@ pub fn plan_with_heartbeat(
         )));
     }
 
-    // Every document checked before any file is written.
-    let mut docs: Vec<(String, String, &Value)> = Vec::new();
-    let mut counts = serde_json::Map::new();
-    for c in COLLECTIONS {
-        let list = outbox
-            .get(c)
-            .and_then(Value::as_array)
-            .map(Vec::as_slice)
-            .unwrap_or(&[]);
-        counts.insert(c.to_string(), json!(list.len()));
-        for d in list {
-            let id = doc_id(d, c)?;
-            let size = serde_json::to_string(d)?.len();
-            if size > DOC_BYTES {
-                return Err(Error::refused(format!(
-                    "{c}/{id} is {size} bytes, over the 256 KiB document limit"
-                )));
-            }
-            docs.push((format!("gens/{generation}/{c}"), id, d));
-        }
-    }
+    // The page joins the parts in `index` order and checks the result against `parts` and
+    // `length` (UTF-16 code units, as JavaScript counts a string) before parsing it.
+    let text = serde_json::to_string(outbox)?;
+    let parts = pack(&text);
     let out = absolute(out)?;
     let marker = json!({
         "generation": generation,
         "sequence": seq,
         "project": outbox.get("project"),
         "created_at": format_time(now),
-        "counts": counts,
+        "parts": parts.len(),
+        "length": text.encode_utf16().count(),
     });
     let create = |collection: String, doc_id: String, path: &Path| Write {
         op: "set",
@@ -320,9 +339,12 @@ pub fn plan_with_heartbeat(
         create("gens".into(), generation.clone(), &mpath),
         write_json(&mpath, &marker)?,
     ));
-    for (collection, id, d) in docs {
+    let collection = format!("gens/{generation}/parts");
+    for (i, part) in parts.iter().enumerate() {
+        let id = format!("p{:04}", i + 1);
         let p = out.join("docs").join(&collection).join(format!("{id}.json"));
-        writes.push((create(collection, id, &p), write_json(&p, d)?));
+        let doc = json!({"index": i + 1, "text": part});
+        writes.push((create(collection.clone(), id, &p), write_json(&p, &doc)?));
     }
     let batch_paths = batches(writes, &out.join("batches"))?;
 
@@ -353,14 +375,12 @@ pub fn plan_with_heartbeat(
         if !older && !abandoned {
             continue;
         }
-        let list: Vec<String> = COLLECTIONS
+        // A packed generation holds only its parts; any other marker (published before
+        // packing, or unreadable) is listed in every collection a generation can hold.
+        let packed = m.get("parts").and_then(Value::as_u64).is_some();
+        let list: Vec<String> = GENERATION_COLLECTIONS
             .iter()
-            .filter(
-                |c| match m.get("counts").and_then(|k| k.get(**c)).and_then(Value::as_u64) {
-                    Some(k) => k > 0,
-                    None => m.get("counts").is_none(),
-                },
-            )
+            .filter(|c| !packed || **c == "parts")
             .map(|c| format!("gens/{name}/{c}"))
             .collect();
         clean.push(json!({"generation": name, "list": list}));
@@ -404,7 +424,7 @@ pub fn cleanup(plan: &Path, listing: &Path, out: &Path) -> Result<Value> {
             .and_then(Value::as_str)
             .filter(|g| g.strip_prefix("gen-").is_some_and(|n| n.parse::<u64>().is_ok()))
             .ok_or_else(|| Error::refused(format!("{}: a clean entry names no generation", plan.display())))?;
-        for collection in COLLECTIONS {
+        for collection in GENERATION_COLLECTIONS {
             let dir = listing.join("gens").join(generation).join(collection);
             for id in json_stems(&dir)? {
                 writes.push((delete(format!("gens/{generation}/{collection}"), id), 0));
