@@ -489,6 +489,12 @@ pub enum Split {
     HeldOut,
 }
 
+/// First-stage answers by item, then decision: [answer, calibrated probabilities].
+pub type StageOne = BTreeMap<String, BTreeMap<String, (Value, Value)>>;
+
+/// Answers by question id: the answer and its stated probabilities.
+pub type Answered = BTreeMap<String, (Value, BTreeMap<String, f64>)>;
+
 /// One question as a manifest freezes it; the truth never reaches the question files.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -517,7 +523,7 @@ pub struct Manifest {
     pub repo: Option<String>,
     /// Priority's first-stage answers its inputs were built from, by item then decision:
     /// [answer, calibrated probabilities].
-    pub stage_one: Option<BTreeMap<String, BTreeMap<String, (Value, Value)>>>,
+    pub stage_one: Option<StageOne>,
     pub questions: Vec<ManifestQuestion>,
 }
 
@@ -718,7 +724,7 @@ pub fn build(
     history: &[RepoHistory],
     r: &Replay,
     stage: EvalStage,
-    stage_one: Option<&BTreeMap<String, BTreeMap<String, (Value, Value)>>>,
+    stage_one: Option<&StageOne>,
 ) -> Result<Built> {
     check_backend(&r.backend)?;
     if !LABEL_DECISIONS.contains(&r.decision.as_str()) {
@@ -870,12 +876,7 @@ pub struct EvalAnswers {
 /// The answers checked against a manifest: by question id, (answer, raw probabilities). Every
 /// answer must answer one of its questions, once, under its backend, with valid probabilities;
 /// one that does not refuses the files with every reason listed.
-fn checked_answers(
-    cat: &Catalogue,
-    config: &ConfigSet,
-    m: &Manifest,
-    files: &[EvalAnswers],
-) -> Result<BTreeMap<String, (Value, BTreeMap<String, f64>)>> {
+fn checked_answers(cat: &Catalogue, config: &ConfigSet, m: &Manifest, files: &[EvalAnswers]) -> Result<Answered> {
     let by_id: BTreeMap<&str, &ManifestQuestion> = m.questions.iter().map(|q| (q.id.as_str(), q)).collect();
     let mut out = BTreeMap::new();
     let mut errors = Vec::new();
@@ -949,9 +950,9 @@ fn stage_one_answers(
     config: &ConfigSet,
     first: &Manifest,
     files: &[EvalAnswers],
-) -> Result<BTreeMap<String, BTreeMap<String, (Value, Value)>>> {
+) -> Result<StageOne> {
     let answered = checked_answers(cat, config, first, files)?;
-    let mut by_item: BTreeMap<String, BTreeMap<String, (Value, Value)>> = BTreeMap::new();
+    let mut by_item: StageOne = BTreeMap::new();
     for q in &first.questions {
         let Some((answer, raw)) = answered.get(&q.id) else {
             continue;
@@ -1254,8 +1255,6 @@ pub fn score(
             Split::HeldOut => held_out.push(e),
         }
     }
-    let mut ids: Vec<&String> = answered.keys().collect();
-    ids.sort();
     let distinct = json!({
         "manifest": m.hash(),
         "answers": hash_value(&json!(answered.iter().map(|(k, (_, p))| (k, p)).collect::<BTreeMap<_, _>>())),
