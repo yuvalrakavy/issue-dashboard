@@ -1,0 +1,409 @@
+{
+  "name": "history_issues",
+  "response": {
+    "data": {
+      "repository": {
+        "issues": {
+          "nodes": [
+            {
+              "author": {
+                "login": "yuvalrakavy"
+              },
+              "authorAssociation": "OWNER",
+              "body": "## What is missing\n\nThe daemon initialises no `log` subscriber. librespot logs through the `log` crate throughout — `error!(\"Connection to server closed.\")`, the ping-timeout path, `check_catalogue`'s refusal, every audio-key and CDN failure — and **every one of those lines is discarded**.\n\n## What it cost\n\nOn 2026-08-14 a live session died about 60 seconds into playback. Every subsequent audio-key request failed with `Internal error { channel closed }` and 60 consecutive tracks were skipped until the collection retired. The only visible evidence was our own `eprintln!` at the call site.\n\nThe *cause* of the session death is still unknown, and unknowable from what was recorded — librespot said something on the way down and it went nowhere. A whole evening was spent inferring a failure that could have been read.\n\nThere is a plausible hypothesis (single tokio worker starved by ~500 serialized 64 KiB round trips in random-access mode, missing the 80 s ping deadline) and both contributing factors have since been fixed — stream mode is now requested, and an invalidated session is now evicted and reconnected. But the hypothesis was never confirmed, because the evidence was never captured.\n\n## Fix\n\nInstall a subscriber in `main`, honouring `RUST_LOG`, defaulting to something like `warn,librespot=info`. The sibling repos already use `tracing-init` with GELF; matching that would put daemon logs alongside store/renderer logs in logmon, which is where the rest of this fleet's debugging happens.\n\n## Why it is worth doing before the next audio investigation\n\nEvery remaining open item on this component — the unbounded fetch, the alternatives/availability question, the session-death cause — is a question about **what librespot did**. None of them is answerable while its output is thrown away.\n",
+              "closedAt": "2026-08-15T04:43:52Z",
+              "comments": {
+                "nodes": [
+                  {
+                    "author": {
+                      "login": "yuvalrakavy"
+                    },
+                    "authorAssociation": "OWNER",
+                    "body": "Shipped. `env_logger` installed at the top of `main`, default filter `warn,librespot=info`, `RUST_LOG` overrides.\n\nVerified: four previously-discarded librespot lines now appear, including `Country: \"IL\"` — which is a direct input to #30, where `available_for_user` matches against `user_data.country`.\n\n`env_logger` rather than tracing-init/GELF is deliberate and explained in the commit: this daemon's own output is ~100 `eprintln!` calls to one stderr log, and splitting librespot into logmon would break the single interleaved narrative that was the whole point.",
+                    "createdAt": "2026-08-15T04:43:51Z"
+                  }
+                ],
+                "totalCount": 1
+              },
+              "createdAt": "2026-08-15T04:26:21Z",
+              "id": "I_kwDOTBQnEM8AAAABM2tFkg",
+              "labels": {
+                "nodes": [],
+                "totalCount": 0
+              },
+              "number": 31,
+              "repository": {
+                "nameWithOwner": "yuvalrakavy/airzoned"
+              },
+              "state": "CLOSED",
+              "stateReason": "COMPLETED",
+              "timelineItems": {
+                "nodes": [],
+                "totalCount": 0
+              },
+              "title": "The daemon initialises no logger, so every librespot error is discarded",
+              "updatedAt": "2026-08-15T04:43:52Z"
+            },
+            {
+              "author": {
+                "login": "yuvalrakavy"
+              },
+              "authorAssociation": "OWNER",
+              "body": "## Found by two independent gate reviewers. Blocks the MP-108 merge.\n\nLazy Spotify resolution moved a RECOVERABLE failure across the boundary into an UNRECOVERABLE one, and the recovery did not come with it.\n\n### The eager path recovers\n\n`src/player.rs:831-851` — an `open_source` error keeps the old source playing, sets `switch_failure`, and **arms `source_retry_at` with backoff**. Degrade, then recover.\n\n### The lazy path does not\n\n`src/spotify.rs` — `next_item` catches every resolve error and installs `Program::Snapshot { tracks: vec![], seq: Sequencer::new(0, …) }`, which yields `None` forever. Then `Rotation::next_with` (`src/playlist.rs:313-338`):\n\n```rust\nif self.served[c] { self.finish(c); }\nelse if consecutive_failures > 0 { self.retire(c, \"… failed to decode\"); }\nelse { self.retire(c, \"no playable tracks\"); }\n```\n\n`served[c]` is false and `consecutive_failures` is 0, so it takes the third branch on the **first** turn. `retire` is permanent for the session. Verified by reading; both reviewers reached it independently.\n\n### Scenario\n\nDaemon restarts after a power blip; the router is not up yet. A room's Mix is `[jazz.m3u, spotify:playlist:X]`. `open_source` succeeds (it only parses). The fetcher's first turn on the Spotify slot calls `shared_session()` → `Session::connect` fails on DNS. **Five seconds later the network is fine. Jazz plays for the next three weeks and the Spotify half never returns.**\n\nA permanent consequence of a two-second condition — on the one code path whose timing is *correlated* with that condition, since sessions open right after a restart.\n\nSolo Spotify source is worse: rotation of one → `Pull::Eof` → `ctl.exhausted` latches (`engine/producer.rs:104-106`) → the producer feeds silence while the published state is `Transport: \"Playing\"`. Nothing clears the latch except a new source; `retry_pending` filters on the *member* axis, so it never fires here.\n\nThe irony worth recording: the same branch **adds** recovery one layer down — `shared_session()` now evicts an invalidated session and reconnects. So the session heals and the collection stays dead.\n\n## Related, same area\n\n`failure_budget()` is read **once per outer turn, before the first `next_item`** (`src/playlist.rs:306-308`), so on turn 1 the collection is still `Pending` and reports `CONTINUOUS_FAILURE_BUDGET` = 10. The inner loop then stays on that collection for the whole first pass of the resolved playlist at 10 rather than `tracks.len().max(3)`. A 60-track playlist hitting a transient fetch storm retires after 10 failures where the documented rule says it should survive 59. The `.max(3)` floor exists precisely because permanent retirement makes an under-sized budget bite; this is the same bug 20x larger.\n\n## Why this is not patched in place\n\nThe fix is a `Rotation`-level question — how does a collection say \"temporarily unavailable\" as distinct from \"exhausted\"? — and every cheap workaround is wrong:\n\n- returning `None` retires it (the bug);\n- sleeping inside `next_item` blocks the fetcher, and `PlaylistSource::drop` joins it on the single serial reaper thread;\n- a synthetic failing item abuses the decode-failure counter and reports a false reason.\n\nIt wants the architect pass, not a 2am patch. Candidate shape: a `Collection::transiently_unavailable()` default-false hook that makes `next_with` advance past the collection without retiring, plus a no-progress guard so an all-unavailable rotation cannot spin, plus the budget re-read after resolution.\n",
+              "closedAt": "2026-08-15T17:54:45Z",
+              "comments": {
+                "nodes": [
+                  {
+                    "author": {
+                      "login": "yuvalrakavy"
+                    },
+                    "authorAssociation": "OWNER",
+                    "body": "## Designed (T2) — awaiting approval before implementation\n\nFull spec: `docs/superpowers/specs/2026-08-15-transient-collection-unavailability-design.md` in the Store repo (`feat/spotify-source`).\n\n### Duty 0: every claim above was verified against the code. All eight hold.\n\nTwo things this issue does **not** say, both of which change the design:\n\n**1. It is worse than stated.** Nothing ever rebuilds a rotation — a republish of the *same* doc is `SourceAction::Nothing` (`player.rs:798-804`). The only escape is changing the source or stop→play. \"Jazz plays for three weeks\" is not rhetorical.\n\n**2. The fix space is narrower than it looks.** There is **one worker thread** for the whole daemon — every session doc, command, config, mdns and the periodic tick (`worker.rs:86-108`). `open_source` runs on it. That is *why* resolution is lazy, and it refutes the most attractive shape (below).\n\n### A second defect, found while verifying — and it is not Spotify's\n\n`ctl.exhausted` has exactly one reader: `idle_verdict`, deciding whether an idle *hold* is safe. `classify_session` derives `SessionHealth` from **member** state alone, so a dead source with healthy receivers classifies `Healthy` and the session publishes `Transport: \"Playing\"` while the room is silent.\n\nAn earlier pre-merge gate already wired half of this — a change in `source_reason` is a publish trigger in its own right (`player.rs:1308-1314`), so the wire does carry a complaint. What is missing is only the **verdict**.\n\nThis is not a Spotify bug: **a Mix of local playlists whose tracks all fail produces the identical silent lie today.** In scope, because it is the same code.\n\n### Requirement (from the user)\n\n> If the mix has only one item and that fails then the session should be aborted. If the mix has multiple items then skip to the next one. **A single item mix is the common case.**\n\nPlus: retry, then fail the session, ceiling ~5 minutes.\n\nThis is MP-104's contract with one word changed — *dropped* becomes *skipped, retried, and only then dropped*. The solo case is then not a special case but the degenerate one: one collection → unavailable → skipped → retried 5 min → retired → all gone → session fails.\n\n### Shape: a third outcome on the trait\n\n```rust\npub enum Turn { Item(Item), Exhausted, Unavailable }\n```\n\nIt deletes the conflation at its source — a future lazy collection cannot re-introduce this bug, because the implementer must choose which state they mean. Footprint is smaller than \"changing a trait\" suggests: **3 implementers, 1 production call site**, ~8 test assertions.\n\n**Rejected:**\n\n- **`transiently_unavailable()` hook** (this issue's own candidate): two calls that must agree are a second source of truth about one question; a stale flag reads as a real exhaustion.\n- **Resolve eagerly in `open_source`**, reusing the eager path's proven backoff — the shape I wanted, since it deletes the question entirely. **Refuted by measurement**: it puts a librespot connect plus a 60-track metadata fetch on the single worker thread serving every room.\n- **Session-level re-open**: rebuilds *all* collections, so a Mix playing for an hour restarts its healthy ones from the top.\n\n### Two traps recorded before they could ship green\n\n- `dropped.len() == total` is the obvious \"all gone\" predicate and it is **wrong**: `total` counts wire entries while collections are de-duplicated by URI, so a `[jazz, jazz]` Mix — the documented airtime mechanism — can never reach it.\n- An all-gone source reaching the `Failed` arm must carry `SourceHealth::reasons()`, not `failed_reason(&silent, &absent)`, or the operator gets \"no members are requesting timing\" for a room whose receivers are perfectly healthy.\n\nHazard symmetry holds on the existing rule: the member axis already treats *partial* failure as `Degraded`, not `Failed`. The source axis obeys the same line — only ALL-gone fails.\n\nRiding along: `failure_budget()` is read before the first `next_item` (`playlist.rs:306`), so a Pending collection reports 10 instead of `tracks.len().max(3)` — a 60-track playlist retires after 10 failures where the rule says 59.\n",
+                    "createdAt": "2026-08-15T06:14:58Z"
+                  },
+                  {
+                    "author": {
+                      "login": "yuvalrakavy"
+                    },
+                    "authorAssociation": "OWNER",
+                    "body": "## Rev 4 — `4aad6d9` on `feat/spotify-source`\n\nRev 3 was rejected by both of its fresh gates, on **shape** rather than detail. Rev 4 keeps\neverything they left standing and moves the two measurements the verdict is built from.\n\n### What kept moving across three revisions\n\nThe trait's third outcome (`Turn::Unavailable`, so a collection can say *\"could not find out\nyet\"* as distinct from *\"nothing more\"*) landed in rev 2 and has stood since. What kept being\nwrong is **where the give-up is measured**:\n\n| | Metered | Why it was wrong |\n|---|---|---|\n| Rev 2 | per collection, wall clock | in a Mix a collection is only ASKED when its slot comes round — paced by track length. The second ask arrived past the ceiling, so the Spotify half got two attempts and vanished for the session: this issue surviving inside its own fix |\n| Rev 3 | the rotation's own silence | the fetcher runs minutes ahead of the room, so it started while music was still audibly playing — then published `Failed` about a room the user could hear. And it required collections to be *waiting*, so a collection whose tracks will not DECODE never moved it at all |\n| Rev 4 | **the producer** | — |\n\n### Rev 4: one question per layer\n\n**Is the room silent?** → `ProducerControl::silent_packets`. Consecutive non-`Frames` packets\nwhile not held, reset by any audio. This is downstream of every buffer in the pipeline, where\nthe only remaining question is the one that was actually asked: *is anything coming out?* Every\nway a source can fail — network stall, decode failure, unmounted volume, exhausted playlist —\narrives here identically, **including the ways nobody has thought of**. That is the property a\npredicate over named internal states cannot have.\n\nCounted in packets rather than wall clock: packets are program time, so the number means \"how\nmuch silence the room got\", and the ceiling is exactly testable with no sleeping test.\n\n**And if so, why?** → two latches on `SourceHealth`, each set where its fact becomes true:\n`clean_end` at `Rotation::finish`, `broke_while_serving` at a `retire` of a collection that had\nbeen playing. A break outranks an ending, in either order.\n\nThis replaces rev 3's session-wide `ever_served`, which was wrong in both directions: a NAS\nunmounting after an hour of perfect playback answered `true`, so the room published `Playing`\nover silence forever — this issue's own lie, reintroduced by the flag written to prevent false\nalarms — while the Mix case it existed for took a path where it was never consulted.\n\n**And one place that turns them into a transport** — `source_aware_state`. Every publish site\nroutes through it and takes the verdict rather than a transport.\n\n### The A0 fix rev 3 skipped\n\n`reconcile`, the abandon arm of `commit_or_abandon_switch` and `retry_unresolved` each asserted\n`Transport: \"Playing\"` outright. That is reachable with **no user action**: an MQTT broker\nreconnect redelivers the retained desired doc, `reconcile` runs, and a room correctly marked\n`Failed` a second earlier goes back to claiming it is playing — permanently, because the health\ntick's transition gate then sees no edge left to report.\n\nA correct verdict that anything can silently undo is not a verdict. The authority fix is not a\nnice-to-have beside the policy fix; it is what makes the policy observable.\n\n### `Stopped`, keeping the reason\n\nA non-looping Mix that finishes with a broken entry now publishes `Stopped` with the reason\nkept. Rev 3 read that requirement as \"not `Failed`\" and settled for `Playing`, which is the same\nlie in a quieter voice — the room **is** silent. Verified as a no-op on the wire contract:\n`Stopped` is already ordinal 0 of `ObservedTransportValues` store-side, and nothing there reads\nthe observed transport, so no store change and no cascade.\n\n### Tests\n\n287 green, 14 negative controls, all firing. Two were findings rather than confirmations, both\nthe same class — an assertion true for a reason unrelated to its claim:\n\n- The mid-play-break test used a *solo* dying collection, where `clean_end` is false anyway, so\n  suppressing `broke_while_serving` changed nothing. That latch only carries weight when a clean\n  end is ALSO on the record, which needs a Mix. Rewritten as one.\n- `a_playlist_that_simply_finished_is_not_a_failure` drove `producer_ctl.exhausted`, which rev 4\n  does not read, and left the silence counter at zero — so the verdict was `Producing` whatever\n  the code did. Noticed because a control reddened it *for the wrong reason*.\n\n### One rev 3 gate finding that did not survive verification\n\nIt reported that `producer_ctl.exhausted` can no longer latch, reasoning that never-retiring\nmeans `next_with` never returns. Too strong: `finish` still retires, so a rotation whose\ncollections all END terminates exactly as before and still latches it. What genuinely no longer\nlatches is a rotation stuck on an unavailable collection — and there the flag would have been\nwrong, since such a source is waiting, not exhausted.\n\nTwo fresh-context adversarial gates are running over the frozen diff now. Spec:\n`docs/superpowers/specs/2026-08-15-transient-collection-unavailability-design.md` in the Store\nrepo.\n",
+                    "createdAt": "2026-08-15T11:28:17Z"
+                  },
+                  {
+                    "author": {
+                      "login": "yuvalrakavy"
+                    },
+                    "authorAssociation": "OWNER",
+                    "body": "\n## The rev 4 gates — three rounds, and what they say about the process\n\n`4aad6d9` was gated by two fresh-context passes (correctness lens; implementer + test-quality\nlens). They returned **seven defects**, converging independently on the same critical one.\nThe fix round `0d15158` was then gated a third time, over its own frozen diff, and that pass\nfound **no defect in the shipped code** — it confirmed the audio-path claim by execution —\nbut two untested behaviours, closed in `b046fc1`.\n\n### The critical one: the meter was wired above a layer that lies\n\nRev 4's whole argument is that the silence meter sits *downstream of every buffer, so every\nfailure mode arrives identically.* That was **false as built**. `SwitchableSource` sits\nbetween the source and the counter and **manufactures `Pull::Frames` out of silence**: its mix\npath exited `Pull::Frames(out)` unconditionally, and `pull_frames` swallows a departing\nsource's `Eof` into silent frames by design. `next_packet` then zeroes `silent_packets` on any\n`Frames`.\n\nSo a transition over a dead outgoing measured **zero** silence for the whole ready-wait —\n`READY_GRACE_BOUNDED_PKTS` ≈ **120 s** — and then needed a fresh 30 s. Two and a half minutes\nof `Playing` over a wholly silent room, in the scenario the abandon arm's own comment names.\n\nFixed by making the composite report `Starved` when no deck contributed. The producer maps\n`Starved` to silence-and-advance exactly as it mapped those frames, so the audio is\n**byte-identical** — gate 3 proved that rather than accepting it, arming\n`out.iter().all(|f| f.to_bits() == 0)` inside the branch, running green, then inverting the\nassertion to show the branch is genuinely reached.\n\n**The lesson generalises past this bug.** \"Downstream of every buffer\" was a claim about the\npipeline's *shape*, made without walking it. One layer of the pipeline was a component whose\ndocumented job is to substitute silence for missing audio — and the design's own note\n(`clear_exhausted_latch`) shows the tree had already reasoned carefully about a *different*\nlatch being stale across that same boundary. The precedent was there and I did not look for it.\n\n### Its mirror in the other half of the verdict\n\n`mark_clean_end` shipped with exactly one caller, `Rotation::finish` — and `open_source`\nroutes a single `file://` straight to `FileSource` with **no rotation at all**, a fact the\ntree already stated in\n`open_source_routes_a_single_source_by_kind_not_through_the_rotation`. So a lone track playing\nto its end published `Failed: \"the source has nothing left to play\"`. Before rev 4 the same\ncase published `Playing`: **the bug turned a quiet lie into a loud one**, which is worse.\n\n`FileSource` now states its own natural end, guarded on having produced. A `StreamSource`\ndeliberately gets no equivalent — an unbounded stream has no natural end, so its silence is\nnever an ending.\n\n### The break signal could not see the failure mode the issue is about\n\n`broke_while_serving` was latched only in `retire`, while rev 4's headline change is that an\nunavailable collection is **never retired**. A Mix half that had been playing and then went\nunavailable forever recorded nothing. Replaced by `refresh_broken`, recomputed from state that\ncan change back — which also makes it *clear* on recovery, something a latch could not.\n\n### Four instances of one test defect, in one feature\n\nEvery remaining finding is the same shape: **a test correct about the wrong layer, or true for\na reason unrelated to its claim.**\n\n1. The mid-play-break test used a *solo* collection, where `clean_end` is false anyway (found\n   by my own control, before the gates).\n2. `a_playlist_that_simply_finished_is_not_a_failure` drove a latch rev 4 does not read (found\n   by a control firing *for the wrong reason*).\n3. The composer's `now_title` drop is unit-tested where it holds and was undone one layer\n   above, by an unconditional restamp in `check_health` — the only site that emits `Ended` end\n   to end.\n4. The three new `switch.rs` tests reached their assertions through `is_single()`'s\n   passthrough, so none proved a transition ever happened. Gate 3 showed this by stubbing\n   `take()` to return `None`: 14 other switch tests failed and all three of these passed.\n\nPlus three behaviours with **no test at all**, each proved by a mutation that left the suite\ngreen: the abandon arm's A0 fix, both directions of the ENDED/BROKEN discriminator, and the\n\"published ONCE\" claim (asserted only on the no-reason case, where no edge can exist).\n\n### And the sibling I fixed at one site only\n\nThe sharpest one, because the feature had *already found and fixed it once*. A control showed\n`u13` reaching its verdict through `finish`'s refresh rather than the `mark_unavailable`\nrefresh it was written for, and u13 was reshaped so the break arrives strictly after the last\nfinish. **The same masking applies to `retire`, in the mirrored order** — and I checked the\nsite the control pointed at without checking its siblings. Gate 3 found it by deleting each\ncall in turn and watching 297 tests stay green.\n\nHazard symmetry is the rule that exists for exactly this, and having just applied it once is\nevidently not a defence against skipping it the second time.\n\n### Filed rather than fixed\n\n- [airzoned#35](https://github.com/yuvalrakavy/airzoned/issues/35) — the same A0 shape on the\n  MEMBER axis. Transient: `force_republish` restores the truth in 2 ticks, which is why it is\n  an issue and not a blocker.\n- [airzoned#36](https://github.com/yuvalrakavy/airzoned/issues/36) — a dead producer thread\n  freezes the meter, so the room is silent, `Playing`, and every instrument agrees it is\n  healthy. This one is the honest limit on \"every way a source can fail arrives identically\",\n  and the doc now says so instead of claiming the absolute.\n\n### Claims corrected rather than defended\n\n\"Every way a source can fail arrives at it identically\" now names its two real limits.\n\"Every publish site routes through it\" was literally false — the two explicit-Stop publishes\nand `fail()` do not, deliberately, because running a user's Stop through a source verdict\nwould let a dead source overrule it. `stream.rs` still claimed a mid-session stream death was\nundetected; rev 4 detects it, and what remains deferred is repair.\n\n### Noted, not changed\n\nFixing the silence meter and the solo-file ending together means a room can publish `Stopped`\n**during** a long bounded ready-wait (grace ~120 s against a 30 s ceiling) if the outgoing runs\nout while a slow incoming decodes. Narrow — a `file://` incoming decodes eagerly and has no\nwindow at all — and it replaces a false `Playing`, so it moves in the direction that matters.\n\n### Final state\n\n`b046fc1`. **301 tests green, 28 negative controls, all firing.**\n",
+                    "createdAt": "2026-08-15T13:04:27Z"
+                  },
+                  {
+                    "author": {
+                      "login": "yuvalrakavy"
+                    },
+                    "authorAssociation": "OWNER",
+                    "body": "Fixed and merged in `395d044` (rev 4, `4aad6d9`..`b046fc1`).\n\n**The give-up is now metered at the producer**, downstream of every buffer, where every way a source can fail arrives identically — network stall, decode failure, unmounted volume, exhausted playlist, and ways nobody has thought of. The cause is named separately by the rotation, which is the only thing that knows whether the music ran out or broke. Neither half is a verdict alone; fusing them is what made revs 2 and 3 wrong.\n\nAn unavailable collection is never retired, so recovery costs nothing and needs no resurrection machinery — which is what let the session-layer re-drive be deleted rather than guarded.\n\nThree adversarial gate rounds. The critical finding, reached independently by two of them with separate executed repros: the meter was wired ABOVE `SwitchableSource`, which manufactures `Pull::Frames` out of silence, so a transition over a dead outgoing measured zero silence for ~2 minutes.\n\n301 tests, 28 negative controls, all firing. Full write-up in the spec (`docs/superpowers/specs/2026-08-15-transient-collection-unavailability-design.md` in the Store repo) and the comments above.\n\nFollow-ons filed separately: #35 (the same publish-authority shape on the member axis, transient), #36 (a dead producer thread freezes the meter).",
+                    "createdAt": "2026-08-15T17:54:45Z"
+                  }
+                ],
+                "totalCount": 4
+              },
+              "createdAt": "2026-08-15T05:05:44Z",
+              "id": "I_kwDOTBQnEM8AAAABM21D2g",
+              "labels": {
+                "nodes": [
+                  {
+                    "name": "bug"
+                  }
+                ],
+                "totalCount": 1
+              },
+              "number": 32,
+              "repository": {
+                "nameWithOwner": "yuvalrakavy/airzoned"
+              },
+              "state": "CLOSED",
+              "stateReason": "COMPLETED",
+              "timelineItems": {
+                "nodes": [
+                  {
+                    "__typename": "LabeledEvent",
+                    "actor": {
+                      "login": "yuvalrakavy"
+                    },
+                    "createdAt": "2026-08-15T05:05:45Z",
+                    "id": "LE_lADOTBQnEM8AAAABM21D2s8AAAAG3decAA",
+                    "label": {
+                      "name": "bug"
+                    }
+                  }
+                ],
+                "totalCount": 1
+              },
+              "title": "A transient Spotify resolve failure permanently retires the collection (blocks MP-108 merge)",
+              "updatedAt": "2026-08-15T17:54:45Z"
+            },
+            {
+              "author": {
+                "login": "yuvalrakavy"
+              },
+              "authorAssociation": "OWNER",
+              "body": "> **Status 2026-10-23:** still open; needs a hardware re-measure. Refs in the correction note updated: the failed-push report is a once-per-run `tracing::info!` with a `progress_push_failing` flag (`src/engine/member.rs:433-450`), not `eprintln!` at `member.rs:409-411`; the closed-connection failure is at `src/rtsp.rs:457-458`, not `:447`; `push_progress` is `member.rs:427-451`. Nothing reconnects on a failed push, and no OPTIONS/GET_PARAMETER keepalive exists. **Gap:** progress is not pushed to held/idle or non-Producing sessions (`src/player.rs:2019-2025`), so no keepalive traffic reaches those. Re-run the `netstat` probe against the Mac before building an OPTIONS keepalive. Defect B (react to a closed control socket) stands either way.\n\n<!-- triage-2026-09-17 -->\n> **Correction, triaged 2026-09-17 — the central hypothesis below is now false. Re-measure before working this.**\n>\n> This issue says no timer emits anything on the RTSP control connection once RECORD has been sent. That stopped being true when the now-playing lane landed: `push_progress` sends `SET_PARAMETER progress` every `PROGRESS_INTERVAL` (5 s) to every audibly-playing member (`src/player.rs` `publish_progress`, `src/engine/member.rs:427-451`, `src/rtsp.rs:366-377`). \"Does not notice for 11 s\" is also wrong in the daemon's favour — a closed control connection now fails the next progress push within 5 s (`src/rtsp.rs:457-458`).\n>\n> What IS still true: that failure is only logged once per run via `tracing::info!` (`src/engine/member.rs:433-450`; it was `eprintln!` at 409-411 when this note was written), not acted on. So the open question is no longer \"nothing keeps the connection alive\" but \"does macOS still drop it at ~31 s, and should a failed progress push trigger reconnect\". Severity: serious for a Mac receiver, theoretical for the Yamahas.\n\n---\n\n## Symptom\n\nA macOS AirPlay receiver (System Settings -> General -> AirDrop & Handoff -> AirPlay Receiver)\nplays for ~39 s, then stops requesting timing. Eight seconds later the daemon's\n`TIMING_SILENCE_UNHEALTHY_MS` watchdog declares the member silent, tears the session down and\nreconnects. The listener hears the music stop abruptly and resume ~10 s later, in a loop.\n\nObserved live 2026-08-15 on `Yuval's Mac Studio (10)` (10.0.2.35:7000, macOS Control Center),\nconfirmed by ear by the user three times (\"Mac stopped abruptly\" / \"Resumed\" / \"Stopped again\").\n\n```\n[player] session=macstudio FAILED: m1 stopped responding (8s of silence)\n[engine] member m1 SILENT too long — tearing down and re-establishing\n[engine] add_member m1: the speaker stopped responding; reconnecting (WentSilent); will retry\n```\n\n## Why this is not load, not the network, and not the loopback\n\n**A Yamaha receiver was playing a second session from the same daemon, in the same run, the whole\ntime, and never dropped once.** That is the control that makes this conclusive:\n\n| receiver | JOINs | silent teardowns |\n|---|---|---|\n| Yamaha RX-V673 `BZm Yuval O` (10.0.2.158:1024) | 1 | **0** |\n| macOS Control Center (10.0.2.35:7000) | 4 | **3** |\n\n## The interval is deterministic\n\nTwo clean measurements, from `live_seq` deltas between `JOINED` and `REMOVED` (352 frames/packet\nat 44100 Hz):\n\n| run | packets | playing | last timing request |\n|---|---|---|---|\n| 1 | 4905 | 39.2 s | ~31.2 s in |\n| 2 | 4904 | 39.1 s | ~31.1 s in |\n\n**One packet apart out of ~4905 — 0.02%.** Nothing stochastic repeats that precisely, so this is a\ndeterministic timeout on the receiver side, not congestion or scheduling. ~31 s is the number to\nexplain; 30 s is a very common RTSP session timeout.\n\n## Hypothesis (NOT yet verified)\n\n**The daemon sends no periodic RTSP traffic, and macOS expires the session for it.** The documented\nflow in `src/rtsp.rs:4` is:\n\n```\nPOST /auth-setup -> ANNOUNCE (SDP) -> SETUP -> RECORD -> SET_PARAMETER (volume) -> TEARDOWN\n```\n\nThere is no `OPTIONS` keepalive, no `GET_PARAMETER` poll, and no timer that emits anything on the\nRTSP control connection once `RECORD` has been sent — only the UDP audio flow continues. The same\nmodule comment notes the design was validated against \"the same MusicCast hardware\", i.e. against\nreceivers that tolerate the absence. A ~30 s server-side session timeout with a keepalive\nrequirement would produce exactly the observed constant.\n\n**What would confirm it:** packet-capture the RTSP control connection to the Mac for 45 s and\nconfirm the receiver sends nothing after ~31 s and that we send nothing at all after `RECORD`; then\nadd a periodic `OPTIONS` (or `GET_PARAMETER`) every ~10-15 s and re-measure. **Do not implement the\nkeepalive on the strength of this issue alone** — the interval is strong evidence of *a* timeout,\nbut not of *which* keepalive satisfies it.\n\n## Why it matters\n\nTwo reasons beyond this one receiver:\n\n1. macOS is not exotic. Any AirPlay 2 era receiver may share the requirement, so this could be a\n   whole class of receiver the daemon cannot hold for more than ~39 s.\n2. **The recovery worked**, which is the good news buried here: the watchdog detected the silence,\n   tore down cleanly, reconnected, and audio resumed without intervention. The defect is the\n   30-second cycle, not a wedge.\n\n## Not the same as the 403\n\nSeparately resolved during the same session and worth recording so it is not re-diagnosed: the Mac\ninitially refused every request with `403 Forbidden` on both `/auth-setup` and `ANNOUNCE`. That was\n**\"Require Password\" being enabled** on the receiver, not a protocol gap. With it off, `/auth-setup`\nreturns 404 (tolerated) and the connection succeeds in ~69 ms. An earlier guess in that session that\nthis was an AirPlay 2 pairing gap was **wrong** — the receiver was answering us fine and declining\non policy.\n\n",
+              "closedAt": null,
+              "comments": {
+                "nodes": [
+                  {
+                    "author": {
+                      "login": "yuvalrakavy"
+                    },
+                    "authorAssociation": "OWNER",
+                    "body": "## DIAGNOSED — and the title's framing was wrong twice over\n\nTwo experiments settled it. Correcting the record: the receiver does **not** \"stop responding\", and the\n30 s cycle has **nothing to do with Spotify**.\n\n### Experiment 1 — the RTSP control connection dies FIRST\n\nPolled `netstat` for the TCP connection to the Mac's RTSP port once a second, alongside the daemon's\nown silent-teardown count:\n\n```\n  0s  tcp=ESTABLISHED            silent_teardowns=3\n 43s  tcp=CLOSE_WAIT,FIN_WAIT_2  silent_teardowns=3   <- macOS sent FIN\n 54s  tcp=CLOSE_WAIT,FIN_WAIT_2  silent_teardowns=4   <- daemon notices, 11 s later\n 56s  tcp=NONE                   silent_teardowns=4\n 64s  tcp=ESTABLISHED            silent_teardowns=4   <- reconnect\n 94s  tcp=CLOSE_WAIT,FIN_WAIT_2  silent_teardowns=4   <- again, 30 s to the second\n```\n\n`CLOSE_WAIT` on our side means the PEER sent FIN. **macOS actively closes the RTSP control connection\n~30 s after `RECORD`.** The timing silence the watchdog reports is a CONSEQUENCE of that teardown,\nnot its cause -- which is why `m1 stopped responding (8s of silence)` is a misleading diagnosis.\n\n### Experiment 2 — not Spotify (the user's own control)\n\nSwitched the Mac's source from `spotify:artist:...` to a local 5-minute 440 Hz wav, with the Spotify\nplaylist still running to a Yamaha. Confirmed the switch landed\n(`source switch is AUDIBLE -> [\"file:///tmp/az-control-tone.wav\"]`, and the retained doc agrees):\n\n```\n  0s  tcp=ESTABLISHED            silent_teardowns=5\n 42s  tcp=CLOSE_WAIT,FIN_WAIT_2  silent_teardowns=5\n 53s  tcp=CLOSE_WAIT,FIN_WAIT_2  silent_teardowns=6\n 62s  tcp=ESTABLISHED            silent_teardowns=6\n 93s  tcp=CLOSE_WAIT,FIN_WAIT_2  silent_teardowns=6\n```\n\nIdentical to the Spotify run within one second. **The source is irrelevant.** Measured intervals\nacross both runs: 30 s, 31 s, 30 s, 31 s.\n\nControl throughout both experiments: a Yamaha RX-V673 playing from the same daemon, same runs, which\nnever dropped once.\n\n## Two separate defects\n\n### A — no RTSP keepalive, so macOS expires the session at 30 s\n\nThe flow is `POST /auth-setup -> ANNOUNCE -> SETUP -> RECORD -> SET_PARAMETER -> TEARDOWN`\n(`src/rtsp.rs:4`) and **nothing is sent on the control connection after `RECORD`**. MusicCast\nhardware tolerates that; macOS applies a ~30 s session timeout. A periodic `OPTIONS` (or\n`GET_PARAMETER`) on a timer well inside 30 s is the candidate fix. Still worth a packet capture to\nconfirm which request macOS accepts as a keepalive before building it.\n\n### B — the daemon never notices its own control connection closing\n\n`RtspClient` is held at `member.rs:249` (`rtsp: Some(rtsp)`) and **nothing reads that socket after the\nhandshake**. So a FIN sits in `CLOSE_WAIT` unobserved until the *timing* watchdog fires 11 seconds\nlater -- 11 seconds of dead air, and then an error message blaming the receiver's audio path for a\ncontrol-plane event.\n\n**B is the more general defect.** It is receiver-agnostic: ANY receiver that closes the control\nconnection -- reboot, sleep, network blip, its own timeout -- costs 11 s of silence and produces a\nmisleading diagnosis. Detecting a readable/closed RTSP socket would make recovery near-immediate and\nthe reported cause correct, and it is worth fixing even if A is never built.\n\nFixing B alone changes this symptom from \"music stops for ~11 s every 30 s\" to \"music stops for ~1 s\nevery 30 s\". Fixing A removes the cycle. They are independent.\n",
+                    "createdAt": "2026-08-15T09:37:53Z"
+                  },
+                  {
+                    "author": {
+                      "login": "yuvalrakavy"
+                    },
+                    "authorAssociation": "OWNER",
+                    "body": "## Not a regression — `main` behaves identically\n\nThe user's recollection was that playback to this Mac used to run without dropping, which would have\nmade this a regression in the `feat/spotify-source` branch. **It is not.**\n\nBuilt `main` (`c4aa981`, before the entire Spotify branch — no librespot, no `Turn` enum, none of\nthe #32 work), ran the same probe against the same Mac with a local wav:\n\n```\n  0s  tcp=ESTABLISHED            silent_teardowns=0\n 17s  tcp=CLOSE_WAIT,FIN_WAIT_2  silent_teardowns=0    (first interval truncated by probe start)\n 28s  tcp=CLOSE_WAIT,FIN_WAIT_2  silent_teardowns=1\n 30s  tcp=NONE                   silent_teardowns=1\n 37s  tcp=ESTABLISHED            silent_teardowns=1\n 68s  tcp=CLOSE_WAIT,FIN_WAIT_2  silent_teardowns=1    <- 31 s after ESTABLISHED\n 78s  tcp=CLOSE_WAIT,FIN_WAIT_2  silent_teardowns=2\n 88s  tcp=ESTABLISHED            silent_teardowns=2\n```\n\n### The full control matrix\n\n| run | binary | config | ESTABLISHED -> close |\n|---|---|---|---|\n| 1 | feat/spotify-source | Spotify -> Mac + Spotify -> Yamaha | 30 s |\n| 2 | feat/spotify-source | local wav -> Mac + Spotify -> Yamaha | 31 s |\n| 3 | feat/spotify-source | Spotify -> Mac, sole session | 31 s |\n| 4 | **main (`c4aa981`)** | local wav -> Mac, sole session | **31 s** |\n\nTwo binaries, two source kinds, solo and parallel, and a Yamaha control that never dropped in any\nrun. **One constant: ~31 s.** The absence of an RTSP keepalive is not new and neither is macOS's\nsession timeout; nothing in the branch caused this.\n\nSo if playback to this Mac genuinely ran longer than ~39 s at some earlier date, the variable is on\nthe macOS side (a version change, or a receiver setting) — not in this repo. Worth knowing before\nanyone bisects the branch looking for it.\n\n### Method note\n\nThe probe is 30 lines of `netstat` polling correlated against the daemon's own silent-teardown count\n(`scratchpad/probe_mac.sh` in the session that produced this). Cheap, needs no privileges, and it is\nwhat turned \"the receiver stopped responding\" into \"macOS closed the control connection and we\nnoticed 11 s later\". Worth keeping the shape in mind for the next receiver-compatibility question:\npoll the transport state and correlate it against the application's own verdict, rather than\ntrusting the application's verdict.\n",
+                    "createdAt": "2026-08-15T09:44:43Z"
+                  }
+                ],
+                "totalCount": 2
+              },
+              "createdAt": "2026-08-15T09:26:48Z",
+              "id": "I_kwDOTBQnEM8AAAABM3vAPA",
+              "labels": {
+                "nodes": [
+                  {
+                    "name": "bug"
+                  },
+                  {
+                    "name": "p2"
+                  },
+                  {
+                    "name": "receiver"
+                  }
+                ],
+                "totalCount": 3
+              },
+              "number": 33,
+              "repository": {
+                "nameWithOwner": "yuvalrakavy/airzoned"
+              },
+              "state": "OPEN",
+              "stateReason": null,
+              "timelineItems": {
+                "nodes": [
+                  {
+                    "__typename": "LabeledEvent",
+                    "actor": {
+                      "login": "yuvalrakavy"
+                    },
+                    "createdAt": "2026-10-23T20:22:20Z",
+                    "id": "LE_lADOTBQnEM8AAAABM3vAPM8AAAAH79mvUA",
+                    "label": {
+                      "name": "bug"
+                    }
+                  },
+                  {
+                    "__typename": "LabeledEvent",
+                    "actor": {
+                      "login": "yuvalrakavy"
+                    },
+                    "createdAt": "2026-10-23T20:22:20Z",
+                    "id": "LE_lADOTBQnEM8AAAABM3vAPM8AAAAH79mvjg",
+                    "label": {
+                      "name": "p2"
+                    }
+                  },
+                  {
+                    "__typename": "LabeledEvent",
+                    "actor": {
+                      "login": "yuvalrakavy"
+                    },
+                    "createdAt": "2026-10-23T20:22:20Z",
+                    "id": "LE_lADOTBQnEM8AAAABM3vAPM8AAAAH79mv2Q",
+                    "label": {
+                      "name": "receiver"
+                    }
+                  }
+                ],
+                "totalCount": 3
+              },
+              "title": "macOS drops the RTSP control connection ~30 s after RECORD; a failed push is logged, not acted on (re-measure since the 5 s progress push)",
+              "updatedAt": "2026-10-23T20:22:21Z"
+            },
+            {
+              "author": {
+                "login": "yuvalrakavy"
+              },
+              "authorAssociation": "OWNER",
+              "body": "> **Status 2026-10-23:** **partially fixed by `15a733d`** (2026-08-15): `retry_delay` now climbs 1/2/4/8/16/32 s plus a 60 s shelf (`src/playlist.rs:494-517`), so the local ladder no longer undercuts a 20-40 s `Retry-After`. **Still open:** the server's value is never honoured (`query_product` only formats `Retry-After` into an error string, `src/spotify.rs:424-435`; nothing feeds it to `Waiting.next_attempt`), librespot-core is still 0.8.0 (`Cargo.lock:1220-1221`) so the >10 s cap remains, and the `/v1/me` re-check still runs on every reconnect. Remaining work: parse `Retry-After` into `next_attempt`, and a collection-level fault for \"no session\" (together with #29). Title changed: \"observed live\" was a different client (see correction below). Related: #29.\n\n<!-- triage-2026-09-17 -->\n> **Correction, triaged 2026-09-17 — \"observed live\" below refers to a different client.**\n>\n> The librespot behaviour this issue describes is real and code-proven in the pinned crate: `RATE_LIMIT_MAX_WAIT = 10s` (`librespot-core` `http_client.rs:40`), a `Retry-After` above it returns `None` (`:262-300`) and is not slept on (`:203-211`), a 429 becomes `resource_exhausted` (`:86`), and `spclient.rs:534-543` breaks out on it.\n>\n> But what was actually *observed* live was airzoned's OWN reqwest call to `api.spotify.com/v1/me` — the account-type re-check (`src/spotify.rs` `query_product`, ~404-430) — getting 429 with `Retry-After` climbing 1 s → 26 s → 38 s during repeated failed starts on 2026-09-16. That is a different client on a different host from the librespot path.\n>\n> This issue pairs with #29: each failed Spotify item re-connects and re-runs that `/v1/me` GET, which is what drove the Retry-After up. Fix both at the Spotify boundary — treat \"cannot get a session at all\" as a collection-level fault, and honour the server's `Retry-After` rather than the local backoff ladder. Triage recommendation: fix before deploy.\n\n---\n\n## A `Retry-After` above 10 s becomes a PERMANENT error inside librespot 0.8.0\n\nFound during prior-art research for #32, verified against the vendored crate we actually pin\n(`~/.cargo/registry/.../librespot-core-0.8.0`), not the `dev` branch.\n\n### The mechanism\n\n`HttpClient::request` handles 429 by sleeping `Retry-After` and looping — **unbounded**, which is\ncorrect. But it only does so if `get_retry_after` returns `Some`, and that function caps at\n`RATE_LIMIT_MAX_WAIT = 10 s` (`http_client.rs:40`). A `Retry-After` **above 10 s returns `None`**,\nso the request falls through to `Err(StatusCode(429))` -> `TOO_MANY_REQUESTS => Error::resource_exhausted`\n-> and `spclient`'s retry loop has `_ => break`, because it retries only `Unavailable` and\n`DeadlineExceeded`.\n\n**Net: a server saying \"wait 30 s\" is converted into a permanent failure, while a server saying\n\"wait 5 s\" is retried forever.** A capped wait overflowing into \"fatal\" inverts the server's meaning\n— the longer the backoff Spotify asks for, the more likely we treat it as unrecoverable.\n\n### It is live on this branch\n\nObserved today, twice, in `/tmp/airzone-daemon.log` during ordinary startup:\n\n```\n[spotify] could not re-check the account type (Spotify is rate-limiting this host (HTTP 429) —\n          Spotify says retry after 20s); proceeding on the last confirmed value (premium)\n[spotify] ... Spotify says retry after 21s ...\n```\n\nBoth **above the 10 s cap**. Our premium re-check survived it only because that call site was\ndeliberately written to fall back to the cached verdict on a could-not-ask (see the account-check\nsplit). **Every other spclient call has no such fallback** — metadata resolution and audio-key\nrequests included, i.e. exactly the calls behind `SpotifyCollection`'s resolve and fetch.\n\n### Why it matters more after #32\n\nUnder the pre-#32 design a hard resolve error retired the collection permanently, so this trap was\ninvisible behind a larger one. With `Turn::Unavailable` the daemon now retries a failed resolve, so\nthe librespot-level permanence becomes the binding constraint: we retry, librespot re-issues, gets\n429 with a >10 s `Retry-After` again, and hard-errors again. Our own backoff (1/2/4/8/16 s) is also\n*shorter* than the wait Spotify is asking for, so a retry ladder inside a rate-limit window makes\nthe rate limiting worse, not better.\n\n### Options (not yet decided)\n\n1. **Respect the server's number ourselves.** Parse `Retry-After` at our layer and let it set the\n   next attempt time, rather than using a fixed local ladder that can undercut it. Spotify's own\n   guidance is explicit: *\"Implement exponential backoff and respect the Retry-After header. Do not\n   retry immediately or in tight loops.\"*\n2. **Patch/fork the cap.** `RATE_LIMIT_MAX_WAIT` is a const; upstreaming a fix (return the real\n   value, let the caller decide) is the clean version.\n3. **Classify at our boundary.** `ResourceExhausted` is transient BY DEFINITION and should never be\n   treated as fatal. librespot ships a 17-variant gRPC-shaped `ErrorKind` with **no**\n   `is_retryable` predicate anywhere in the crate, so the rule got re-invented at five call sites\n   with five different answers. Deciding it once at our boundary is the durable fix.\n\nRelated: #32 (transient vs exhausted), #33 (macOS RTSP keepalive).\n\n",
+              "closedAt": null,
+              "comments": {
+                "nodes": [],
+                "totalCount": 0
+              },
+              "createdAt": "2026-08-15T09:45:57Z",
+              "id": "I_kwDOTBQnEM8AAAABM3zGPw",
+              "labels": {
+                "nodes": [
+                  {
+                    "name": "bug"
+                  },
+                  {
+                    "name": "p1"
+                  },
+                  {
+                    "name": "partial"
+                  },
+                  {
+                    "name": "sources"
+                  }
+                ],
+                "totalCount": 4
+              },
+              "number": 34,
+              "repository": {
+                "nameWithOwner": "yuvalrakavy/airzoned"
+              },
+              "state": "OPEN",
+              "stateReason": null,
+              "timelineItems": {
+                "nodes": [
+                  {
+                    "__typename": "LabeledEvent",
+                    "actor": {
+                      "login": "yuvalrakavy"
+                    },
+                    "createdAt": "2026-10-23T20:22:18Z",
+                    "id": "LE_lADOTBQnEM8AAAABM3zGP88AAAAH79mkQQ",
+                    "label": {
+                      "name": "bug"
+                    }
+                  },
+                  {
+                    "__typename": "LabeledEvent",
+                    "actor": {
+                      "login": "yuvalrakavy"
+                    },
+                    "createdAt": "2026-10-23T20:22:18Z",
+                    "id": "LE_lADOTBQnEM8AAAABM3zGP88AAAAH79mkgQ",
+                    "label": {
+                      "name": "p1"
+                    }
+                  },
+                  {
+                    "__typename": "LabeledEvent",
+                    "actor": {
+                      "login": "yuvalrakavy"
+                    },
+                    "createdAt": "2026-10-23T20:22:18Z",
+                    "id": "LE_lADOTBQnEM8AAAABM3zGP88AAAAH79mkxQ",
+                    "label": {
+                      "name": "sources"
+                    }
+                  },
+                  {
+                    "__typename": "LabeledEvent",
+                    "actor": {
+                      "login": "yuvalrakavy"
+                    },
+                    "createdAt": "2026-10-23T20:22:18Z",
+                    "id": "LE_lADOTBQnEM8AAAABM3zGP88AAAAH79mlEg",
+                    "label": {
+                      "name": "partial"
+                    }
+                  }
+                ],
+                "totalCount": 4
+              },
+              "title": "Spotify's Retry-After is not honoured: librespot 0.8.0 turns >10 s into a permanent error, and our own /v1/me check only reports it",
+              "updatedAt": "2026-10-23T20:22:18Z"
+            },
+            {
+              "author": {
+                "login": "yuvalrakavy"
+              },
+              "authorAssociation": "OWNER",
+              "body": "> **Status 2026-10-23:** still open, checked against `7b4623f`. The three sites passing `member_reason: None` to `source_aware_state`: `publish_current` (reconcile tail, `src/player.rs:1646-1653`), the abandon arm of `commit_or_abandon_switch` (`player.rs:2464`), and `retry_unresolved` (`player.rs:2665`). `retry_unresolved` already calls `classify_session` at `player.rs:2655` for `health` and then discards the member half, so the \"plumbing problem\" is smaller there. No silent-member test exists yet next to `reconcile_does_not_republish_playing_over_a_dead_source` (`player.rs:7376`).\n\nFound by a pre-merge gate while reviewing airzoned#32 rev 4. Pre-existing, not introduced there —\nbut rev 4 fixed the same shape of bug on the *source* axis and left this one, so the asymmetry is\nnow the odd thing rather than the status quo.\n\n## What happens\n\n`reconcile`, the abandon arm of `commit_or_abandon_switch`, and `retry_unresolved` all compose their\npublished state with `member_reason: None`. They consult the SOURCE verdict (rev 4) but nothing\nabout member health. So a redelivered retained desired doc — an MQTT broker reconnect, no user\naction — republishes `Playing` over a member-caused `Failed`:\n\n```json\n{\"Transport\":\"Playing\",\"StatusReason\":null,\"MemberStates\":{\"live\":{\"Health\":\"silent\",\"Reason\":\"...\"}}}\n```\n\n`check_health`'s transition gate then has no edge to report, because neither axis moved.\n\n## Why it is not urgent\n\nMeasured by the gate: `demote_persistently_silent` sets `force_republish` and the truth returns\nafter **2 health ticks**. So it is a brief lie, not a permanent one — unlike the source-axis version,\nwhich had no such rescue and is what made rev 4's A0 fix load-bearing.\n\n## Why it is still worth closing\n\n`source_aware_state` already takes a `member_reason` parameter and already implements the\nprecedence (member wins while `Producing`). The three sites pass `None` only because computing it\nneeds `classify_session`, which borrows the session immutably while those sites hold it mutably.\nThat is a plumbing problem, not a design one.\n\nUntil it is fixed, `source_aware_state`'s doc claim that \"every site that could publish a false\n`Playing` routes through here\" is true only of the source axis. The doc has been corrected to say\nso; this issue is the other half.\n\n## Acceptance\n\nA test in the shape of `reconcile_does_not_republish_playing_over_a_dead_source`, but with a silent\nmember instead of a dead source, asserting the redelivered doc does not publish `Playing`.\n\n",
+              "closedAt": null,
+              "comments": {
+                "nodes": [],
+                "totalCount": 0
+              },
+              "createdAt": "2026-08-15T12:19:57Z",
+              "id": "I_kwDOTBQnEM8AAAABM4UcXw",
+              "labels": {
+                "nodes": [
+                  {
+                    "name": "bug"
+                  },
+                  {
+                    "name": "p3"
+                  },
+                  {
+                    "name": "self-contained"
+                  },
+                  {
+                    "name": "player"
+                  }
+                ],
+                "totalCount": 4
+              },
+              "number": 35,
+              "repository": {
+                "nameWithOwner": "yuvalrakavy/airzoned"
+              },
+              "state": "OPEN",
+              "stateReason": null,
+              "timelineItems": {
+                "nodes": [
+                  {
+                    "__typename": "LabeledEvent",
+                    "actor": {
+                      "login": "yuvalrakavy"
+                    },
+                    "createdAt": "2026-10-23T20:22:15Z",
+                    "id": "LE_lADOTBQnEM8AAAABM4UcX88AAAAH79mXqQ",
+                    "label": {
+                      "name": "bug"
+                    }
+                  },
+                  {
+                    "__typename": "LabeledEvent",
+                    "actor": {
+                      "login": "yuvalrakavy"
+                    },
+                    "createdAt": "2026-10-23T20:22:15Z",
+                    "id": "LE_lADOTBQnEM8AAAABM4UcX88AAAAH79mX2Q",
+                    "label": {
+                      "name": "p3"
+                    }
+                  },
+                  {
+                    "__typename": "LabeledEvent",
+                    "actor": {
+                      "login": "yuvalrakavy"
+                    },
+                    "createdAt": "2026-10-23T20:22:15Z",
+                    "id": "LE_lADOTBQnEM8AAAABM4UcX88AAAAH79mYGQ",
+                    "label": {
+                      "name": "player"
+                    }
+                  },
+                  {
+                    "__typename": "LabeledEvent",
+                    "actor": {
+                      "login": "yuvalrakavy"
+                    },
+                    "createdAt": "2026-10-23T20:22:15Z",
+                    "id": "LE_lADOTBQnEM8AAAABM4UcX88AAAAH79mYXg",
+                    "label": {
+                      "name": "self-contained"
+                    }
+                  }
+                ],
+                "totalCount": 4
+              },
+              "title": "Unsolicited publishes assert Playing over a MEMBER-caused Failed",
+              "updatedAt": "2026-10-23T20:22:15Z"
+            }
+          ],
+          "pageInfo": {
+            "endCursor": "Y3Vyc29yOnYyOpK0MjAyNi0wOC0xNVQxMjoxOTo1N1rPAAAAATOFHF8=",
+            "hasNextPage": true
+          }
+        }
+      }
+    }
+  },
+  "variables": {
+    "after": "Y3Vyc29yOnYyOpK0MjAyNi0wOC0xNVQwNDoyNjoyMFrPAAAAATNrRWo=",
+    "first": 5,
+    "name": "airzoned",
+    "owner": "yuvalrakavy",
+    "since": "2024-10-29T12:00:00.000Z"
+  }
+}

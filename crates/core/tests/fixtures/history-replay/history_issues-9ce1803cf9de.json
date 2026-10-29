@@ -1,0 +1,371 @@
+{
+  "name": "history_issues",
+  "response": {
+    "data": {
+      "repository": {
+        "issues": {
+          "nodes": [
+            {
+              "author": {
+                "login": "yuvalrakavy"
+              },
+              "authorAssociation": "OWNER",
+              "body": "Three gate findings against the receiver-health check added in 2ae3113. All confirmed against code.\n\n## A. It misses the commonest dead-speaker case: a member that never connected\n\n`Session::unhealthy_members` iterates `self.senders` only. A powered-off speaker still RESOLVES — an\nexplicit `--speaker NAME=IP:PORT` mapping never expires, and `on_mdns_service` deliberately keeps the\nlast-good address on withdrawal — so `add` reaches `connect_and_spawn`, the TCP connect fails, and the\nmember lands in `pending` with NO sender. `unhealthy_members()` returns empty, the transition latch\nnever flips, and `reconcile` has already published `Playing` unconditionally.\n\nSo the Store reports `Playing` over a dead room indefinitely, for what is arguably the most likely\ntrigger — which is the exact symptom the commit is named for. Compounded by there being no retry path\nat all when `mdns_realm` is unset: `retry_unresolved`'s only caller is the mDNS branch.\n\nRelated, same area: `connect_and_spawn` against an unreachable-but-ARP-live speaker blocks the converge\nthread for up to `connect_timeout` (10 s) plus up to five 15 s RTSP read timeouts — which CAN exceed\nthe 30 s MQTT keepalive.\n\n## B. The heartbeat uses wall-clock `SystemTime`, so a clock step publishes a bogus `Failed`\n\nFound independently by two finders. `now_millis()` is `SystemTime`-based, unlike every other timing\nprimitive in the engine, which uses `Instant`. `timing_silence_ms()` is `now_millis() - last_timing_ms`.\n\nOn a box without a battery-backed RTC — the embedded/Pi deployment profile — the daemon can start\nbefore NTP sync. When `timesyncd`/`chrony` steps the clock forward, every connected member instantly\nreports a silence larger than the step itself, trivially exceeding the 8 s threshold, and\n`check_health` publishes retained `Failed` with a nonsense reason (\"speaker stopped responding\n(1234567s of silence)\") over a healthy room. It self-heals on the next timing request ~2.5 s later, so\nit is a `Failed`→`Playing` flap rather than a stuck state, but the retained State topic and the UI take\nit. There is no NTP-readiness gate anywhere in the repo.\n\nThe mirror case is safe but not free: a BACKWARD step makes `saturating_sub` return 0, zeroing the\ndanger clock and masking a genuinely accumulating silence if the step lands mid-outage.\n\nFix: millis relative to a process-start `Instant`, which is immune to both directions.\n\n## C. The threshold is single-device-calibrated, hardcoded, and rides an unacknowledged transport\n\n`TIMING_SILENCE_UNHEALTHY_MS = 8_000` was derived from ONE measured receiver (a Yamaha at a ~2.0–2.5 s\nrequest cadence). It is a `pub const`, absent from `ConfigDoc`/`AudioParams`, so no operator can raise\nit for a receiver that legitimately polls less often. The requests arrive over UDP with no redundancy,\nso a lost datagram is indistinguishable from \"receiver stopped\" — an 8 s / 3-4-packet loss burst on\nWi-Fi would publish a false `Failed`. Mechanism is certain; real-world frequency is NOT measured, so\ntreat the urgency as unverified.\n\n## Test coverage: currently zero\n\nConfirmed by mutation AND structurally — nothing in the tree references `check_health`,\n`unhealthy_members`, `timing_silence_ms`, or `TIMING_SILENCE_UNHEALTHY_MS`. Three independent\nmutations (invert the comparison, never update the heartbeat, hard-wire \"always healthy\") all left\n67/67 green. The entire feature could be inert and the suite would not notice.\n\nNeeds a seam: make the health decision a pure function over (last_seen, now, threshold) so the\nboundary, the clock-step behaviour, and the pending-member case are all testable without hardware.\n\n## Note on scope, so it is not re-derived\n\nThis check detects a receiver that is GONE (powered off, standby, off-network, crashed). It does NOT\ndetect a receiver that is present but not rendering — that was tested directly and is tracked in #4.\n",
+              "closedAt": "2026-08-08T21:24:41Z",
+              "comments": {
+                "nodes": [
+                  {
+                    "author": {
+                      "login": "yuvalrakavy"
+                    },
+                    "authorAssociation": "OWNER",
+                    "body": "Node **MP-306** in the Store repo's media port DAG (`docs/media-port-dag.md`) — part of the MP-3xx reliability band of the live-frontier mission.",
+                    "createdAt": "2026-08-03T10:23:51Z"
+                  },
+                  {
+                    "author": {
+                      "login": "yuvalrakavy"
+                    },
+                    "authorAssociation": "OWNER",
+                    "body": "## §A reproduced live on real hardware, 2026-08-05\n\nDuring the `fix/airzoned-defect-band` hardware smoke (a#10), an isolated test daemon (`--speaker\nSalon=10.0.2.35:7000`, no `--mdns-realm`) hit exactly this mechanism against a real endpoint whose\nAirPlay-receiver service had been deliberately disabled:\n\n```\n[player] session=salon CREATED source=file://...tone_long.wav ...\n[engine] add_member m1: SETUP on 10.0.2.35 — 535.478421375s after our last TEARDOWN there\n[engine] add_member m1: RTSP connect: TCP connect to 10.0.2.35:7000: Connection refused (os error 61); will retry next converge\n```\n\nRetained `{Root}/State/salon`, checked via `mosquitto_sub` **8+ seconds later**:\n\n```json\n{\"Transport\":\"Playing\",\"NowTitle\":\"tone_long\"}\n```\n\nConfirms the write-up exactly: TCP connect fails, the member lands in `pending` with no sender,\n`unhealthy_members()` sees nothing, and the eager `reconcile` publish is never corrected.\n\n**New data point beyond what was already confirmed against code**: the \"no retry path at all when\n`mdns_realm` is unset\" claim now has an empirical measurement, not just a code trace. Only the ONE\n`Connection refused` line appears in the whole log — no second attempt in the following 8+ seconds,\ndespite the log's own text (\"will retry next converge\") implying one should eventually happen. With no\n`--mdns-realm` and no new desired-doc publish, nothing ever calls `reconcile` again for this session, so\nit sits silently wrong until an external event arrives. Matches the issue's own diagnosis\n(\"`retry_unresolved`'s only caller is the mDNS branch\") precisely — flagging as CONFIRMED rather than a\nnew finding, since the mechanism was already correctly named.\n\n## Requirement input, from the operator's seat (user, 2026-08-05)\n\n> Saying playing when it is not playing is not accurate, the reported state should be \"Cannot connect to\n> Receiver\" or something like that.\n\nWorth keeping attached to this issue for whoever designs the fix: the desired correction isn't merely\n\"stop claiming Playing\" but a distinct, named state the operator can act on — not folded into the\nexisting `Failed` classification (that already means something specific: was healthy, went silent) or\nleft as a silent no-op. A never-connected member is a different situation from a connected-then-silent\none, and arguably deserves its own `ObservedState`/`StatusReason`, not a reuse of `Failed`'s wording.\n\nNo code changed here — this branch's own contract is not to bolt unrelated fixes onto it right before\nmerge. Filed as evidence for whenever §A is picked up.\n",
+                    "createdAt": "2026-08-05T08:44:00Z"
+                  },
+                  {
+                    "author": {
+                      "login": "yuvalrakavy"
+                    },
+                    "authorAssociation": "OWNER",
+                    "body": "## Correction to the requirement framing above (user, 2026-08-05)\n\n> the session is playing when it is playing on at least one receiver, the UI in the room for which\n> playing was asked and the speaker is unavailable (Salon in our test) should show that it was error\n\nThe previous comment suggested the SESSION-level `Transport` was the thing to correct. That's wrong,\nand worth flagging before it misleads whoever designs the fix: session-level `Playing` when at least one\nmember is genuinely rendering is CORRECT — it already matches this codebase's own stated philosophy for\nthe connected-then-silent case (`Degraded`'s comment: \"PARTIAL failure is NOT a session failure. One\nsilent member among several leaves the room audible on the others\").\n\nThe actual gap is **per-room granularity**. My live test happened to use single-member sessions, which\nmade the session-level state and the room-level state look like the same question — they are not. The\nreal requirement: the room whose OWN speaker failed to connect needs ITS OWN error indication, distinct\nfrom whatever the overall session reports, exactly as `Degraded`'s `StatusReason` names WHICH speakers\nwent quiet for the connected-then-silent case.\n\nThis is closer to a design question than a bug-fix: does anything in the current wire model (or the\nStore's RoomAudio schema on the other side of this daemon) expose a **per-member** observed status today,\nor only the session-level `ObservedState`? If only session-level, the fix isn't a different string in\n`reconcile` — it's a new surface. Flagging for whoever scopes this rather than guessing at the answer\nhere.\n",
+                    "createdAt": "2026-08-05T08:45:12Z"
+                  },
+                  {
+                    "author": {
+                      "login": "yuvalrakavy"
+                    },
+                    "authorAssociation": "OWNER",
+                    "body": "## Precedence rule for the per-room UI (user, 2026-08-05)\n\n> The UI in each room should show the status of the room's receiver. If there is no error, then it show\n> the session state.\n\nSo: room-level error takes precedence when it exists; otherwise the room falls back to displaying the\nsession's state. This resolves the open question in the previous comment about whether a per-member\nsurface is needed — it is, and this is the precedence rule for it. Not implementing here; recording for\nwhoever scopes this.",
+                    "createdAt": "2026-08-05T08:45:33Z"
+                  },
+                  {
+                    "author": {
+                      "login": "yuvalrakavy"
+                    },
+                    "authorAssociation": "OWNER",
+                    "body": "## Correction: the \"zero test coverage\" claim is now partly stale (2026-08-08)\n\nRe-checked against the tree at airzoned `1ad466c`, because the issue's coverage section is load-bearing for whoever picks this up and it is no longer accurate.\n\n**What is now covered**, mostly as a side effect of MP-104 and #24/#25:\n\n- `SessionHealth::classify` — the three-way verdict — is tested, including the negative control that stops it collapsing back to a boolean.\n- `check_health` itself is now driven by tests (the mid-play source-reason republish, its edge-triggered counterpart, and the warm-session skip).\n\n**What is still uncovered, and it is the part this issue is about:** `unhealthy_members()` and `timing_silence_ms()` have **no references anywhere outside production code**. Verified by grep, not inferred. So the *detection* — \"is this member silent\" — remains untested, and §A and §B both live inside it. The issue's conclusion stands; only its evidence needs updating.\n\n## What got cheaper\n\n`Player` now records every published observed-state payload in tests (`published_for(session_id)`, `#[cfg(test)]`), added because a \"wiring guard\" that composed its own expected value turned out to be worthless. That is exactly the seam §A needs: the assertion for a never-connected member is *\"the store was told `Playing` when it should have been told something else\"*, which was unassertable before today.\n\n## The crux is a WIRE question, not a daemon patch\n\nWorth stating plainly before anyone starts coding, because it follows from the two requirement comments above and their self-correction. Session-level `Playing` is **correct** when at least one member is genuinely rendering — that matches the `Degraded` philosophy already in the code. The fault belongs to **the room that asked and got nothing**.\n\nBut `ObservedState` carries exactly one `Transport` and one `StatusReason` **for the whole session**. There is no per-member state on the wire at all. So §A cannot be fixed by making `unhealthy_members` also scan `pending`: that produces a correct verdict with nowhere to put it. It needs a decision about how a per-member fault is represented on the `{root}/State/{id}` document, and a matching store-side model — the same class of change as a wire-contract revision, not an afternoon's patch.\n\n§B (wall-clock → `Instant`) and §C (threshold into config) are independent of that and are both small. They could ship first without prejudging the §A design.",
+                    "createdAt": "2026-08-08T19:43:19Z"
+                  },
+                  {
+                    "author": {
+                      "login": "yuvalrakavy"
+                    },
+                    "authorAssociation": "OWNER",
+                    "body": "## Shipped 2026-08-08 — airzoned `196541c`, Store `7d18820c`\n\nSpec: Store `docs/superpowers/specs/2026-08-08-receiver-health-design.md`. All three parts.\nScope and grace policy chosen by the user; the panel/UI consumer of the per-room status stays a\nseparate node.\n\n### §A — never-connected members\n\nHealth now classifies over **three** populations — rendering, silent (connected, went quiet), absent\n(desired, never up, past its grace) — and `Failed` is `rendering == 0` rather than `unhealthy >= live`.\nOnce absent members exist those stop being the same statement.\n\nGraced **by cause**, which is the user's rule applied literally: **immediate when the receiver actively\nrefused us**, 20 s whenever we simply have no address yet. A third cause this issue did not mention got\nfolded in: `add` returned early for a member with no `SpeakerName`, leaving it in *neither* map, so a\nroom silent for that reason was invisible to health entirely. It is graced too — a `SessionMember`\ncreated before its binding resolves publishes nameless and republishes moments later.\n\nThe per-room surface uses `AudioSessionStatus.MemberStates`, and the comment above claiming there was\nno per-member state on the wire was **wrong** — see the correction below.\n\n### Two things found by probing that changed what \"fixed\" means\n\n**There was no recovery path at all.** Not just with `mdns_realm` unset, as the issue says — a receiver\nrebooting on the **same IP** re-announces, `on_mdns_service` classifies that as an unchanged refresh\nand returns `false`, so nothing re-converges; the store does not republish either (`LastDesired` dedups,\nwhich is exactly why the daemon retains the doc); and `tick` had no retry. So this issue's new `Failed`\nverdict would have been **permanent for a temporary condition**. Added a per-session backoff retry\n(5 s → 60 s), armed *before* the attempt so a 10 s connect timeout does not silently extend the\ninterval it is measuring.\n\n**The pending ghost.** `converge` computed removes from the sender set, while `Session::remove` is the\nonly thing that clears `pending` — so a member that was pending when the store dropped it was never let\ngo. Harmless before; under the new verdict, a permanent `Failed` for a member the store had already\nreleased. `MemberBackend::tracked()` now feeds removes while `keys()` still feeds adds; the two must\nstay distinct, and both directions are pinned by tests.\n\n### §B and §C\n\n`now_millis` → `monotonic_millis`, over `Instant`. **Renamed**, not just re-implemented: the old name\ninvited the next caller to read it as an epoch timestamp, which it can never be again.\n\n`TimingSilence` is now a config knob on both sides (daemon `ConfigDoc`/TOML, store `AudioConfig`), read\nfrom the **live** config rather than the session's `AudioParams` snapshot — nothing about a silence\nthreshold is baked into a running session the way preroll is baked into its clock, so raising it should\nhelp the session misbehaving *now*. Verified on both sides that an absent key means \"leave it alone\",\nso the two repos could ship in either order.\n\n### Correcting this issue's own scope note, and my comment above\n\nThe parenthetical about `connect_and_spawn` blocking past the 30 s MQTT keepalive is **stale**. It was\ntrue when this was filed (2026-08-02); the loop/worker split landed 2026-08-04 (`3e72fbf`), and `poll()`\nnow runs on the loop thread. A blocked worker delays inbound commands and cannot drop the connection —\nwhich is what made the retry above affordable.\n\nAnd my own 2026-08-08 comment said *\"there is no per-member state on the wire at all\"*. True of the\ndaemon, **false of the contract**. `MemberStates` has existed since M0 with ingestion *and* retraction\nalready tested store-side, and the keys line up with no translation. Had that stood we would have\ndesigned a wire revision for a slot that was already built and proven.\n\n### Coverage\n\n195 daemon tests (was 178) and 89 store-side media tests. **14 negative controls**, each reddening\nexactly the tests claiming its mechanism, and the `keys()`/`tracked()` pair verified in *both*\ndirections — the plausible-looking one-line fix for either failure breaks the other.\n\nTwo of my own tests were vacuous, both because the asserted value equalled the STARTING value: the\ngrace test's re-attempts all landed in the same microsecond (fixed by making `now` a parameter), and\nthe store-side prune test polled for \"zero member states\", which is also the pre-ingest state (fixed by\nsequencing on a marker riding the same payload). Both passed against a deleted production call until\nthe negative controls caught them.\n\n### Still out of scope\n\nThe panel/UI consumer and the precedence rule (room error wins, else session state) — the facts are on\nthe wire and in the store, nothing renders them yet. And #4, present-but-not-rendering, which is\nindependent of this (the DAG had them wrongly coupled and that edge is now removed).",
+                    "createdAt": "2026-08-08T21:24:39Z"
+                  }
+                ],
+                "totalCount": 6
+              },
+              "createdAt": "2026-08-02T17:08:33Z",
+              "id": "I_kwDOTBQnEM8AAAABLJ73YQ",
+              "labels": {
+                "nodes": [
+                  {
+                    "name": "bug"
+                  }
+                ],
+                "totalCount": 1
+              },
+              "number": 6,
+              "repository": {
+                "nameWithOwner": "yuvalrakavy/airzoned"
+              },
+              "state": "CLOSED",
+              "stateReason": "COMPLETED",
+              "timelineItems": {
+                "nodes": [
+                  {
+                    "__typename": "LabeledEvent",
+                    "actor": {
+                      "login": "yuvalrakavy"
+                    },
+                    "createdAt": "2026-08-02T17:08:34Z",
+                    "id": "LE_lADOTBQnEM8AAAABLJ73Yc8AAAAGt9Mo5A",
+                    "label": {
+                      "name": "bug"
+                    }
+                  }
+                ],
+                "totalCount": 1
+              },
+              "title": "Health check: misses never-connected members, uses wall-clock time, and has zero test coverage",
+              "updatedAt": "2026-08-08T21:24:41Z"
+            },
+            {
+              "author": {
+                "login": "yuvalrakavy"
+              },
+              "authorAssociation": "OWNER",
+              "body": "## Observed (traced to code, not reproduced)\n\nOn SIGTERM, LIVE members are torn down with **no fade at all** — the exact condition this branch\nestablished as the receiver-wedge trigger.\n\n`engine::Session` has NO `Drop` impl (the only `impl Drop`s in the tree are `StreamSource`,\n`PlaylistSource`, `ActiveSession`, `Player`, `MemberSender`), and `request_stop` has exactly one call\nsite: `Session::remove`. So the shutdown path is:\n\n```\nPlayer::drop -> sessions -> ActiveSession::drop -> engine -> senders map drops\n             -> MemberSender::drop -> teardown()      // immediate RTSP TEARDOWN\n```\n\nImmediate TEARDOWN with the envelope at FULL gain, while the receiver still holds ~1 s of preroll plus\nits own Audio-Latency of full-level audio. No fade, no park, no wait.\n\n`RetiringPool::drain`'s own comment states the rule for PARKED members: \"a daemon shutdown that tears\ndown mid-fade leaves the receiver wedged for the NEXT daemon — the exact failure graceful shutdown\nexists to prevent.\" Live members get none of that protection, and this is the path that runs on every\ndev-loop `pkill`/restart — the very scenario the graceful-SIGTERM commit (6f434c9) exists for.\n\nEither the mid-fade causal model is incomplete or this path re-creates the wedge. Both confident\ncomments cannot be right.\n\n## Not yet reproduced — check before designing\n\nGraceful shutdown was exercised live on 2026-08-02 and appeared to work: SIGTERM produced a clean ~2 s\nexit with teardown, and a fresh daemon connected to the same receiver with no receiver restart. That\nsuggests full-gain teardown alone may NOT wedge the receiver, and that the wedge needs a\nteardown-then-SETUP in quick succession (the restart case had several seconds of gap).\n\nSo this may be latent rather than live. Reproduce first: SIGTERM the daemon mid-playback, restart it\nimmediately, and replay the same speaker.\n\n## Latent ordering trap in the same place\n\n`Player::drop` stops AND JOINS the reaper — thereby running `drain()` — BEFORE `sessions` drops. If\nanyone later makes shutdown fade-and-park its live members (the obvious fix for the above), those\nmembers would be parked into a pool whose reaper is already gone, and would never be torn down at all.\nNo live path reaches this today, but the fix for the main issue walks straight into it.\n\n## Relationship to other issues\n\nFixing this properly interacts with the teardown-wait redesign in #5 — a shutdown fade needs the same\n\"has it been rendered\" signal, and needs the reaper (or an equivalent) to outlive the sessions. Best\ndesigned together.\n",
+              "closedAt": "2026-08-09T09:02:20Z",
+              "comments": {
+                "nodes": [
+                  {
+                    "author": {
+                      "login": "yuvalrakavy"
+                    },
+                    "authorAssociation": "OWNER",
+                    "body": "Node **MP-307** in the Store repo's media port DAG (`docs/media-port-dag.md`) — part of the MP-3xx reliability band of the live-frontier mission.",
+                    "createdAt": "2026-08-03T10:23:52Z"
+                  },
+                  {
+                    "author": {
+                      "login": "yuvalrakavy"
+                    },
+                    "authorAssociation": "OWNER",
+                    "body": "## Duty-0 recheck, 2026-08-09: the central claim does not hold against current code\n\nThis issue asked for exactly this (*\"Not yet reproduced — check before designing\"*), so: checked, and the premise is largely false. Recording it before anyone designs a fix for a hazard that is already prevented.\n\n### The SIGTERM path is not the path traced here\n\nThe trace in this issue is:\n\n```\nPlayer::drop -> ActiveSession::drop -> senders map drops -> MemberSender::drop -> teardown()\n```\n\nThat is the **residual** path, not what SIGTERM runs. `SessionSink::shutdown` calls `shutdown_sessions` (`player.rs:1183`), which for each session converges to a **zero-member** desired doc first. That runs `Session::remove` per member — i.e. **fade-out envelope + park in the retiring pool** — and only then calls `reap_all`. `Player::drop` sees whatever that missed, which is normally nothing.\n\n### Live evidence, twice today\n\n```\n10:50:09 [airzoned] shutdown signal — tearing down sessions and disconnecting.\n10:50:09 [player] session=m33558657 SHUTDOWN — fading out and draining before teardown\n10:50:10 [engine] retire: TEARDOWN 10.0.2.158 — silence held 1.096918208s before teardown\n                  (receiver render_delay 1.092879819s, cut_short=true)\n```\n\nSilence held **1.097 s against a render_delay of 1.093 s** — the drain rule was satisfied. So the specific hazard this issue names — *\"Immediate TEARDOWN with the envelope at FULL gain, while the receiver still holds ~1 s of preroll plus its own Audio-Latency of full-level audio\"* — **did not happen**. The receiver then accepted a fresh SETUP and rendered normally.\n\nThat also explains the 2026-08-02 observation recorded in this issue (\"appeared to work\"): it worked because it works.\n\n### What `cut_short=true` actually means\n\nNot \"the drain was cut short\". It is a **parameter**: `reap_all` hoists `cut_to_silence()` across all members under one lock so their drains overlap, and `retire.rs:583` applies it. The gain goes to zero at once instead of riding the fade ramp — then the drain still waits out the render delay. Compare the demotion path from the same log, which lets the ramp run: `cut_short=false`.\n\n### What is actually left\n\n1. **A hard cut rather than an audible fade on shutdown.** Real, but it is a UX defect (an abrupt stop) — not the wedge trigger. The drain that prevents the wedge is already honoured.\n2. **The `MemberSender::drop` residual.** Genuinely unfaded and immediate, but it only fires for members `shutdown_sessions` did not park — and if the worker is abandoned past its grace, the process exits without running `Drop` at all.\n\n### Suggested disposition\n\nNarrow this issue to (1) — \"shutdown cuts to silence instead of fading\" — and drop the wedge framing, which is what made it a P1. Both confident comments this issue says cannot both be right **can** both be right: the drain rule protects parked members, and live members are parked by `shutdown_sessions` before reaping.\n\n**#14 is unaffected** and remains real — `reap_all` (`retire.rs:494`) does `for ip in ips { self.reap(*ip); }` sequentially with the RTSP I/O inline, exactly as filed.",
+                    "createdAt": "2026-08-09T08:52:11Z"
+                  },
+                  {
+                    "author": {
+                      "login": "yuvalrakavy"
+                    },
+                    "authorAssociation": "OWNER",
+                    "body": "## Closed as NARROWED — `a6fa981`\n\nThe narrowing is most of the value, and this issue asked for it (*\"Not yet reproduced — check before designing\"*). Full duty-0 evidence in the [previous comment](https://github.com/yuvalrakavy/airzoned/issues/7#issuecomment-5230671859); in short: the wedge framing was wrong, the audible defect was real, and only the second one is fixed here.\n\n**Not fixed, because it was never broken:** the drain rule already protects live members. `shutdown_sessions` converges each session to zero members first — fade + park — and only then reaps. On hardware the shutdown teardown held **1.097 s of silence against a 1.093 s render delay**.\n\n**Fixed:** shutdown cut to silence in one buffer instead of letting the ramp run — an audible click on every dev-loop restart. It now waits out the leave-fade, paid once for all members (each envelope runs on its own send thread) and clamped at 2 s so a generous fade cannot widen the SIGTERM→SIGKILL window.\n\n**It costs nothing, measured rather than assumed:** waiting makes silence start earlier, so the drain that follows waits correspondingly less. Total shutdown is unchanged at ~2.00 s either way.\n\nThat same fact made my first test vacuous — it asserted `elapsed >= 450ms` and passed on the 2 s of teardown cost. Its own zero-fade control caught it (2.004 s vs 2.003 s). The test now asserts the **decision** rather than the elapsed time, because the audible ramp has no seam at this level — which is #9/#15, and is the concrete reason those matter.\n\n**Still open in this area:** #14 (shutdown serial in N receivers, no global bound) is untouched and real — `reap_all` at `retire.rs:494` reaps sequentially with the RTSP I/O inline, exactly as filed.",
+                    "createdAt": "2026-08-09T09:02:20Z"
+                  }
+                ],
+                "totalCount": 3
+              },
+              "createdAt": "2026-08-02T17:09:19Z",
+              "id": "I_kwDOTBQnEM8AAAABLJ8Brg",
+              "labels": {
+                "nodes": [
+                  {
+                    "name": "bug"
+                  }
+                ],
+                "totalCount": 1
+              },
+              "number": 7,
+              "repository": {
+                "nameWithOwner": "yuvalrakavy/airzoned"
+              },
+              "state": "CLOSED",
+              "stateReason": "COMPLETED",
+              "timelineItems": {
+                "nodes": [
+                  {
+                    "__typename": "LabeledEvent",
+                    "actor": {
+                      "login": "yuvalrakavy"
+                    },
+                    "createdAt": "2026-08-02T17:09:19Z",
+                    "id": "LE_lADOTBQnEM8AAAABLJ8Brs8AAAAGt9NaPQ",
+                    "label": {
+                      "name": "bug"
+                    }
+                  }
+                ],
+                "totalCount": 1
+              },
+              "title": "SIGTERM tears live members down with no fade — the condition established as the wedge trigger",
+              "updatedAt": "2026-08-09T09:02:20Z"
+            },
+            {
+              "author": {
+                "login": "yuvalrakavy"
+              },
+              "authorAssociation": "OWNER",
+              "body": "## Observed (traced to code)\n\n`CrossfadeSeconds` arrives from the MQTT desired doc as an unvalidated `Option<f64>`\n(`desired.rs`), deserialized by serde with no range check between parse and use.\n\n`f64::INFINITY` is reachable without adversarial intent — an upstream divide-by-zero in the Store, or\nany numeric literal that overflows `f64` during JSON parse (valid JSON). It passes the\n`crossfade_secs > 0.0` guard in `playlist.rs`, and Rust's defined saturating float->int cast makes\n`overlap_frames = usize::MAX`.\n\n`can_xfade`'s `overlap_frames * 2` (`playlist.rs`) then overflows `usize`.\n\n## Why this is not theoretical for this project\n\n`scripts/restart-daemon.sh` runs plain `cargo build` and launches `target/debug/airzoned`, and\n`Cargo.toml`'s `[profile.release]` only sets `opt-level = 3`. So the profile this repo's own tooling\nships has `overflow-checks = true` (the dev default) — the multiplication PANICS.\n\nIt runs on `PlaylistSource`'s dedicated thread, so it does not abort the whole multi-room daemon\n(unwind, no shared-lock poisoning on this path). But it silently kills that one session's audio: the\nchannel's sender drops and `pull()` starts returning `Eof`, leaving only a raw panic backtrace and no\ndiagnostic naming the bad value.\n\nIn a true `--release` build the same input silently WRAPS instead, permanently disabling crossfade for\nthat session — no crash, same missing-validation root cause, harder to notice.\n\n## Expected\n\nA non-finite or absurd `CrossfadeSeconds` should be rejected or clamped where the desired doc is\nparsed, with a log line naming the value, rather than reaching the arithmetic.\n\nWorth auditing the sibling numeric fields from the same doc (`DesiredVolume`, and the config lane's\n`Preroll`/`SilenceLead`/`JoinFade`/`LeaveFade`/`RetireGrace`) in the same pass — none of them are\nrange-validated either, and `LeaveFade` vs `RetireGrace` has its own coupling bug in #5.\n",
+              "closedAt": "2026-08-05T08:50:44Z",
+              "comments": {
+                "nodes": [
+                  {
+                    "author": {
+                      "login": "yuvalrakavy"
+                    },
+                    "authorAssociation": "OWNER",
+                    "body": "Node **MP-305** in the Store repo's media port DAG (`docs/media-port-dag.md`) — part of the MP-3xx reliability band of the live-frontier mission.",
+                    "createdAt": "2026-08-03T10:23:50Z"
+                  }
+                ],
+                "totalCount": 1
+              },
+              "createdAt": "2026-08-02T17:09:20Z",
+              "id": "I_kwDOTBQnEM8AAAABLJ8CBw",
+              "labels": {
+                "nodes": [
+                  {
+                    "name": "bug"
+                  }
+                ],
+                "totalCount": 1
+              },
+              "number": 8,
+              "repository": {
+                "nameWithOwner": "yuvalrakavy/airzoned"
+              },
+              "state": "CLOSED",
+              "stateReason": "COMPLETED",
+              "timelineItems": {
+                "nodes": [
+                  {
+                    "__typename": "LabeledEvent",
+                    "actor": {
+                      "login": "yuvalrakavy"
+                    },
+                    "createdAt": "2026-08-02T17:09:21Z",
+                    "id": "LE_lADOTBQnEM8AAAABLJ8CB88AAAAGt9Nbqg",
+                    "label": {
+                      "name": "bug"
+                    }
+                  }
+                ],
+                "totalCount": 1
+              },
+              "title": "Unvalidated CrossfadeSeconds: a non-finite value panics the playlist thread under the dev profile",
+              "updatedAt": "2026-08-05T08:50:44Z"
+            },
+            {
+              "author": {
+                "login": "yuvalrakavy"
+              },
+              "authorAssociation": "OWNER",
+              "body": "## Observed\n\nThere is no test harness for `Player` or the session lifecycle at all. `grep` across the tree finds\nnothing outside `player.rs` itself referencing `Player`, `ActiveSession`, `stop_session`, or\n`producer_detached`. Consequently the producer-linger added in 1dd554a — the fix that makes a long\nfade-out audible — is unverifiable by the suite.\n\nConfirmed by mutation, not inferred: never setting `producer_detached`, and never spawning the\nstopper thread, each leave 67/67 tests green and the suite output byte-identical to baseline.\n\nA regression there silently reintroduces the abrupt-cut bug the commit fixes, OR leaks a producer\nthread (and its ffmpeg child) forever, with zero test signal either way.\n\n## Why it is untestable today\n\n`stop_session` is a private method on `Player`, which owns a live `rumqttc::Client`, a\n`SpeakerResolver`, and a real `DaemonConfig`; the mechanism under test is a spawned thread that\nsleeps and then clears an `AtomicBool`. There is no injection point for time, and nothing observable\nexcept the side effect on a thread nobody holds.\n\n## What would make it testable\n\nThe decision and the effect want separating:\n\n* the DECISION (\"how long should the producer outlive this stop, if at all\") is already the pure\n  `leave_fade_duration`, and IS tested;\n* the EFFECT (\"the producer keeps running for that long, then stops and is joined\") needs a seam —\n  e.g. a small `ProducerLinger` type owning the flag, the handle and the delay, with the sleep behind\n  an injectable clock or a channel, so a test can drive it without wall-clock waits.\n\nThat type would also give #5's redesign somewhere to hang the \"wait until rendered\" logic, and #7's\nshutdown fade a place to reuse it. Worth doing as part of #5 rather than standalone.\n\n## Related\n\n* The fade-wait tests in `retire.rs` assert only LOWER bounds — details and the concrete escape are\n  in #5.\n* The health check has the same total absence of coverage — #6.\n",
+              "closedAt": "2026-08-09T10:12:02Z",
+              "comments": {
+                "nodes": [
+                  {
+                    "author": {
+                      "login": "yuvalrakavy"
+                    },
+                    "authorAssociation": "OWNER",
+                    "body": "Node **MP-308** in the Store repo's media port DAG (`docs/media-port-dag.md`) — part of the MP-3xx reliability band of the live-frontier mission.",
+                    "createdAt": "2026-08-03T10:23:54Z"
+                  },
+                  {
+                    "author": {
+                      "login": "yuvalrakavy"
+                    },
+                    "authorAssociation": "OWNER",
+                    "body": "## Duty-0 recheck, 2026-08-09 — the headline claim is stale, the residual is real\n\nChecked while doing #15, since the two were picked up together.\n\n**No longer true:** *\"There is no test harness for `Player` or the session lifecycle at all… `grep` across the tree finds nothing outside `player.rs` itself referencing `Player`, `ActiveSession`, `stop_session`\"*. The `idle_rig` module now exists — a full `Player` harness with a fake RAOP receiver — with roughly **139 `player.` call sites across ~48 tests**, including warm-hold expiry, eviction, source switching, health transitions and shutdown. It has been the workhorse for several features since.\n\n**Still true, and this is the whole remaining issue:** `producer_detached` appears at exactly **four sites, none of them a test**. So the producer-linger — the fix that makes a long fade-out audible — remains unverified, precisely as filed. The mutation evidence in this issue (never setting the flag, never spawning the stopper, both leaving the suite green) should be re-run against the current tree before designing, but the grep says it will still hold.\n\n**The proposed shape is now de-risked.** This issue asks to separate *the DECISION* from *the EFFECT*. That is exactly what #7's fix did an hour ago for the shutdown fade wait: the elapsed-time assertion turned out vacuous (it passed on ~2 s of teardown cost), so the decision is captured and asserted directly while the effect is left explicitly untested. It worked, and it is the pattern this issue proposes generalised.\n\n**Suggested narrowing:** retitle to the producer-linger specifically, and drop the \"no harness at all\" framing — otherwise the next person re-derives what `idle_rig` already provides. The related note at the bottom about #6 having \"the same total absence of coverage\" is also stale: #6 shipped with coverage on 2026-08-08.",
+                    "createdAt": "2026-08-09T10:09:20Z"
+                  },
+                  {
+                    "author": {
+                      "login": "yuvalrakavy"
+                    },
+                    "authorAssociation": "OWNER",
+                    "body": "## Closed — `989390a`\n\n**No new type was needed**, which was the surprise. This issue asked for a `ProducerLinger` with an injectable clock, on the grounds that *\"there is nothing observable except the side effect on a thread nobody holds\"*. But `producer_running` is an `Arc<AtomicBool>` — a test can clone it **before** the stop and watch the flag across the whole linger. The seam was already there; what was missing was a harness to reach it from, and `idle_rig` now provides one.\n\nSo the test asserts the **effect** directly: the producer keeps filling the ring while the fade drains, and stops once it is over.\n\nThat is the opposite call from #7's shutdown fade an hour earlier, and deliberately so. There the effect was genuinely unobservable — waiting for the fade makes the following drain wait correspondingly less, so total elapsed is unchanged — and only the decision could be captured. Here it is a flag anyone can read. **Test what is observable; capture the decision only when it is not.**\n\n**Both mutations this issue named now redden it**, and each hits a *different* assertion — never setting `producer_detached` fails the \"still filling\" claim, never spawning the stopper fails the \"and it stops\" claim. That is what will tell the two failure modes apart in a future report.\n\nThe headline framing was stale (see the previous comment): `idle_rig` had already closed the \"no harness at all\" half. Only the producer-linger survived, and that is what this closes.",
+                    "createdAt": "2026-08-09T10:12:02Z"
+                  }
+                ],
+                "totalCount": 3
+              },
+              "createdAt": "2026-08-02T17:09:43Z",
+              "id": "I_kwDOTBQnEM8AAAABLJ8HvQ",
+              "labels": {
+                "nodes": [
+                  {
+                    "name": "enhancement"
+                  }
+                ],
+                "totalCount": 1
+              },
+              "number": 9,
+              "repository": {
+                "nameWithOwner": "yuvalrakavy/airzoned"
+              },
+              "state": "CLOSED",
+              "stateReason": "COMPLETED",
+              "timelineItems": {
+                "nodes": [
+                  {
+                    "__typename": "LabeledEvent",
+                    "actor": {
+                      "login": "yuvalrakavy"
+                    },
+                    "createdAt": "2026-08-02T17:09:44Z",
+                    "id": "LE_lADOTBQnEM8AAAABLJ8Hvc8AAAAGt9N1vw",
+                    "label": {
+                      "name": "enhancement"
+                    }
+                  }
+                ],
+                "totalCount": 1
+              },
+              "title": "No test seam for the session lifecycle: the producer-linger is unverifiable",
+              "updatedAt": "2026-08-09T10:12:02Z"
+            },
+            {
+              "author": {
+                "login": "yuvalrakavy"
+              },
+              "authorAssociation": "OWNER",
+              "body": "## Observed (traced to code, not reproduced)\n\n`Player` runs on the MQTT loop thread (`mqtt.rs:83-135`), so every blocking operation inside it\nstalls the protocol itself. `MemberSender::connect_and_spawn` is the worst case. The budgets are in\n`rtsp.rs:61-63` — a 10 s `TcpStream::connect_timeout` and a 15 s read timeout — over five RTSP\nround-trips (auth-setup, ANNOUNCE, SETUP, RECORD, SET_PARAMETER, per `member.rs:131-149`).\n\n| Speaker state | Loop stalled for | vs. the 30 s keepalive (`mqtt.rs:47`) |\n|---|---|---|\n| powered off / unreachable | ≤ 10 s, usually far less — ECONNREFUSED and EHOSTDOWN return at once; the full 10 s needs a silently-dropping firewall | under it |\n| **N** unreachable members in one desired doc | **additive** — `Session::add` is called per member per converge | over it at N ≥ 3 |\n| **accepts TCP but stops answering RTSP** | 10 + 5 × 15 = **85 s** | far over it |\n\n## Why the third row matters more than it looks\n\nThat is the *wedged receiver* — the failure mode this repo has been chasing (#2, #5). So a wedge does\nnot merely silence one room: it stalls the daemon well past the keepalive, the broker drops the\nconnection, and the daemon loses its link to the store at exactly the moment the store needs to hear\nthat something is wrong.\n\nThe second row is the everyday version. A house with three speakers switched off re-stalls on every\nrepublish of the desired doc.\n\n## Two smaller consequences of the same cause\n\n- `check_health` runs once per loop iteration (`mqtt.rs:92`), and the loop otherwise sits in\n  `recv_timeout(6 s)`. Detection latency is therefore 8–14 s against an 8 s threshold, not 8 s.\n- `Player::publish_state` enqueues into rumqttc's request channel (`Client::new(opts, 64)`,\n  `mqtt.rs:52`), which is drained **only** by `EventLoop::poll()`. A handler that blocks therefore\n  holds its own `Failed` publish hostage precisely when it is worth sending.\n\n## Not reproduced — check before designing\n\nAll three rows are read off the code and the timeouts; none has been reproduced on hardware. The\ncheap experiment: power off a mapped speaker, add it to a desired doc, and watch whether the daemon\nanswers a second room's Play during the stall. Worth doing before sizing the fix.\n\n## Direction\n\nMove session handling onto its own thread and leave the MQTT loop as a forwarder — chapter 2 of\n`docs/superpowers/specs/2026-08-02-airzoned-teardown-safety-and-session-worker-design.md` in the\nStore repo. That deletes the whole class rather than shortening individual timeouts, and it is\nwhat makes the teardown wait in #5 free rather than something that has to be defensively bounded.\n\nShortening the RTSP timeouts is the cheap mitigation if the refactor is deferred, but it trades the\nstall for failed connects to slow receivers, so it is not a fix.\n",
+              "closedAt": "2026-08-05T08:53:21Z",
+              "comments": {
+                "nodes": [
+                  {
+                    "author": {
+                      "login": "yuvalrakavy"
+                    },
+                    "authorAssociation": "OWNER",
+                    "body": "The pre-merge gate on `feat/m3-streaming-sources` found two more callers on the same thread, both added or lengthened by that branch:\n\n* **`park`'s displacement path** drops the incumbent inline. That used to be an immediate teardown; since the drain rule it is `MemberSender::drop` — cut, wait for `StopComplete`, then wait `render_delay` ≈ 1.3 s healthy, up to the wait cap plus RTSP I/O if the receiver has stopped answering. `park` is reached from `Session::remove` on the converge/MQTT thread.\n* **`create_session` now reaps before connecting** (deliberately — it is what moved a member's join from `session_age=108s` to 1.2 s), so every Play pays the outgoing member's drain on that same thread.\n\nBoth matter for this issue specifically because the MQTT loop is also the only thread that can emit PINGREQ, and keepalive is 30 s. Enough blocking here triggers a broker-side disconnect and a resubscribe/redeliver cycle — which is the failure this issue is about, now reachable from two more places.\n\nChapter 2 (the session worker) is the fix: move session work off the MQTT loop entirely.\n",
+                    "createdAt": "2026-08-02T21:31:26Z"
+                  },
+                  {
+                    "author": {
+                      "login": "yuvalrakavy"
+                    },
+                    "authorAssociation": "OWNER",
+                    "body": "Node **MP-302** in the Store repo's media port DAG (`docs/media-port-dag.md`) — part of the MP-3xx reliability band of the live-frontier mission.",
+                    "createdAt": "2026-08-03T10:23:47Z"
+                  },
+                  {
+                    "author": {
+                      "login": "yuvalrakavy"
+                    },
+                    "authorAssociation": "OWNER",
+                    "body": "Fixed and merged to `main` (4320cf8), verified on real hardware.\n\n## The fix\n\n`3e72fbf` moves everything that can block on a receiver off the MQTT event-loop thread onto a new\nworker, connected by a bounded channel. The loop now only polls, subscribes, publishes `Active`, and\nforwards. Two full gate rounds hardened the split after it landed — see the merged commits for the\ndetail (`affba1a`, `67904bc`, `1112099`, `4320cf8`); worth calling out because the gates caught real\ndefects the original spec phase didn't anticipate: a blocking-send deadlock reachable via the loop's own\n`subscribe`/`publish` calls, missing panic containment on the RTSP connect path (a malformed peer reply\ncould otherwise abort the whole process or take every session down with it), a worker death leaving the\ndaemon silently zombied with no supervisor to restart it, and a connect-storm in the shutdown wait\nagainst an unreachable broker.\n\n## Hardware verification, 2026-08-05\n\n- Real Yamaha receiver (RX-V673), confirmed audible by ear. Multiple clean stop→replay cycles in the\n  logs — TEARDOWN completing, then SETUP succeeding again on the same IP within 1-2 ms.\n- Two independent real sessions to two different endpoints played simultaneously with zero\n  interference — direct confirmation of multi-session isolation.\n- A receiver made fully unreachable (AirPlay Receiver disabled) failed fast and non-fatally\n  (`Connection refused`), with zero observable effect on the concurrent session — confirms the\n  isolation property for the fast-fail case.\n- Clean bounded shutdown under real SIGTERM with genuine connection history: ~5 s, well inside the 35 s\n  restart-script bound.\n\n**Not covered**: the specific slow-hang case the daemon's own module doc names (a receiver that accepts\nthe TCP connection and then never replies to RTSP, blocking up to `RTSP_READ_TIMEOUT` per attempt) needs\na receiver losing power *while already connected* — no orderly close, socket goes silent rather than\nrefused. We didn't end up inducing that exact condition on hardware this round; the property itself is\ncovered structurally (RTSP work runs on the worker thread, verified by unit test and two adversarial\ngate passes), just not demonstrated live under that precise failure shape. Worth a follow-up hardware\npass if that distinction matters later.\n\nIncidental find during the hardware pass, unrelated to this fix and already routed: a never-connected\nmember's room stays reported \"Playing\" with no per-room error surfaced — that's `#6`, not `#10`; see the\ncomments there for the live repro and the design conversation it prompted.\n",
+                    "createdAt": "2026-08-05T08:53:20Z"
+                  }
+                ],
+                "totalCount": 3
+              },
+              "createdAt": "2026-08-02T19:08:24Z",
+              "id": "I_kwDOTBQnEM8AAAABLKXibA",
+              "labels": {
+                "nodes": [],
+                "totalCount": 0
+              },
+              "number": 10,
+              "repository": {
+                "nameWithOwner": "yuvalrakavy/airzoned"
+              },
+              "state": "CLOSED",
+              "stateReason": "COMPLETED",
+              "timelineItems": {
+                "nodes": [],
+                "totalCount": 0
+              },
+              "title": "The MQTT loop blocks on session work: a wedged receiver stalls the daemon 85 s and drops the broker link",
+              "updatedAt": "2026-08-05T08:53:21Z"
+            }
+          ],
+          "pageInfo": {
+            "endCursor": "Y3Vyc29yOnYyOpK0MjAyNi0wOC0wMlQxOTowODoyNFrPAAAAASyl4mw=",
+            "hasNextPage": true
+          }
+        }
+      }
+    }
+  },
+  "variables": {
+    "after": "Y3Vyc29yOnYyOpK0MjAyNi0wOC0wMlQxNzowNzo1OVrPAAAAASye7lE=",
+    "first": 5,
+    "name": "airzoned",
+    "owner": "yuvalrakavy",
+    "since": "2024-10-29T12:00:00.000Z"
+  }
+}

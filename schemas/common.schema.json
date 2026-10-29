@@ -450,7 +450,9 @@
             "write_failed",
             "session_seen",
             "session_gone",
-            "prepared"
+            "prepared",
+            "evaluated",
+            "truth_tag"
           ]
         },
         "subject": {

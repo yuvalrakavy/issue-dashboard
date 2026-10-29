@@ -14,7 +14,7 @@
 //! author and time only), so a live input carries the title and body; the builder takes
 //! comment bodies when its source has them.
 //!
-//! **Calibration** (2.4): a map is fitted by `eval` (phase 2). Until a key has one, the map in
+//! **Calibration** (2.4): a map is fitted by `eval` (`eval.rs`). Until a key has one, the map in
 //! force is none, `map_id` is null, and the calibrated probabilities are the raw ones.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -460,24 +460,29 @@ pub fn input_hash(input: &Value) -> String {
 // --- Calibration ----------------------------------------------------------------------------
 
 /// The map in force for (project, backend, decision, question hash) (2.4): the one its latest
-/// `evaluated` event names. Phase 1 records no evaluation, so there is none.
+/// `evaluated` event names, passing or not; `None` with no evaluation, or when the latest fit
+/// was at the grid edge (`uncalibratable`).
 pub fn map_in_force(
-    _conn: &Connection,
-    _project: &str,
-    _backend: &str,
-    _decision: &str,
-    _hash: &str,
-) -> Option<String> {
-    None
+    conn: &Connection,
+    project: &str,
+    backend: &str,
+    decision: &str,
+    hash: &str,
+) -> Result<Option<String>> {
+    crate::eval::map_in_force(conn, project, backend, decision, hash)
 }
 
-/// The calibrated probabilities of `raw` under map `map_id`: the identity without one (2.4).
-pub fn calibrate(raw: &BTreeMap<String, f64>, map_id: Option<&str>) -> Result<BTreeMap<String, f64>> {
+/// The calibrated probabilities of `raw` under map `map_id` (2.4): softmax(log p / T) over the
+/// answers (per area as yes/no); the identity without a map.
+pub fn calibrate(
+    conn: &Connection,
+    kind: AnswerKind,
+    raw: &BTreeMap<String, f64>,
+    map_id: Option<&str>,
+) -> Result<BTreeMap<String, f64>> {
     match map_id {
         None => Ok(raw.clone()),
-        Some(m) => Err(Error::refused(format!(
-            "calibration map {m}: maps are fitted by eval, which this build does not have"
-        ))),
+        Some(m) => Ok(crate::eval::apply_t(kind, raw, crate::eval::map_t(conn, m)?)),
     }
 }
 
@@ -659,20 +664,15 @@ fn stage_one(
     seq: i64,
 ) -> Result<std::result::Result<Value, Vec<String>>> {
     let f = cat.file("priority")?;
-    let mut answers = serde_json::Map::new();
+    let mut recorded = BTreeMap::new();
     let mut missing = Vec::new();
-    let mut top = BTreeMap::new();
     for d in &f.reads {
         let current = cat.question_hash(d, &[])?;
         match asked.get(&(item.to_string(), d.clone())) {
             Some(a) if a.question.question_hash == current && a.question.observed >= seq => {
-                top.insert(
+                recorded.insert(
                     d.clone(),
-                    a.suggestion["answer"].as_str().unwrap_or_default().to_string(),
-                );
-                answers.insert(
-                    d.clone(),
-                    json!({"answer": a.suggestion["answer"], "probabilities": a.suggestion["probabilities"]}),
+                    (a.suggestion["answer"].clone(), a.suggestion["probabilities"].clone()),
                 );
             }
             _ => missing.push(d.clone()),
@@ -681,18 +681,24 @@ fn stage_one(
     if !missing.is_empty() {
         return Ok(Err(missing));
     }
+    Ok(Ok(priority_extra(cat, &recorded)?))
+}
+
+/// What priority's input holds beyond the issue (2.1 stage 2): the first stage's answers as
+/// recorded (answer and calibrated probabilities, by decision), the rubric and `rubric_level`.
+pub fn priority_extra(cat: &Catalogue, recorded: &BTreeMap<String, (Value, Value)>) -> Result<Value> {
+    let f = cat.file("priority")?;
     let rubric = f
         .rubric
         .as_ref()
         .ok_or_else(|| Error::refused("decisions/priority.toml has no rubric"))?;
-    let level = rubric.level(
-        top.get("severity").map_or("", String::as_str),
-        top.get("reach").map_or("", String::as_str),
-        top.get("detectability").map_or("", String::as_str),
-    );
-    Ok(Ok(
-        json!({"recorded": answers, "rubric": rubric, "rubric_level": level}),
-    ))
+    let top = |d: &str| recorded.get(d).and_then(|(a, _)| a.as_str()).unwrap_or_default();
+    let level = rubric.level(top("severity"), top("reach"), top("detectability"));
+    let answers: serde_json::Map<String, Value> = recorded
+        .iter()
+        .map(|(d, (a, p))| (d.clone(), json!({"answer": a, "probabilities": p})))
+        .collect();
+    Ok(json!({"recorded": answers, "rubric": rubric, "rubric_level": level}))
 }
 
 /// The input of `decision` about an observed item, as `prepare` builds it and as `record`
@@ -837,7 +843,7 @@ pub fn prepare_with(
                 }
             };
             let qid = question_id(launch_id, id, &f.decision, &qhash, &ihash, o.seq);
-            let map_id = map_in_force(tx.conn(), &project, &backend, &f.decision, &qhash);
+            let map_id = map_in_force(tx.conn(), &project, &backend, &f.decision, &qhash)?;
             entries.push(json!({
                 "id": qid,
                 "item": o.source.alias,

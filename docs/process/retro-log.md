@@ -130,3 +130,22 @@ Template:
 - improve: a fact derived from another recorded answer gets a spec row "about which observation
   was that answer?" (F1 and F5 were both freshness of a dependency); and a lookup against an
   external resolver gets a row "does it resolve more than the identity named?" (the oid check).
+
+## 2026-10-29 triage phase 2/5: eval (T2)
+- time: implement ~45%, tests and controls ~25%, gates and fixes ~20%, real eval ~10%; friction
+  ~25 min (the exclamation-mark shell hook on every Rust test edit and probe, again; two fixture
+  controls that stayed green because the fixture's shares coincided).
+- catches: self-review=2 (fixtures whose bins/renderers made the guard unobservable)
+  gate=round 1: 7 S3 + 2 S2 (Codex), round 2: 5 S1 user=0 post-merge=n/a. Biggest: the
+  single-choice truth fold took the alphabetically first label instead of the latest one.
+- DG=n/a IG=81 post-merge=n/a
+- friction: a percentile golden stayed green under round-to-floor at seed 7 (adjacent resamples
+  equal); the control found it and a seed scan picked one that tells them apart.
+- tier-call: right (T2).
+- delegation: mutation finder Sonnet medium (~9 min, 8 survivors, none a production bug); depth
+  Codex high (9 findings, all real); confirming Sonnet medium (0 S2+); answering agents Opus 5.5
+  medium (6 x 40 questions ~70 s, then 1 for the one swapped question).
+- unconsolidated: 7
+- improve: an identity of a stored artifact (history file, manifest, tag) gets a spec row "which
+  request parameters must match to reuse it?" (F2, F3, F4, F5 were all reuse under a different
+  key); and a fold over an ordered log gets a row "latest, or a set?" per decision kind (F1).

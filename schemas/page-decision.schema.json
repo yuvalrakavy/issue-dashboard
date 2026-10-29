@@ -102,6 +102,10 @@
         "routing": {
           "$ref": "common.schema.json#/$defs/routing"
         },
+        "bulk": {
+          "description": "An accept_suggestion made by apply all (triage spec 4.3): owner_bulk, never ground truth (3.1).",
+          "type": "boolean"
+        },
         "closed_at": {
           "description": "The close a dismiss_closed dismisses: the item's closed_at as the page showed it (5.8).",
           "$ref": "common.schema.json#/$defs/timestamp"

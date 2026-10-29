@@ -1,0 +1,220 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yuvalrakavy/issue-dashboard/schemas/event-evaluated.schema.json",
+  "title": "Ledger event: evaluated",
+  "description": "A key (project, backend, decision, question hash) was evaluated (triage spec 3.5): its held-out metrics, its bars and the calibration map fitted on its tuning answers. The latest one names the map in force (2.4). The subject is the key; identity is the manifest and answers digests.",
+  "allOf": [
+    {
+      "$ref": "common.schema.json#/$defs/eventEnvelope"
+    }
+  ],
+  "properties": {
+    "kind": {
+      "const": "evaluated"
+    },
+    "subject": {
+      "description": "project/backend/decision/question hash.",
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*/[^@]+@[^/@]+/[a-z_]+/[0-9a-f]{12}$"
+    },
+    "distinct": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "manifest",
+        "answers"
+      ],
+      "properties": {
+        "manifest": {
+          "description": "The replay manifest's hash, or \"live\".",
+          "anyOf": [
+            {
+              "$ref": "common.schema.json#/$defs/sha256"
+            },
+            {
+              "const": "live"
+            }
+          ]
+        },
+        "answers": {
+          "$ref": "common.schema.json#/$defs/sha256"
+        }
+      }
+    },
+    "data": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "project",
+        "backend",
+        "decision",
+        "question_hash",
+        "mode",
+        "map_id",
+        "uncalibratable",
+        "t",
+        "n",
+        "n_tuning",
+        "accuracy",
+        "ece",
+        "ece_interval",
+        "classwise_ece",
+        "false_alarm_rate",
+        "exclusions",
+        "bars",
+        "unanswered",
+        "by_source"
+      ],
+      "properties": {
+        "project": {
+          "$ref": "common.schema.json#/$defs/projectName"
+        },
+        "backend": {
+          "description": "model@effort (triage spec 1.3); the model may hold '/', as claude/opus-5-5@medium.",
+          "type": "string",
+          "pattern": "^[^@]+@[^@/]+$"
+        },
+        "decision": {
+          "enum": [
+            "type",
+            "area",
+            "priority",
+            "severity",
+            "reach",
+            "detectability",
+            "likely_fixed",
+            "obsolete",
+            "support_question",
+            "duplicate"
+          ]
+        },
+        "question_hash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{12}$"
+        },
+        "mode": {
+          "enum": [
+            "replay",
+            "live"
+          ]
+        },
+        "map_id": {
+          "description": "The calibration map written; null when the fit was at the grid edge (2.4).",
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^[0-9a-f]{16}$"
+        },
+        "uncalibratable": {
+          "type": "boolean"
+        },
+        "t": {
+          "description": "The fitted temperature, on the grid 0.25..4.",
+          "type": "number",
+          "minimum": 0.25,
+          "maximum": 4
+        },
+        "n": {
+          "description": "Held-out examples scored.",
+          "type": "integer",
+          "minimum": 1
+        },
+        "n_tuning": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "accuracy": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "ece": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "ece_interval": {
+          "type": "array",
+          "items": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "minItems": 2,
+          "maxItems": 2
+        },
+        "classwise_ece": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          }
+        },
+        "false_alarm_rate": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 1
+        },
+        "exclusions": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^(filed|github_later|owner_accept|owner_edit|bulk_review:[A-Za-z0-9._-]+)$"
+          }
+        },
+        "bars": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "evaluated",
+            "bulk"
+          ],
+          "properties": {
+            "evaluated": {
+              "type": "boolean"
+            },
+            "bulk": {
+              "type": "boolean"
+            }
+          }
+        },
+        "unanswered": {
+          "description": "Held-out questions asked but not answered.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "by_source": {
+          "description": "Accuracy on the held-out owner truths apart (triage spec 3.1), keyed <provenance>/<from_backend>.",
+          "type": "object",
+          "propertyNames": {
+            "pattern": "^(owner_accept|owner_edit)/[^@]+@[^@/]+$|^(owner_accept|owner_edit)/none$"
+          },
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "n",
+              "accuracy"
+            ],
+            "properties": {
+              "n": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "accuracy": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -128,6 +128,9 @@ pub struct DecisionValue {
     /// The close a `dismiss_closed` dismisses: the item's `closed_at` as the page showed it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub closed_at: Option<String>,
+    /// An accept made by apply all (triage spec 4.3): `owner_bulk`, never ground truth (3.1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bulk: Option<bool>,
 }
 
 /// Why an issue is closed: GitHub's `state_reason`, as `gh issue close --reason` takes it.

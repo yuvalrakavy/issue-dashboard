@@ -1,0 +1,41 @@
+{
+  "seq": 41,
+  "time": "2026-10-29T09:05:00Z",
+  "kind": "evaluated",
+  "subject": "home/claude-opus-5-5@medium/likely_fixed/7d1e0b9c3a52",
+  "pred": 0,
+  "distinct": {
+    "manifest": "live",
+    "answers": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  },
+  "identity": "dccf042f915f71efcc908cf2ae73901446fae1c6a0d63c49b369707863ca5eea",
+  "data": {
+    "project": "home",
+    "backend": "claude-opus-5-5@medium",
+    "decision": "likely_fixed",
+    "question_hash": "7d1e0b9c3a52",
+    "mode": "live",
+    "map_id": null,
+    "uncalibratable": true,
+    "t": 0.25,
+    "n": 12,
+    "n_tuning": 9,
+    "accuracy": 0.75,
+    "ece": 0.18,
+    "ece_interval": [
+      0.09,
+      0.31
+    ],
+    "classwise_ece": {},
+    "false_alarm_rate": null,
+    "exclusions": [
+      "owner_accept"
+    ],
+    "bars": {
+      "evaluated": false,
+      "bulk": false
+    },
+    "unanswered": 0,
+    "by_source": {}
+  }
+}

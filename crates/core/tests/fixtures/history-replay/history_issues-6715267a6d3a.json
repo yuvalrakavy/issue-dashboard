@@ -1,0 +1,258 @@
+{
+  "name": "history_issues",
+  "response": {
+    "data": {
+      "repository": {
+        "issues": {
+          "nodes": [
+            {
+              "author": {
+                "login": "yuvalrakavy"
+              },
+              "authorAssociation": "OWNER",
+              "body": "## Observed\n\n`DaemonConfig::write_audio_toml` (`src/config.rs`) has no test coverage at all. Nothing in the crate\ncalls it from a test.\n\nIts own comment names the hazard it carries — a knob missing from the write path is silently dropped —\nand the mutation lens confirmed the hazard is live:\n\n```\n# deleted the `audio[\"MasterVolume\"] = ...` line entirely\ncargo test  ->  113 passed; 0 failed; 7 ignored     (unchanged)\n```\n\n## Expected\n\nDeleting a knob from the serializer should fail a test. The function is the persistence half of the\noperator config lane: an applied edit that is not written is an edit lost at the next restart.\n\n## Confirmed\n\n- Zero test callers: `grep -rn \"write_audio_toml\" src/` returns the definition and the single production\n  call site in `Player::apply_config`, nothing else.\n- The deletion mutation above leaves the suite green.\n- It is a no-op without a `--config` path (`src/config.rs`, the early `let Some(path) = &self.config_path\n  else { return }`), which is *correct* but means the common no-config deployment never exercises it\n  either.\n\n## Why it matters more than it looks\n\n`ConfigDoc` round-trips through this function, and a dropped knob is invisible: the value simply reads\nback as the compiled default, which is a valid value. That is the same silent-revert shape as #17, which\nthis band just fixed on the wire path — so the file path is the remaining way for an operator's setting\nto disappear without any error.\n\n## Suggested shape\n\nA round-trip test: build a non-default `AudioParams`, `write_audio_toml` to a temp file, load it with\n`DaemonConfig::from_file`, and assert every field survives. That fails the moment a knob is dropped from\neither side, and it needs no broker or receiver.\n\nA stronger version asserts the file also preserves keys OUTSIDE `[audio]`, which the function's comment\nclaims it does (\"preserving every other section\") and which is likewise untested.\n\nFound by the pre-merge gate on `fix/airzoned-defect-band`; pre-existing, not introduced by it.\n",
+              "closedAt": "2026-08-05T08:50:45Z",
+              "comments": {
+                "nodes": [],
+                "totalCount": 0
+              },
+              "createdAt": "2026-08-04T20:43:43Z",
+              "id": "I_kwDOTBQnEM8AAAABLeGcRQ",
+              "labels": {
+                "nodes": [
+                  {
+                    "name": "bug"
+                  }
+                ],
+                "totalCount": 1
+              },
+              "number": 21,
+              "repository": {
+                "nameWithOwner": "yuvalrakavy/airzoned"
+              },
+              "state": "CLOSED",
+              "stateReason": "COMPLETED",
+              "timelineItems": {
+                "nodes": [
+                  {
+                    "__typename": "LabeledEvent",
+                    "actor": {
+                      "login": "yuvalrakavy"
+                    },
+                    "createdAt": "2026-08-04T20:43:46Z",
+                    "id": "LE_lADOTBQnEM8AAAABLeGcRc8AAAAGvvaeJg",
+                    "label": {
+                      "name": "bug"
+                    }
+                  }
+                ],
+                "totalCount": 1
+              },
+              "title": "write_audio_toml has zero coverage: deleting a knob from it is undetectable",
+              "updatedAt": "2026-08-05T08:50:45Z"
+            },
+            {
+              "author": {
+                "login": "yuvalrakavy"
+              },
+              "authorAssociation": "OWNER",
+              "body": "## Observed\n\n`control_loop` in `src/engine/member.rs` is never driven by any test. The `a#12` fix has two halves and\nonly one of them is covered:\n\n| Half | Covered? |\n|---|---|\n| Clamp the peer-supplied count to the ring capacity | yes — `collect_retransmits` is a pure fn with tests on both edges |\n| Copy under the ring lock, SEND outside it | **no** |\n\nThe mutation lens moved the `audio.send_to` loop back inside the `ring.lock()` scope — the literal `a#12`\nshape, a mutex held across up to `RETRANSMIT_RING` UDP syscalls — and the whole suite stayed green:\n\n```\ncargo test  ->  113 passed; 0 failed; 7 ignored\n```\n\n## Expected\n\nReinstating \"hold the ring mutex across the sends\" should fail something. The send thread takes that same\nmutex roughly every 8 ms to record the packet it just produced, so a long critical section stalls audio\nproduction for that member — which is the defect `a#12` exists to prevent.\n\n## Confirmed\n\n- No test constructs a `control_loop`. It needs two live `UdpSocket`s, a populated `RetransmitRing`\n  behind an `Arc<Mutex<_>>`, and a running flag.\n- `collect_retransmits` covers the clamp only; it cannot observe where the lock is released, because the\n  send happens at its call site by design.\n\n## Why it was left this way\n\nDeliberately, and stated in the fix's commit message: the off-lock property is guaranteed by the code\n*shape* (the guard's scope ends before the send loop) rather than by a test. That is a real argument for\nthe current code, and not an argument that a regression would be caught.\n\n## Suggested shape\n\nAn integration-style test that binds two loopback UDP sockets, seeds the ring, spawns `control_loop`,\nsends a retransmit request with a large count, and — from a second thread — measures how long it waits to\nacquire the ring mutex. Under the fix the wait is bounded by the copy; under the regression it is bounded\nby the syscalls. That is a timing assertion, so give it a wide margin and prefer a lock-acquisition\n*count* if one can be instrumented instead.\n\nCheaper alternative worth considering first: assert structurally that the guard is dropped before the\nsends, in the same style as `engine/retire.rs`'s thread-local acquisition-count instrument, which exists\nprecisely because a lock-state probe could not express a continuity property.\n\nFound by the pre-merge gate on `fix/airzoned-defect-band`, on code that branch introduced.\n",
+              "closedAt": "2026-08-05T08:52:09Z",
+              "comments": {
+                "nodes": [
+                  {
+                    "author": {
+                      "login": "yuvalrakavy"
+                    },
+                    "authorAssociation": "OWNER",
+                    "body": "Fixed, but note the fix moved. 4f28247's first attempt added a #[cfg(test)] try_lock assertion at the send site — the re-gate's mutation lens (67904bc) proved it VACUOUS: moving the sends UP into the existing lock scope (the natural regression) left it green, since a same-thread try_lock evaluated after the scope closes can only show nothing holds the lock NOW, never that it was free DURING the sends. The actual fix is 1112099's `collect_locked`, which owns the whole lock scope so control_loop binds no guard at all — there is no critical section at the send site left to widen. The packet-content test from the first attempt (control_loop_serves_a_request_without_holding_the_ring_across_the_sends) remains and is sound; the vacuous assertion it originally exercised is gone. Merged to main in 4320cf8.",
+                    "createdAt": "2026-08-05T08:52:08Z"
+                  }
+                ],
+                "totalCount": 1
+              },
+              "createdAt": "2026-08-04T20:43:45Z",
+              "id": "I_kwDOTBQnEM8AAAABLeGdGw",
+              "labels": {
+                "nodes": [
+                  {
+                    "name": "bug"
+                  }
+                ],
+                "totalCount": 1
+              },
+              "number": 22,
+              "repository": {
+                "nameWithOwner": "yuvalrakavy/airzoned"
+              },
+              "state": "CLOSED",
+              "stateReason": "COMPLETED",
+              "timelineItems": {
+                "nodes": [
+                  {
+                    "__typename": "LabeledEvent",
+                    "actor": {
+                      "login": "yuvalrakavy"
+                    },
+                    "createdAt": "2026-08-04T20:43:46Z",
+                    "id": "LE_lADOTBQnEM8AAAABLeGdG88AAAAGvvae8w",
+                    "label": {
+                      "name": "bug"
+                    }
+                  }
+                ],
+                "totalCount": 1
+              },
+              "title": "control_loop's off-lock send (half of #12) has no test that can fail",
+              "updatedAt": "2026-08-05T08:52:09Z"
+            },
+            {
+              "author": {
+                "login": "yuvalrakavy"
+              },
+              "authorAssociation": "OWNER",
+              "body": "## Observed\n\nA member that goes silent mid-session is DETECTED and REPORTED, and then nothing happens to it. It is\nnever reaped, never retried, and never removed from the session. The room stays permanently down one\nspeaker until someone republishes the desired doc or restarts the daemon.\n\nObserved live 2026-08-04 on a two-member session (office RX-V673 + Mac Studio): the Mac dropped its RTSP\nsession, `check_health` correctly classified the session `Degraded` and published a `StatusReason` naming\nit, and the Mac never came back on its own.\n\n## Expected\n\nA detected-silent member should be acted on — dropped and re-established, or torn down so the pool\nreleases its receiver — rather than only described. Detection without remediation means the daemon knows\nthe room is degraded and declines to do anything about it.\n\n## Confirmed\n\n- `Player::check_health` (`src/player.rs`) classifies via `SessionHealth::classify(unhealthy.len(),\n  live)`, then in every arm does exactly two things: `eprintln!` and build an `ObservedState` to publish.\n  It updates `active.health` for transition-gating. **There is no call to reap, remove, reconnect, or\n  converge in any arm.** Read the whole function; the corrective path is simply absent.\n- The detection itself works and is not the gap: `engine::unhealthy_members()` plus\n  `engine::TIMING_SILENCE_UNHEALTHY_MS` (8 s of no timing request) is what produced the correct\n  `Degraded` verdict above.\n- The three-way verdict landed in `28c460e`, whose own commit message closes with: *\"Not fixed here, and\n  still open: a silent member is detected but never reaped or retried.\"* This issue is that sentence.\n- Warm-held sessions are deliberately skipped (`active.idle_since.is_some()`), for reasons the code\n  documents at length. Any remediation must preserve that carve-out — a stopped room must not be\n  \"repaired\".\n\n## Distinct from #6\n\n#6 is about members that **never connected** — the health check misses them, and it uses wall-clock time.\nThis is a member that connected, played, went silent, **was** detected, and then nothing acted. Fixing #6\nwidens detection; it does not add remediation. They will likely be fixed together but they are not the\nsame defect, and closing #6 must not be taken to close this.\n\n## Hypotheses — UNVERIFIED, do not trust\n\n- The natural home is probably beside the `Degraded`/`Failed` arms, calling into the same converge path a\n  desired-doc change uses, so re-establishment reuses reap-before-connect rather than inventing a second\n  reconnect path. Not checked against that path's preconditions.\n- Whether remediation should be automatic at all is a real question, not a foregone conclusion: a\n  receiver that stopped requesting timing may be powered off, in which case retrying forever is worse\n  than reporting once. A bounded retry, or a retry only while the store still desires the member, may be\n  the right shape. This wants a decision before code.\n\nFiled from the MP-3xx defect band's handoff, which recorded it as unfiled.\n",
+              "closedAt": "2026-08-09T07:36:15Z",
+              "comments": {
+                "nodes": [
+                  {
+                    "author": {
+                      "login": "yuvalrakavy"
+                    },
+                    "authorAssociation": "OWNER",
+                    "body": "## Shipped 2026-08-09 — `c5b8b24`\n\nCloses this. 199 tests, 5 negative controls.\n\n### The hypothesis in this issue is wrong, and duty 0 caught it\n\n> *\"calling into the same converge path a desired-doc change uses, so re-establishment reuses\n> reap-before-connect\"*\n\nThat cannot work. `converge` computes adds from `keys()`, which is `senders` — and a silent member\nstill **has** a sender, so it routes to `update` and is never re-added. The member has to leave\n`senders` first.\n\n**And doing that naively is the wedge trigger.** `remove` parks the member; the next `add` reaps it —\nan immediate TEARDOWN — and SETUPs straight after. `add`'s own comment records that a receiver which\naccepts a SETUP and never renders it has, every time so far, been one that got that SETUP hard on the\nheels of a TEARDOWN. So the proposed fix would manufacture the exact condition most associated with\nthe wedge, on a receiver already believed unhealthy.\n\n### What shipped instead: demote, don't repair\n\nA struck-out member is **demoted to pending** and re-established by the ordinary retry road built for\n#6 — whose backoff puts real time between the teardown and the next SETUP, dissolving the hazard\nrather than guarding against it. If the receiver is genuinely off, the connect fails, it lands in\n`ConnectFailed`, and behaviour degrades exactly into today's: bounded retries and a report.\n\nThat also answers this issue's own open question. *\"Retrying forever is worse than reporting once\"* —\nthe bounded 5 s → 60 s backoff already exists from #6, so remediation needed a **demotion**, not a new\npolicy engine.\n\n### Decisions the user made\n\n- **Remediation is automatic**, via demotion.\n- **Three strikes, not one.** The window producing a \"silent\" observation is a few missed heartbeats\n  over unacknowledged UDP, so a lossy burst can fake it; and a receiver that stopped asking for timing\n  may still be rendering, since it only needs the clock to correct drift. Acting on the first\n  observation would tear down and rejoin a speaker that was still playing — an audible interruption\n  caused by the remedy rather than the fault. Strikes must be **consecutive**, or a speaker that blips\n  once an hour is torn down after three hours for nothing.\n\nThe warm-held carve-out this issue requires is preserved, and strikes are cleared there too so nothing\nfires the instant the room comes back.\n\n### A third transition axis, found by a test asserting on the wire\n\n`check_health` published only when the session verdict or the source reason moved. A demotion moves a\nmember from `silent` to `reconnecting` while the verdict stays `Failed` — same value, no transition,\nso **the change a room's UI most needs never reached the store**. For a single-speaker room, the\ncommon case here, the entire remediation was invisible on the wire. Fixed with an explicit\n`force_republish` that discharges one publish.\n\nDeliberately a flag rather than diffing the member map: the `silent` reason carries elapsed seconds,\nso a map comparison would differ every tick and put a retained publish on the broker once a second for\nas long as a speaker stayed quiet.\n\n`WentSilent` reports Health `reconnecting` rather than `offline` — for a room's own UI those are\ndifferent facts and prompt different behaviour.\n\n### Not yet verified on hardware\n\nThis has no hardware verification, and neither does #6. The obvious acceptance run — power a receiver\noff mid-play, watch the strikes accrue, the teardown happen, and the room recover when it comes back —\nneeds physical access and is queued.",
+                    "createdAt": "2026-08-09T07:36:14Z"
+                  }
+                ],
+                "totalCount": 1
+              },
+              "createdAt": "2026-08-04T22:12:42Z",
+              "id": "I_kwDOTBQnEM8AAAABLesjjQ",
+              "labels": {
+                "nodes": [
+                  {
+                    "name": "bug"
+                  }
+                ],
+                "totalCount": 1
+              },
+              "number": 23,
+              "repository": {
+                "nameWithOwner": "yuvalrakavy/airzoned"
+              },
+              "state": "CLOSED",
+              "stateReason": "COMPLETED",
+              "timelineItems": {
+                "nodes": [
+                  {
+                    "__typename": "LabeledEvent",
+                    "actor": {
+                      "login": "yuvalrakavy"
+                    },
+                    "createdAt": "2026-08-04T22:12:43Z",
+                    "id": "LE_lADOTBQnEM8AAAABLesjjc8AAAAGvy2sUw",
+                    "label": {
+                      "name": "bug"
+                    }
+                  }
+                ],
+                "totalCount": 1
+              },
+              "title": "A silent member is detected and reported, then never reaped or retried",
+              "updatedAt": "2026-08-09T07:36:15Z"
+            },
+            {
+              "author": {
+                "login": "yuvalrakavy"
+              },
+              "authorAssociation": "OWNER",
+              "body": "`RoomAudio.Skip` publishes to a topic the daemon never subscribes to, so Skip is a silent no-op.\n\nFound 2026-08-08 while trying to step a Mix rotation during MP-104's by-ear acceptance.\n\n## The gap\n\nThe store side is complete: `AudioSession.exposed fn Skip()` publishes a non-retained command to\n`{Root}/Command/{id}`, and `RoomAudio.Skip` is a `trigger` wired to it.\n\nThe daemon subscribes to exactly three filters, at ConnAck (`src/mqtt.rs:191-195`):\n\n```rust\nclient.try_subscribe(&session_filter, QoS::AtLeastOnce).ok();   // {root}/Session/+\nclient.try_subscribe(&config_topic,   QoS::AtLeastOnce).ok();   // {root}/Config\nif let Some(f) = &mdns_filter { client.try_subscribe(f, ...) }  // {realm}/Service/...\n```\n\nThere is no `{root}/Command/+`. `rg -n \"Command\" src/` finds no handler. So the publish lands on the\nbroker and is dropped — **nothing fails, nothing logs, and the user's button does nothing.**\n\n## Why it matters more than one dead button\n\n- It is invisible in both directions. The store thinks it sent a command; the daemon never knew one\n  existed. There is no error, no warning, no observable difference between \"skipped\" and \"ignored\".\n- **It removes the only cheap way to exercise a rotation.** MP-104's acceptance had to wait out\n  full-length tracks (194-254 s each) to observe three rotation slots, because there is no way to\n  advance the playlist. A working Skip turns a 15-minute listen into a 30-second one, for this\n  feature and for every future one that touches sequencing.\n- A Mix runs forever by contract, so Skip is the *only* user-facing control over what plays next.\n\n## Shape of the fix\n\nSubscribe `{root}/Command/+` alongside the session filter, and dispatch to the session by id. The\nrotation already has the right seam: skipping is \"abandon the current decoded track and pull the\nnext item\", i.e. drop the producer's current buffer and let `next_decoded` run — it does not need to\ndisturb `Rotation`'s cursors or the crossfade.\n\nWorth deciding at the same time: does Skip advance **within the current collection** or **to the\nnext slot**? For a Mix those differ, and the legacy's answer is not recorded. My reading is that a\nuser pressing Skip means \"not this song\" rather than \"not this collection\", which argues for\nadvancing the turn as normal — i.e. exactly what a natural track end does.\n\nRelated: MP-105 (FinishTrack, Store#86) is the sibling transport verb and shares the command lane;\nworth doing together.\n",
+              "closedAt": "2026-08-08T19:30:02Z",
+              "comments": {
+                "nodes": [
+                  {
+                    "author": {
+                      "login": "yuvalrakavy"
+                    },
+                    "authorAssociation": "OWNER",
+                    "body": "Fixed in `1ad466c`, **verified by ear** on the RX-V673.\n\nThe command lane is subscribed, routed and dispatched. Skip **advances the turn**, exactly as a track ending does — and that falls out of the architecture rather than being coded: the producer consumes the track the *fetcher* already produced, and the fetcher had already taken the rotation's turn, so Skip and a natural track end share one path and cannot drift apart.\n\nTwo things the tests could not see, both worth recording.\n\n**The subscription.** I deleted it — the literal bug this issue describes — and all 174 tests stayed green. My tests called `on_command` directly, which proves the dispatch and says nothing about the wiring; the same shape as the bug. The missing invariant was that *the router and the subscriber must agree*, so `subscription_filters` and `lane_of` are now values a test compares: every lane the router recognises must be covered by a filter we subscribe to, and every filter must route somewhere. Written over the lanes, so a lane added later is covered without anyone remembering. **That test would have caught this the day it was written.**\n\n**The splice, caught only by a listener.** The first implementation set `pos` to the crossfade entry point and let the tail machinery fire — a real 5 s equal-power blend, preceded by an abrupt jump out of the middle of the song into its last five seconds. On hardware it read as *\"it switched\"* rather than *\"it faded\"*. Every assertion I had passed, because they all asked whether the blend happened and **none asked where it started**. The fade now begins at the current position, and the request is held rather than consumed when the next track is not yet decoded, so a skip pressed during a decode is honoured a moment later instead of swallowed.\n\nThe regression test makes position audible to an assertion: the outgoing track is a ramp 0.0→1.0, so fading from the current position yields near-zero output and fading from the tail near-one — a factor of ~25, verified red against the spliced version.",
+                    "createdAt": "2026-08-08T19:30:02Z"
+                  }
+                ],
+                "totalCount": 1
+              },
+              "createdAt": "2026-08-08T18:56:14Z",
+              "id": "I_kwDOTBQnEM8AAAABL-wt2A",
+              "labels": {
+                "nodes": [],
+                "totalCount": 0
+              },
+              "number": 24,
+              "repository": {
+                "nameWithOwner": "yuvalrakavy/airzoned"
+              },
+              "state": "CLOSED",
+              "stateReason": "COMPLETED",
+              "timelineItems": {
+                "nodes": [],
+                "totalCount": 0
+              },
+              "title": "Skip publishes to a topic the daemon never subscribes to — it is a silent no-op",
+              "updatedAt": "2026-08-08T19:30:02Z"
+            },
+            {
+              "author": {
+                "login": "yuvalrakavy"
+              },
+              "authorAssociation": "OWNER",
+              "body": "The daemon logs nothing about which track it is playing, so playout order is unobservable.\n\nFound 2026-08-08 during MP-104's by-ear acceptance, when the user asked \"why did a second Hebrew\nsong follow the first instead of the jazz one?\" and there was no way to answer from the daemon.\n\n## What is missing\n\n`run_fetcher`/`next_decoded` log a line ONLY when a track fails, or when `decode_file` falls back to\nffmpeg:\n\n```\n[airzoned] decode: ffmpeg fallback for /Volumes/.../Diana Krall - Almost Blue.mp3\n```\n\nA track that decodes natively (symphonia) is completely silent in the log. So over a 15-minute\nsession with four tracks played, the log carried exactly ONE line — and only because that particular\nmp3 needed ffmpeg.\n\nAnswering \"what is playing, and what played before it\" required reconstructing the sequence from\n`#EXTINF` durations in the m3u files plus the session age in the JOIN line, and arithmetic. That\nhappened to be possible here because the collections have very different content; it would be\nimpossible for a Mix of two similar playlists, which is the normal case.\n\n## Why it matters\n\n- **A rotation feature whose output order cannot be observed cannot be debugged.** MP-104's entire\n  contract is about ORDER (round-robin across slots, one cursor per collection, wrap-and-reshuffle).\n  The daemon currently emits no evidence of any of it.\n- The same gap defeats any field report: \"it keeps playing the same song\" or \"it stopped rotating\"\n  arrives with nothing to correlate against.\n- It is a prerequisite for MP-107 (now-playing metadata, Store#88), which needs the per-track hook\n  anyway — this is the cheap half of it.\n\n## Shape of the fix\n\nOne INFO line per track as the fetcher hands it over, naming the collection and the item:\n\n```\n[player] session=<id> track: collection=<uri> item=<path> slot=<turn>\n```\n\n`slot` is what makes it a rotation trace rather than a playlist trace — it is the difference between\n\"these tracks played\" and \"the rotation is behaving\". The data is all in hand at the `next_with`\nreturn; nothing new needs to be threaded.\n\nWorth considering alongside: surfacing the same fact on the `State` topic (`NowTitle` already exists\nin `ObservedState` and is currently only set for single-file sources), so the panel can show it and\na test can assert on it. That overlaps MP-107 and may be better done there — this issue is the log\nhalf, which is useful on its own and much cheaper.\n",
+              "closedAt": "2026-08-08T19:30:11Z",
+              "comments": {
+                "nodes": [
+                  {
+                    "author": {
+                      "login": "yuvalrakavy"
+                    },
+                    "authorAssociation": "OWNER",
+                    "body": "Fixed in `1ad466c`.\n\nOne line per track at the fetcher's hand-off:\n\n```\n[player] session=m33558657 track: slot=0/3 collection=file:///…/Hagashash.m3u item=הגשש החיוור - אהובתי יעל\n[player] session=m33558657 track: slot=1/3 collection=file:///…/DianaKrall.m3u item=Diana Krall - Almost Blue\n[player] session=m33558657 SKIP requested\n[player] session=m33558657 track: slot=2/3 collection=file:///…/Hagashash.m3u item=הגשש החיוור - אל תלחץ על הבננה\n```\n\n`slot=N/M` is what makes it a **rotation** log rather than a playlist log — the difference between \"these tracks played\" and \"the rotation is behaving\". The trace above shows the shared cursor directly (slot 2 returns Hagashash *track 2*, not track 1), which previously took reconstruction from `#EXTINF` durations and arithmetic to establish.\n\n**Caveat, stated rather than left implied:** the line marks **decode** time, not play time. The fetcher runs one to two tracks ahead, so a `track:` line appears seconds before you hear it — visible above, where `slot=1` was logged *before* the SKIP that caused it to be played. It is an accurate record of order and cursor state, and it is not a now-playing signal. A true now-playing line would have to come from the producer, which is MP-107's territory ([Store#88](https://github.com/yuvalrakavy/Store/issues/88)).",
+                    "createdAt": "2026-08-08T19:30:11Z"
+                  }
+                ],
+                "totalCount": 1
+              },
+              "createdAt": "2026-08-08T18:56:15Z",
+              "id": "I_kwDOTBQnEM8AAAABL-wuBg",
+              "labels": {
+                "nodes": [],
+                "totalCount": 0
+              },
+              "number": 25,
+              "repository": {
+                "nameWithOwner": "yuvalrakavy/airzoned"
+              },
+              "state": "CLOSED",
+              "stateReason": "COMPLETED",
+              "timelineItems": {
+                "nodes": [],
+                "totalCount": 0
+              },
+              "title": "Playout order is unobservable: no per-track log line",
+              "updatedAt": "2026-08-08T19:30:11Z"
+            }
+          ],
+          "pageInfo": {
+            "endCursor": "Y3Vyc29yOnYyOpK0MjAyNi0wOC0wOFQxODo1NjoxNVrPAAAAAS_sLgY=",
+            "hasNextPage": true
+          }
+        }
+      }
+    }
+  },
+  "variables": {
+    "after": "Y3Vyc29yOnYyOpK0MjAyNi0wOC0wNFQyMDowMDozNlrPAAAAAS3clT8=",
+    "first": 5,
+    "name": "airzoned",
+    "owner": "yuvalrakavy",
+    "since": "2024-10-29T12:00:00.000Z"
+  }
+}

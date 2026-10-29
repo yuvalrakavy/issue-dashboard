@@ -1,0 +1,395 @@
+{
+  "name": "history_issues",
+  "response": {
+    "data": {
+      "repository": {
+        "issues": {
+          "nodes": [
+            {
+              "author": {
+                "login": "yuvalrakavy"
+              },
+              "authorAssociation": "OWNER",
+              "body": "## Hypothesis — NOT reproduced, and cheap to settle\n\nSurfaced by the pre-implementation design gate on the teardown redesign (#5). Filed because it is a\ndata-loss-shaped failure if true, and one manual probe settles it.\n\n`RtspClient` hardcodes `Session: 1` on both RECORD and TEARDOWN (`rtsp.rs:148`, `rtsp.rs:175`). Every\nmember therefore uses the same RTSP session identifier with every receiver.\n\n`RetiringPool::reap` only knows about *parked* members, keyed by receiver IP. A member that is\ncurrently **live** on speaker X in session A is invisible to it.\n\nSo the concern is: if a transfer moves speaker X from session A to session B, and A later tears its\nmember down, does A's TEARDOWN release **B's** session on that receiver — silencing a room that is\nsupposed to be playing?\n\n## What would settle it\n\nWhether the target receivers key the RTSP session by TCP connection or by the `Session` header. If by\nconnection, this is a non-issue and the hardcoded `1` is cosmetic. If by header, it is real.\n\nOne manual RTSP probe against the office Yamaha answers it: open two connections, RECORD on both, and\nTEARDOWN one.\n\n## Why it is not in the #5 fix\n\nThe redesign's teardown rule (`docs/superpowers/specs/2026-08-02-airzoned-teardown-safety-and-session-worker-design.md`)\nis about *when* a teardown may be sent, not *which session it addresses*. Even a perfectly-timed\nteardown would release the wrong session if this is real, so it is an orthogonal defect.\n\nThe `Join` / `Transfer` verbs on `RoomAudio` in the Store are what would exercise it.\n",
+              "closedAt": "2026-08-09T08:55:15Z",
+              "comments": {
+                "nodes": [
+                  {
+                    "author": {
+                      "login": "yuvalrakavy"
+                    },
+                    "authorAssociation": "OWNER",
+                    "body": "Node **MP-309** in the Store repo's media port DAG (`docs/media-port-dag.md`) — part of the MP-3xx reliability band of the live-frontier mission.",
+                    "createdAt": "2026-08-03T10:23:56Z"
+                  },
+                  {
+                    "author": {
+                      "login": "yuvalrakavy"
+                    },
+                    "authorAssociation": "OWNER",
+                    "body": "## Grounding at pickup — this resolves without hardware\n\nThe planned probe was two connections to one receiver, RECORD on both, TEARDOWN one. That turns out to\nbe unnecessary: the hypothesis is refuted by evidence already in hand plus an exhaustive case split.\n\n### Confirmed\n\n- `Session: 1` is sent on RECORD (`src/rtsp.rs:180`) and TEARDOWN (`src/rtsp.rs:236`). Constant, as the\n  issue says. **The line numbers in the issue (`:148`, `:175`) have drifted.**\n- **`setup()` never reads the receiver's assigned session id.** It parses only `Transport`\n  (`src/rtsp.rs:143-157`), though `read_reply` does capture every header (`:290-303`). So whatever id\n  the receiver hands back in its SETUP reply is available and discarded.\n- **The discriminating session identifier is the Request-URI, not the header.** `begin_session`\n  (`src/rtsp.rs:107-109`) sets `rtsp://<local_ip>/<10-digit session id>`, and every subsequent request\n  — including TEARDOWN (`:235`) — is issued against that per-session URL. `Session: 1` is redundant\n  metadata beside a unique resource identifier.\n- **Two receiver implementations accepted RECORD with `Session: 1` on live hardware on 2026-08-04**: a\n  two-member session on an office RX-V673 plus a Mac Studio (recorded in the commit message of\n  `28c460e`). `record()` propagates a non-200 through `.ok(\"RECORD\")?`, so neither connect could have\n  succeeded had either receiver rejected the header.\n\n### The case split\n\nEvery possible receiver behaviour lands on benign:\n\n1. **Receiver ignores the `Session` header.** The URL discriminates. Benign.\n2. **Receiver assigns `Session: 1` itself** — plausible for a single-session device, and it would make\n   the observation above vacuous. But a receiver that labels its only session `1` cannot hold two\n   sessions, so there is no other session to release. Benign.\n3. **Receiver assigns a unique id and validates it.** Contradicted: RECORD would have failed and\n   playback would never have worked. Refuted by observation.\n4. **Receiver ignores the header on RECORD but dispatches TEARDOWN by it.** Not observed either way,\n   and the only branch left standing. It needs two concurrent sessions on one receiver to do harm —\n   see reachability below.\n\n### Reachability of branch 4\n\n`add` does reap-before-connect (`src/engine/mod.rs:264-267`) specifically so a member still retiring on\na receiver is torn down before a new SETUP, and the comment there notes a classic RAOP receiver refuses\nthe second stream outright. So the two-concurrent-sessions precondition is normally unreachable.\n\n**The one path that bypasses it is `reap` giving up at its hard cap** — `src/engine/retire.rs:409-414`,\nwhich logs \"connecting anyway (the receiver may refuse)\" and returns without freeing. That is reached\nby the lost wakeup in #16: on the `TearingDown` arm a missed `notify_all` sleeps out the remaining\n`MAX_TEARDOWN_WAIT` and the next pass gives up.\n\nSo the precondition for the only surviving branch is manufactured by #16, and fixing #16 removes it.\n\n### Recommendation\n\nClose as `not planned` (cosmetic), cross-referencing #16 as the fix that removes the bypass. Tidying\nthe constant is still reasonable hygiene — echoing the receiver's assigned id, or dropping the header,\ncosts little — but it is not defect work and should not be priced as such.\n\nLeaving this open rather than self-closing: the case split is the load-bearing artifact and is worth a\nsecond reader before the issue goes away.\n",
+                    "createdAt": "2026-08-04T19:17:57Z"
+                  },
+                  {
+                    "author": {
+                      "login": "yuvalrakavy"
+                    },
+                    "authorAssociation": "OWNER",
+                    "body": "## Second reader, 2026-08-09 — the case split holds; its reachability argument does not, quite\n\nReviewed as the second reader the analysis asks for. **I agree with the verdict** (cosmetic, close as not-planned) but not with one step of the reasoning, and the gap is worth recording so the next person does not inherit a false \"exhaustive\".\n\n### What I checked and agree with\n\n- Branches 1–3 are sound. Branch 3's refutation is the strongest link in the chain: `record()` propagates a non-200 through `.ok(\"RECORD\")?`, so a receiver that validated a unique session id would have failed the connect, and playback demonstrably works on two receiver implementations.\n- Branch 2's \"a receiver that labels its only session `1` cannot hold two sessions\" is a genuinely nice argument — it converts a vacuous observation into a benign one.\n- The Request-URI point is the real load-bearer: `begin_session` sets a per-session 10-digit URL and TEARDOWN is issued against it, so `Session: 1` is redundant metadata beside a unique resource identifier.\n\n### Where the reachability argument is incomplete\n\n> *\"The one path that bypasses it is `reap` giving up at its hard cap\"*\n\nThere is a second, and it is a normal path rather than a fault path. `free_receivers` — the thing that evicts a **warm** holder, which `reap-before-connect` explicitly cannot do because a warm member is not in the pool at all — has exactly two call sites, `player.rs:592` (`reconcile`) and `:902`. **Neither is the retry path.** `retry_unresolved` converges directly, so a pending member whose speaker resolves while another room holds that receiver warm will attempt a SETUP with no eviction.\n\nThat is a second route to the two-sessions-on-one-receiver precondition, and it is not manufactured by #16.\n\n### Why the verdict survives anyway\n\nBecause that route is self-limiting in the direction that matters: per `Session::add`'s own comment a classic RAOP receiver **refuses** the second stream as an interruption, so the attempt fails and the member stays pending rather than establishing a concurrent session. The precondition for branch 4 needs the second session to *succeed*; here it does not. And the member self-heals — the warm hold expires (10 s by default) and the next backoff retry connects normally.\n\nSo: still benign, by a different mechanism than the one given. Recording it because \"the only path\" was the sentence carrying the close, and it was not the only path.\n\n### Note for whoever fixes #13\n\nThe retiring pool's one-slot-per-receiver limit (#13) is the same territory. If that work makes two members on one receiver representable, it should re-check this issue rather than assume it stays closed — the case split's benign branches lean on two concurrent sessions being unreachable, and #13 exists precisely because that assumption is baked into a data structure.\n\n### Disposition\n\nClosing as **not planned / cosmetic**, per the original recommendation. Tidying the constant (echo the receiver's assigned id, or drop the header) remains reasonable hygiene, not defect work.",
+                    "createdAt": "2026-08-09T08:55:14Z"
+                  }
+                ],
+                "totalCount": 3
+              },
+              "createdAt": "2026-08-02T19:26:07Z",
+              "id": "I_kwDOTBQnEM8AAAABLKbfRg",
+              "labels": {
+                "nodes": [],
+                "totalCount": 0
+              },
+              "number": 11,
+              "repository": {
+                "nameWithOwner": "yuvalrakavy/airzoned"
+              },
+              "state": "CLOSED",
+              "stateReason": "NOT_PLANNED",
+              "timelineItems": {
+                "nodes": [],
+                "totalCount": 0
+              },
+              "title": "Hypothesis: hardcoded RTSP `Session: 1` may let one session's TEARDOWN release another's on the same receiver",
+              "updatedAt": "2026-08-09T08:55:15Z"
+            },
+            {
+              "author": {
+                "login": "yuvalrakavy"
+              },
+              "authorAssociation": "OWNER",
+              "body": "## Observed (traced to code, not reproduced)\n\n`control_loop` takes the retransmit-ring mutex and holds it across a loop of up to `count` UDP sends,\nwhere `count` is read straight off the wire from the receiver's retransmit request\n(`member.rs:497-505`):\n\n```rust\nlet count = u16::from_be_bytes([buf[6], buf[7]]);\nlet ring = ring.lock().unwrap();\nfor i in 0..count { ... audio.send_to(pkt, speaker_audio) ... }\n```\n\n`count` is a `u16`, so a malformed or hostile request can ask for **65535** sends inside one critical\nsection. The send loop takes the same mutex once per packet (`member.rs:406`), i.e. roughly every\n8 ms, so a long critical section here stalls audio production for that member.\n\n## Why it is worth recording rather than ignoring\n\nTwo reasons, neither of them \"an attacker on the LAN\":\n\n1. A stuck or very slow send inside that loop blocks the send thread, and a blocked send thread is\n   the mechanism that makes a leaked teardown reservation permanent in the #5 redesign (that design\n   bounds the wait, so this is a contributing factor rather than a cause).\n2. The bound is set by the peer, not by us, which is the same shape as the unclamped `Audio-Latency`\n   the #5 work is fixing (`rtsp.rs:152-155`).\n\n## Direction\n\nClamp `count` to the ring capacity (`RETRANSMIT_RING = 1024`, `member.rs:31`) — asking for more than\nthe ring holds is meaningless — and collect the packets to send under the lock, then release it and\nsend. Both are small and independent of #5.\n\nNot reproduced; no observed audio glitch has been attributed to this.\n",
+              "closedAt": "2026-08-05T08:50:43Z",
+              "comments": {
+                "nodes": [
+                  {
+                    "author": {
+                      "login": "yuvalrakavy"
+                    },
+                    "authorAssociation": "OWNER",
+                    "body": "Node **MP-309** in the Store repo's media port DAG (`docs/media-port-dag.md`) — part of the MP-3xx reliability band of the live-frontier mission.",
+                    "createdAt": "2026-08-03T10:23:57Z"
+                  }
+                ],
+                "totalCount": 1
+              },
+              "createdAt": "2026-08-02T19:26:10Z",
+              "id": "I_kwDOTBQnEM8AAAABLKbf5w",
+              "labels": {
+                "nodes": [],
+                "totalCount": 0
+              },
+              "number": 12,
+              "repository": {
+                "nameWithOwner": "yuvalrakavy/airzoned"
+              },
+              "state": "CLOSED",
+              "stateReason": "COMPLETED",
+              "timelineItems": {
+                "nodes": [],
+                "totalCount": 0
+              },
+              "title": "control_loop holds the retransmit mutex across up to 65535 peer-requested UDP sends",
+              "updatedAt": "2026-08-05T08:50:43Z"
+            },
+            {
+              "author": {
+                "login": "yuvalrakavy"
+              },
+              "authorAssociation": "OWNER",
+              "body": "> **Status 2026-10-23:** still open, checked against `7b4623f`. **Blocked by #43** (agreed order: #43, then this, then Store#83; see the 2026-09-17 comment). Refs hold: `enum Slot { Retiring, TearingDown(u64) }` at `src/engine/retire.rs:232-243`, the `park` displacement path at 453-481, and the give-up \"connecting anyway\" at 553.\n\n**Blocked by #43.**\n\nFound by the pre-merge deep gate on `feat/m3-streaming-sources` (three cold-context finders; two reached this independently).\n\n## The residual\n\n`RetiringPool` maps one receiver IP to ONE slot, which is either a parked member or a teardown-in-flight marker. Two members can legitimately exist on one receiver — `reap`'s documented give-up path (`retire.rs`, \"connecting anyway (the receiver may refuse)\") lets a caller connect while the pool still owns the receiver — and that state is **not representable**.\n\nThe catastrophic consequence is fixed (commit `658aee7`): a reservation now removes only its own token'd marker, so a member parked over a `TearingDown` slot is no longer silently evicted. Two residuals remain, both narrow:\n\n1. **Transient double-attribution.** After `park` inserts over a `TearingDown` marker, the slot reads `Retiring(B)` while A's RTSP TEARDOWN is still in flight. A concurrent `reap` can take B and report the receiver free while A's TEARDOWN has not landed — so a SETUP can race it. Given that #5 is about exactly this kind of race, it is worth closing properly.\n\n2. **The displaced member drains unreserved.** `park`'s displacement path drops the incumbent outside the lock. The drain rule is preserved (`MemberSender::drop` enforces it), but for the duration the member is alive and holding an RTSP session while the pool attributes that receiver to someone else. This is the \"absent but alive\" condition `Slot::TearingDown` was introduced to make impossible.\n\n## Shape worth considering\n\nReplace the enum with a per-receiver entry that can hold both, e.g.\n\n```rust\nstruct SlotEntry {\n    parked: Vec<Retiring>,   // draining, takeable\n    in_flight: usize,        // teardowns owning this receiver right now\n}\n```\n\n\"Free\" becomes `parked.is_empty() && in_flight == 0`. That **deletes** the displacement concept and the single-owner limitation rather than guarding them, which is the direction this repo prefers. It touches ~7 call sites in one file (`park`, `step`, `sweep`, `drain`, `is_empty`, `reap_all`, `Reservation::drop`).\n\n## Do not do this in isolation\n\nThis is the third pass over the teardown surface, which by the repo's own rule means the shape is wrong rather than the details. **Warm reuse (M1) removes the TEARDOWN→SETUP sequence from the replay path entirely** — a parked member is FLUSHed and re-fed instead of destroyed and rebuilt — which demotes this whole path from load-bearing to a shutdown-only concern. Decide warm reuse first; this may become much cheaper or moot.\n\n---\n\n<!-- media-port-dag:relationships -->\n### Position in the media-port DAG\n\n**Depends on** — must land first\n- **MP-009** — done · _no issue yet_\n\n**Blocks** — waiting on this\n- yuvalrakavy/Store#83 — **MP-102** · blocked\n\n<sub>Generated from [`docs/media-port-dag.md`](https://github.com/yuvalrakavy/Store/blob/main/docs/media-port-dag.md) — the DAG is the source of truth; edit it there and re-run <code>scripts/dag-sync-issues.py</code>. Edges point from dependency to dependent.</sub>\n<!-- /media-port-dag:relationships -->\n\n",
+              "closedAt": null,
+              "comments": {
+                "nodes": [
+                  {
+                    "author": {
+                      "login": "yuvalrakavy"
+                    },
+                    "authorAssociation": "OWNER",
+                    "body": "Node **MP-301** in the Store repo's media port DAG (`docs/media-port-dag.md`) — part of the MP-3xx reliability band of the live-frontier mission.",
+                    "createdAt": "2026-08-03T10:23:46Z"
+                  },
+                  {
+                    "author": {
+                      "login": "yuvalrakavy"
+                    },
+                    "authorAssociation": "OWNER",
+                    "body": "## Duty-0 recheck, 2026-08-09 — both preconditions this issue set have moved, and both point away from doing it now\n\nPicked this up as the next candidate and checked its own guidance first. It says:\n\n> *\"Do not do this in isolation… **Warm reuse (M1) removes the TEARDOWN→SETUP sequence from the replay path entirely** … which demotes this whole path from load-bearing to a shutdown-only concern. Decide warm reuse first; this may become much cheaper or moot.\"*\n\n**Warm reuse is decided and shipped.** Not literally as the FLUSH-and-re-feed design described here — the shipped form keeps the session alive with its members connected at gain 0 for `IdleHold` — but it achieves the property this issue conditions on: a replay inside the window issues **no RTSP at all**. Pinned by `a_warm_replay_issues_no_rtsp`, and observed on hardware today (`session=… IDLE for 10s — holding [10.0.2.158]`).\n\nSo by this issue's own reasoning the demotion has happened: the pool's single-slot limit is now a **shutdown-only** concern, not a replay-path one.\n\n**And the way in got rarer.** Both residuals need two members on one receiver, which needs `reap`'s documented give-up path. #11's case-split analysis established that path is reached by the lost wakeup in #16 — **and #16 is fixed**. (#11's own close, 2026-08-09, records a second route: the retry paths do not call `free_receivers`, so a retry can attempt a SETUP onto a warm holder. That one is self-limiting — the receiver refuses the second stream, so the concurrent state never forms.)\n\n## Consequence for sequencing\n\nThe remaining relevance of this surface is shutdown, and shutdown is **#14**. So the two issues converge: doing #13's data-structure change first would mean #14's concurrency work is designed against a slot model that is about to change, and doing #14 first means #13 rewrites call sites #14 just parallelised. **#14 is the one with live consequences** (serial in N, no global bound, work paid up to three times), so it goes first and #13 is judged afterwards against what is left.\n\n**Not closing.** The two residuals are real, and residual 1 — a concurrent `reap` reporting a receiver free while a TEARDOWN is still in flight — is exactly the class #5 exists for. But it should be re-priced after #14, and it may well be cheaper by then, which is what this issue predicted.\n\nLeaving open, de-prioritised, with the preconditions marked satisfied so the next reader does not re-derive them.",
+                    "createdAt": "2026-08-09T10:20:52Z"
+                  },
+                  {
+                    "author": {
+                      "login": "yuvalrakavy"
+                    },
+                    "authorAssociation": "OWNER",
+                    "body": "**Kept open, triaged 2026-09-17.** The two triages disagreed: the daemon triage said close it, and the feature triage ranked it third priority. It stays open, for two reasons.\n\n**It is the prerequisite of yuvalrakavy/Store#83 (MP-102, cross-session speaker contention).** Two sessions wanting one speaker is exactly the \"two members on one receiver\" state this slot model cannot represent. So #83 cannot be exercised honestly until this is settled. The generated DAG block below already carries the edge. This comment records the *reason* so it can be seen without opening the DAG.\n\n**The 2026-08-09 sequencing still holds, but its parts have been renamed.** That recheck put #14 (shutdown) first and said to re-price this afterwards. #14 was closed today and re-filed as two issues:\n- **#43**: shutdown sends its TEARDOWNs serially. This is the half that matters here, because it changes `RetiringPool::reap_all`, one of the ~7 call sites a `SlotEntry` rewrite would touch.\n- #44: a second Ctrl-C cannot abort a graceful shutdown. It is independent of this issue.\n\nSo the order is **#43, then this, then Store#83**. The warm-reuse precondition this issue originally set is already satisfied (see 2026-08-09), so that is no longer what holds it back.\n",
+                    "createdAt": "2026-09-16T22:53:15Z"
+                  }
+                ],
+                "totalCount": 3
+              },
+              "createdAt": "2026-08-02T21:30:53Z",
+              "id": "I_kwDOTBQnEM8AAAABLK3ELA",
+              "labels": {
+                "nodes": [
+                  {
+                    "name": "todo"
+                  },
+                  {
+                    "name": "p2"
+                  },
+                  {
+                    "name": "media-port"
+                  },
+                  {
+                    "name": "retire"
+                  }
+                ],
+                "totalCount": 4
+              },
+              "number": 13,
+              "repository": {
+                "nameWithOwner": "yuvalrakavy/airzoned"
+              },
+              "state": "OPEN",
+              "stateReason": null,
+              "timelineItems": {
+                "nodes": [
+                  {
+                    "__typename": "LabeledEvent",
+                    "actor": {
+                      "login": "yuvalrakavy"
+                    },
+                    "createdAt": "2026-08-02T21:30:54Z",
+                    "id": "LE_lADOTBQnEM8AAAABLK3ELM8AAAAGuBrmAQ",
+                    "label": {
+                      "name": "bug"
+                    }
+                  },
+                  {
+                    "__typename": "UnlabeledEvent",
+                    "actor": {
+                      "login": "yuvalrakavy"
+                    },
+                    "createdAt": "2026-10-23T20:22:30Z",
+                    "id": "UNLE_lADOTBQnEM8AAAABLK3ELM8AAAAH79ndUQ",
+                    "label": {
+                      "name": "bug"
+                    }
+                  },
+                  {
+                    "__typename": "LabeledEvent",
+                    "actor": {
+                      "login": "yuvalrakavy"
+                    },
+                    "createdAt": "2026-10-23T20:22:31Z",
+                    "id": "LE_lADOTBQnEM8AAAABLK3ELM8AAAAH79ndvQ",
+                    "label": {
+                      "name": "todo"
+                    }
+                  },
+                  {
+                    "__typename": "LabeledEvent",
+                    "actor": {
+                      "login": "yuvalrakavy"
+                    },
+                    "createdAt": "2026-10-23T20:22:31Z",
+                    "id": "LE_lADOTBQnEM8AAAABLK3ELM8AAAAH79neJw",
+                    "label": {
+                      "name": "p2"
+                    }
+                  },
+                  {
+                    "__typename": "LabeledEvent",
+                    "actor": {
+                      "login": "yuvalrakavy"
+                    },
+                    "createdAt": "2026-10-23T20:22:31Z",
+                    "id": "LE_lADOTBQnEM8AAAABLK3ELM8AAAAH79neXw",
+                    "label": {
+                      "name": "retire"
+                    }
+                  },
+                  {
+                    "__typename": "LabeledEvent",
+                    "actor": {
+                      "login": "yuvalrakavy"
+                    },
+                    "createdAt": "2026-10-23T20:22:31Z",
+                    "id": "LE_lADOTBQnEM8AAAABLK3ELM8AAAAH79nerw",
+                    "label": {
+                      "name": "media-port"
+                    }
+                  }
+                ],
+                "totalCount": 6
+              },
+              "title": "Retiring pool: one slot per receiver cannot represent two members on it",
+              "updatedAt": "2026-10-23T20:22:31Z"
+            },
+            {
+              "author": {
+                "login": "yuvalrakavy"
+              },
+              "authorAssociation": "OWNER",
+              "body": "Found by the pre-merge deep gate on `feat/m3-streaming-sources` (reached by all three finders from different angles).\n\n## Nothing bounds a full shutdown\n\n`reap_all` hoists the cuts so the drains overlap — correct, and tested — but then calls `reap` per IP **sequentially**, with `member.shutdown()` inline. The joins and the RTSP I/O do not overlap, so the claim in its doc comment (\"the aggregate returns to roughly one `render_delay` regardless of N\") understates the real cost by N × teardown-I/O.\n\nWorse, the same work can be paid up to three times:\n\n1. `shutdown_sessions` → `reap_all`\n2. anything still parked → the reaper's exit path calls `drain()` → `reap_all` again\n3. anything left when the map drops → `MemberSender::drop`, a third serial pass\n\n`MAX_TEARDOWN_WAIT` does not cap any of it — it bounds the wait-for-due, never `teardown()`. Since `658aee7` the RTSP socket has a write timeout, so the per-member worst case is now finite (≈ wait cap + read timeout + joins) rather than kernel-retransmit minutes, but there is still no *global* ceiling. Under systemd's default `TimeoutStopSec=90` a large-enough install gets SIGKILLed mid-teardown, which produces exactly the un-drained teardown the drain rule exists to prevent.\n\nRelated, same shape: `await_settle` runs **inside** each `reap`, so with `AIRZONED_SETTLE_MS` armed an N-speaker reap pays N × settle. That makes the A/B's latency super-linear in N, confounding the comparison the knob exists for. It should be hoisted out of the per-IP loop.\n\nAlso: `signal_hook::flag::register` replaces SIGINT's terminating default and nothing polls the flag during teardown, so an operator cannot abort a long shutdown with a second Ctrl-C.\n\n## Fix directions\n\n* Tear down concurrently (one thread per receiver, joined with a deadline) rather than serially.\n* Give shutdown one overall budget, and log what it gave up on.\n* Hoist `await_settle` out of `reap_all`'s loop.\n* Make a second SIGINT terminate.\n\n## Priority\n\nLow today — the install is a handful of speakers, and the restart script now waits properly (`658aee7`) rather than launching a second daemon over the top. It becomes real with more receivers, or under a service manager with a stop timeout.\n\n---\n\n<!-- media-port-dag:relationships -->\n### Position in the media-port DAG\n\n**Depends on** — must land first\n- **MP-009** — done · _no issue yet_\n\n**Blocks** — waiting on this\n- _nothing_\n\n<sub>Generated from [`docs/media-port-dag.md`](https://github.com/yuvalrakavy/Store/blob/main/docs/media-port-dag.md) — the DAG is the source of truth; edit it there and re-run <code>scripts/dag-sync-issues.py</code>. Edges point from dependency to dependent.</sub>\n<!-- /media-port-dag:relationships -->\n",
+              "closedAt": "2026-09-16T22:47:02Z",
+              "comments": {
+                "nodes": [
+                  {
+                    "author": {
+                      "login": "yuvalrakavy"
+                    },
+                    "authorAssociation": "OWNER",
+                    "body": "Node **MP-307** in the Store repo's media port DAG (`docs/media-port-dag.md`) — part of the MP-3xx reliability band of the live-frontier mission.",
+                    "createdAt": "2026-08-03T10:23:53Z"
+                  },
+                  {
+                    "author": {
+                      "login": "yuvalrakavy"
+                    },
+                    "authorAssociation": "OWNER",
+                    "body": "## This now has a second, closer deadline than systemd's — and both gate reviewers reached it independently\n\nThe 2026-08-04 gate on `fix/airzoned-defect-band` hit this from two directions at once. What is new since\nfiling is not the serial teardown itself but **what now sits on top of it**.\n\n### A new consumer: `worker::SHUTDOWN_GRACE`\n\nThe `a#10` loop/worker split introduced a daemon-internal shutdown deadline (`worker::SHUTDOWN_GRACE`,\n20 s). On expiry the loop stops waiting, the worker is deliberately **not** joined, and the process\nexits — killing the abandoned worker mid-`teardown()`. So the serial reap now has a bound that is far\ntighter than the systemd `TimeoutStopSec=90` this issue cites, and crossing it drops an RTSP TEARDOWN on\nthe floor.\n\nThe arithmetic, from `reap` alone and ignoring wait-for-due entirely:\n\n| Receivers in the \"accepts TCP, stops answering RTSP\" state | Serial teardown cost |\n|---|---|\n| 1 | up to `RETIRE_GRACE` 5 s + `RTSP_READ_TIMEOUT` 15 s = **20 s** — exactly the old bound |\n| 2 | **30 s** — over |\n\nAnd `RetireGrace` is **operator-settable** over `{Root}/Config`, so a single receiver crosses it with any\nlarger configured value. That knob became easier to set correctly in the same band (#17), which makes this\nmore reachable rather than less.\n\n### Partially mitigated, deliberately not fixed\n\n`scripts/restart-daemon.sh` waited 20 s before `pkill -9` while asserting in a comment that \"20 s covers\nthe worst healthy case\". That was already false for two wedged receivers *before* this band, so the\nscript's SIGKILL — not `SHUTDOWN_GRACE` — was the original tightest bound. It is now 35 s, derived\nexplicitly from `POLL_TIMEOUT + SHUTDOWN_GRACE + flush` with a note to change them together.\n\nThat removes the SIGKILL-inside-a-legitimate-teardown case. **It does not fix this issue**: raising a\ntimeout cannot bound something that scales with N, and one wedged receiver still denies its healthy\nsiblings their TEARDOWN by consuming the whole grace ahead of them. That last part generalises #7 — the\nwedge-on-restart failure — from \"the daemon was killed\" to \"a sibling was slow\".\n\n### What this changes about the fix direction\n\nThe first bullet above (\"tear down concurrently, joined with a deadline\") is now the load-bearing one\nrather than one option among four. `reap_all` already hoists the fade-cuts for exactly this reason —\nits doc explains that N sequential reaps cost N × `render_delay` — so the remaining serialization is the\nteardown fan-out, and parallelising it is finishing a job the function already started.\n\nOnce teardown is concurrent, `SHUTDOWN_GRACE` becomes a real global budget instead of a per-install\ngamble, and `restart-daemon.sh`'s number can come down again.\n\nNo code change here beyond the script bound.\n",
+                    "createdAt": "2026-08-04T21:19:19Z"
+                  },
+                  {
+                    "author": {
+                      "login": "yuvalrakavy"
+                    },
+                    "authorAssociation": "OWNER",
+                    "body": "**Re-filed as two — closing.** Triaged 2026-09-17: two of this issue's four bullets have landed, and its systemd framing is now wrong.\n\nDone: the settle is paid once for a batch, not once per receiver (`f1aa278`), and shutdown is now bounded by `SHUTDOWN_GRACE = 20s` (`src/worker.rs:25`, with a test tying it to the restart script) — though that bound works by abandonment, so the `TimeoutStopSec=90` reasoning here no longer applies.\n\nStill open, re-filed on their own so each can be worked and closed independently:\n- #43 — shutdown still sends TEARDOWN serially, so one slow receiver delays the rest past the grace window\n- #44 — a second Ctrl-C cannot abort the daemon's graceful shutdown (the one-shot `play` path already handles this; the fix is a copy)",
+                    "createdAt": "2026-09-16T22:47:01Z"
+                  }
+                ],
+                "totalCount": 3
+              },
+              "createdAt": "2026-08-02T21:30:54Z",
+              "id": "I_kwDOTBQnEM8AAAABLK3EeQ",
+              "labels": {
+                "nodes": [
+                  {
+                    "name": "bug"
+                  }
+                ],
+                "totalCount": 1
+              },
+              "number": 14,
+              "repository": {
+                "nameWithOwner": "yuvalrakavy/airzoned"
+              },
+              "state": "CLOSED",
+              "stateReason": "COMPLETED",
+              "timelineItems": {
+                "nodes": [
+                  {
+                    "__typename": "LabeledEvent",
+                    "actor": {
+                      "login": "yuvalrakavy"
+                    },
+                    "createdAt": "2026-08-02T21:30:54Z",
+                    "id": "LE_lADOTBQnEM8AAAABLK3Eec8AAAAGuBrmWg",
+                    "label": {
+                      "name": "bug"
+                    }
+                  }
+                ],
+                "totalCount": 1
+              },
+              "title": "Shutdown is serial in N receivers and has no overall bound",
+              "updatedAt": "2026-09-16T22:47:02Z"
+            },
+            {
+              "author": {
+                "login": "yuvalrakavy"
+              },
+              "authorAssociation": "OWNER",
+              "body": "Found by the pre-merge deep gate on `feat/m3-streaming-sources`.\n\n## The floor has no tests\n\n`impl Drop for MemberSender` is documented as \"the enforcement point\", \"the un-skippable path\", \"the floor\" — the thing that guarantees the drain rule holds even when the pool is bypassed (a `Session` unwind, a `Player` dropped without `shutdown_sessions`, the park-displacement path, any future call site nobody has written yet).\n\n**Nothing exercises it.** `MockMember` has no `Drop` impl at all, and `member.rs`'s own tests cover gain packing, i16 clamping, the retransmit ring and `stop_edge` — not the drop path. So `cut_to_silence` / `reached_silence` / `render_delay` are only ever driven through the mock.\n\nThe concrete cost: `parking_a_second_member_on_one_speaker_drains_the_first` is *named* for the drain but asserts `a.load() == 0` — that the displaced mock did **nothing** — with a comment (\"the displaced one went out via Drop, not shutdown\") describing a mechanism the mock does not have. **It cannot fail if the entire drop-path drain is deleted.**\n\n## The mock also diverges where it matters\n\n`MockMember::reached_silence` reports silence only *after* a `cut_to_silence`. The real `MemberSender` emits `StopComplete` from a plain `request_stop` fade with no cut at all.\n\nSo the **natural stop timeline** — the headline case, \"the natural path lets the full fade play out\" — is never modelled. The test that claims to cover it fakes the timeline by calling `cut_to_silence` and calling that \"modelled by the cut\".\n\nSimilarly `no_wait_exceeds_the_hard_cap_however_absurd_the_render_delay` asserts a bound on caller blocking using a mock whose `shutdown()` is instantaneous — precisely where the real member does thread joins and RTSP I/O, which is where the bound was actually false (fixed in `658aee7`, but the test still cannot see it).\n\n## What to do\n\n1. Give `MockMember` a `Drop` that records, so the floor is testable at all.\n2. Add a natural-stop mode to the mock: report silence after a fade with no cut.\n3. Re-point `parking_a_second_member_on_one_speaker_drains_the_first` at an assertion that fails when the drop-path drain is removed.\n4. Consider driving `MemberSender` itself against a loopback RTSP stub, so `shutdown_takes` is not fiction.\n\nMinor: a comment in the mock cites an explicit `mark_silent` that exists nowhere in the crate.\n",
+              "closedAt": "2026-08-09T10:09:19Z",
+              "comments": {
+                "nodes": [
+                  {
+                    "author": {
+                      "login": "yuvalrakavy"
+                    },
+                    "authorAssociation": "OWNER",
+                    "body": "Node **MP-308** in the Store repo's media port DAG (`docs/media-port-dag.md`) — part of the MP-3xx reliability band of the live-frontier mission.",
+                    "createdAt": "2026-08-03T10:23:55Z"
+                  },
+                  {
+                    "author": {
+                      "login": "yuvalrakavy"
+                    },
+                    "authorAssociation": "OWNER",
+                    "body": "## The same shape one layer up — `Player::drop`, found by the 2026-08-04 gate\n\nThe mutation lens on `fix/airzoned-defect-band` found that this issue's mechanism reaches further than\n`MemberSender` alone. **`Player::drop`'s documented \"ORDER IS LOAD-BEARING\" and its `shutdown_sessions()`\ncall are BOTH vacuous.**\n\nTwo mutations, each against the whole suite:\n\n| Mutation | Result |\n|---|---|\n| Swap the order — stop and join the reaper *before* `shutdown_sessions()` | `cargo test` → 113 passed, 0 failed |\n| Remove the `shutdown_sessions()` call entirely, keeping only reaper stop + join | `cargo test` → 113 passed, 0 failed |\n\nIncluding `player::tests::idle_rig::a_shutdown_mid_hold_still_tears_down`, which is named for it.\n\n**And the cause is exactly this issue.** `MemberSender::Drop`'s independent floor — `cut_to_silence`,\npoll for silence, RTSP TEARDOWN, with no pool or reaper involved — satisfies every existing\n\"did a TEARDOWN eventually happen\" assertion on its own. So no test can distinguish \"the graceful\n`shutdown_sessions` path ran, in the documented order\" from \"the floor cleaned up afterwards\". The floor\nbeing untested (this issue) and the graceful path being untestable are the same fact seen from two sides.\n\nThat sharpens item 3 of the plan above. Re-pointing\n`parking_a_second_member_on_one_speaker_drains_the_first` is necessary but not sufficient: the assertions\nneed to distinguish *which* path did the teardown, not merely that one happened. A recording `Drop` on\n`MockMember` (item 1) is what makes that possible, which is a further argument for doing item 1 first.\n\nNewly relevant as of that branch: `Player::drop` now runs on the **worker thread** rather than the MQTT\nloop thread (the `a#10` split), so the ordering it documents is exercised in a context it was never\ntested in.\n\nNo code change proposed here — this is evidence for the existing plan, not a new defect.\n",
+                    "createdAt": "2026-08-04T20:43:42Z"
+                  },
+                  {
+                    "author": {
+                      "login": "yuvalrakavy"
+                    },
+                    "authorAssociation": "OWNER",
+                    "body": "## Closed — `a7248e5`\n\nBoth divergences fixed, each negative-controlled.\n\n**The floor now has a model.** `MockMember` mirrors `MemberSender::drop`: skip if the pool already tore it down, else cut, wait for silence, wait the render delay, tear down — bounded, because a mock that can hang is worse than one that lies. Teardowns via `Drop` are counted separately from teardowns via the pool, so a test can still say which path ran.\n\n`parking_a_second_member_on_one_speaker_drains_the_first` now asserts the displaced member was torn down, **through the floor, after a cut** — exactly what its name always claimed. Negative-controlled: removing the cut from the drop path reddens it, which is the mutation this issue said it could not detect.\n\n**The natural timeline now has one too.** Added a natural-fade mode; the new test cuts nothing and reaches silence because the fade elapsed, then asserts the sweep cut it **zero** times — `sweep` is documented as never cutting a fade short and no test could previously tell the difference. Negative-controlled by deleting the arm.\n\n**The stale comment** citing an explicit `mark_silent` is gone; it described a mechanism that does not exist in the crate, and with `None => false` could not have worked as written.\n\n**Not done, deliberately:** item 4, driving `MemberSender` itself against a loopback RTSP stub. That is a bigger seam and belongs with #9's lifecycle work rather than bolted on here — it is also what would make `shutdown_takes` stop being fiction, so it should be scoped with the thing that needs it.",
+                    "createdAt": "2026-08-09T10:09:18Z"
+                  }
+                ],
+                "totalCount": 3
+              },
+              "createdAt": "2026-08-02T21:30:55Z",
+              "id": "I_kwDOTBQnEM8AAAABLK3EwQ",
+              "labels": {
+                "nodes": [
+                  {
+                    "name": "bug"
+                  }
+                ],
+                "totalCount": 1
+              },
+              "number": 15,
+              "repository": {
+                "nameWithOwner": "yuvalrakavy/airzoned"
+              },
+              "state": "CLOSED",
+              "stateReason": "COMPLETED",
+              "timelineItems": {
+                "nodes": [
+                  {
+                    "__typename": "LabeledEvent",
+                    "actor": {
+                      "login": "yuvalrakavy"
+                    },
+                    "createdAt": "2026-08-02T21:30:57Z",
+                    "id": "LE_lADOTBQnEM8AAAABLK3Ewc8AAAAGuBroqg",
+                    "label": {
+                      "name": "bug"
+                    }
+                  }
+                ],
+                "totalCount": 1
+              },
+              "title": "The MemberSender::drop enforcement floor has zero tests, and the mock diverges from it",
+              "updatedAt": "2026-08-09T10:09:19Z"
+            }
+          ],
+          "pageInfo": {
+            "endCursor": "Y3Vyc29yOnYyOpK0MjAyNi0wOC0wMlQyMTozMDo1NVrPAAAAASytxME=",
+            "hasNextPage": true
+          }
+        }
+      }
+    }
+  },
+  "variables": {
+    "after": "Y3Vyc29yOnYyOpK0MjAyNi0wOC0wMlQxOTowODoyNFrPAAAAASyl4mw=",
+    "first": 5,
+    "name": "airzoned",
+    "owner": "yuvalrakavy",
+    "since": "2024-10-29T12:00:00.000Z"
+  }
+}
