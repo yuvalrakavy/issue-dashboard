@@ -176,3 +176,11 @@ test("every decision the triage cards write fits the page-decision schema's keys
     if (def[k].enum) assert.ok(def[k].enum.includes(v), k + " " + v);
   }
 });
+
+test("the Details estimates editor fills its inputs from estimatesFormValues, so the commit field keeps the full commit", () => {
+  const html = fs.readFileSync(path.join(__dirname, "dashboard.html"), "utf8");
+  assert.match(html, /const f = D\.estimatesFormValues\(v\);/);
+  assert.match(html, /"Estimate blast", placeholder: "blast", value: f\.blast \}/);
+  assert.match(html, /"Estimate sites", placeholder: "file:line, file:line", value: f\.sites \}/);
+  assert.match(html, /"Estimate commit", class: "mono", placeholder: "commit", size: "9", value: f\.read_at \}/);
+});
