@@ -663,7 +663,8 @@ fn answers(
     let cat = Catalogue::embedded();
     let conn = c.conn;
     let questions = triage::prepared_questions(conn)?;
-    let asked = triage::asked(conn)?;
+    // The project's own answers, as `prepare` built this launch's inputs from.
+    let asked = triage::asked(conn, project)?;
     let mut label_layers: Option<layers::Layers> = None;
     let mut answered: BTreeSet<&str> = BTreeSet::new();
     for a in answers {
@@ -1333,7 +1334,9 @@ pub(crate) fn stronger_look_open(conn: &Connection, project: &str) -> Result<BTr
 
 /// The `triage` of each item's issue document (4.5): its latest severity, reach and
 /// detectability answers, each {answer, probabilities, backend, badge, suggestion, edited},
-/// `edited` the owner's Details edit (null: none); its latest estimates; `stronger_look`, the
+/// `edited` the owner's Details edit (null: none); its latest estimates with `edited`, the
+/// owner's estimates edits merged (null: none; recorded fields null when only an edit exists,
+/// triage spec 4.1); `stronger_look`, the
 /// answers that need a stronger look ([`stronger_look_open`]); and `instructs_agent`, the
 /// warning (spec 4.2).
 pub fn triage_details(conn: &Connection, project: &str, layers: &layers::Layers) -> Result<BTreeMap<String, Value>> {
@@ -1366,6 +1369,7 @@ pub fn triage_details(conn: &Connection, project: &str, layers: &layers::Layers)
         if decision == "estimates" {
             let mut est = s["estimate"].clone();
             est["backend"] = s["backend"].clone();
+            est["edited"] = estimates_edited(layers, item);
             entry["estimates"] = est;
             continue;
         }
@@ -1395,5 +1399,28 @@ pub fn triage_details(conn: &Connection, project: &str, layers: &layers::Layers)
             }
         }
     }
+    // So does an estimates edit without recorded estimates.
+    for item in layers.estimates.keys() {
+        let entry = out.entry(item.clone()).or_insert_with(|| json!({}));
+        if entry.get("estimates").is_none() {
+            entry["estimates"] = json!({
+                "sites": null,
+                "read_at": null,
+                "tier": null,
+                "blast": null,
+                "effort": null,
+                "backend": null,
+                "edited": estimates_edited(layers, item),
+            });
+        }
+    }
     Ok(out)
+}
+
+/// The owner's estimates edit of `item`, merged (null: none).
+fn estimates_edited(layers: &layers::Layers, item: &str) -> Value {
+    layers
+        .estimates
+        .get(item)
+        .map_or(Value::Null, |e| serde_json::to_value(e).unwrap_or(Value::Null))
 }

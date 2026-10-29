@@ -760,6 +760,51 @@
     return { action: "edit_suggestion", target, value: { [decision]: answer } };
   }
 
+  // A Details edit of the estimates (triage spec 4.1): the fields in `form` the owner set
+  // (tier, effort, blast, and sites as text with the commit they were read at), cleaned, as
+  // { fields } naming only the item, or { error }. Never a label and never truth.
+  const TIERS = ["T0", "T1", "T2", "T3"];
+  const EFFORTS = ["S", "M", "L"];
+  function estimatesEditFields(issue, form) {
+    const e = {};
+    if (form.tier !== undefined) {
+      if (!TIERS.includes(form.tier)) return { error: "Tier is one of " + TIERS.join(", ") + "." };
+      e.tier = form.tier;
+    }
+    if (form.effort !== undefined) {
+      if (!EFFORTS.includes(form.effort)) return { error: "Effort is one of " + EFFORTS.join(", ") + "." };
+      e.effort = form.effort;
+    }
+    if (form.blast !== undefined) {
+      const b = String(form.blast).trim();
+      if (!b) return { error: "Blast is empty." };
+      e.blast = b;
+    }
+    if (form.sites !== undefined || form.read_at !== undefined) {
+      const sites = String(form.sites || "").split(/[,\n]/).map((s) => s.trim()).filter(Boolean);
+      const at = String(form.read_at || "").trim().toLowerCase();
+      if (!sites.length || !at) return { error: "Sites need the commit they were read at." };
+      if (!/^[0-9a-f]{7,40}$/.test(at)) return { error: "The commit is 7 to 40 hex digits." };
+      e.sites = sites;
+      e.read_at = at;
+    }
+    if (!Object.keys(e).length) return { error: "Nothing to save." };
+    return { fields: { action: "edit_suggestion", target: { item: issue.id, alias: issue.alias }, value: { estimates: e } } };
+  }
+
+  // The estimates Details shows: the owner's edit over the recorded fields, and whether there
+  // is an edit; null when there are neither.
+  function shownEstimates(triage) {
+    const e = triage && triage.estimates;
+    if (!e) return null;
+    const out = {};
+    for (const k of ["tier", "effort", "blast", "sites", "read_at"]) {
+      out[k] = e.edited && e.edited[k] !== undefined ? e.edited[k] : e[k] === undefined ? null : e[k];
+    }
+    out.edited = !!e.edited;
+    return out;
+  }
+
   // A priority card more than one level from the rubric's (4.1) says so; otherwise null.
   function rubricNote(s) {
     if (s.kind !== "priority" || !s.rubric_level) return null;
@@ -933,7 +978,7 @@
     dismissedSuggestions, suggestionCards, dismissSuggestionFields, closePrefill, fixLaunchFields, recommendFields, READ_ONLY_RECIPE,
     triageLive, fixLaunchStates, triageLaunchFields, evalLaunchFields, noEvaluation,
     strongerLookList, strongerLookFields, metricsRows,
-    actedSuggestions, answerText, triageCards, acceptFields, acceptCardFields, editFields, applyAllFields, detailsEditFields, rubricNote, secondOpinionNote,
+    actedSuggestions, answerText, triageCards, acceptFields, acceptCardFields, editFields, applyAllFields, detailsEditFields, estimatesEditFields, shownEstimates, rubricNote, secondOpinionNote,
   };
   root.IssueDashboard = api;
   if (typeof module === "object" && module.exports) module.exports = api;

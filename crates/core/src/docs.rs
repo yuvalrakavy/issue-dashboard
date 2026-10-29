@@ -186,6 +186,48 @@ pub struct DecisionValue {
     pub reach: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detectability: Option<String>,
+    /// A Details edit of the estimates (triage spec 4.1): shown over the recorded estimates,
+    /// never a label and never truth.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub estimates: Option<EstimatesEdit>,
+}
+
+/// The fields of an estimates edit the owner set; a later edit's field replaces an earlier
+/// one's. `sites` and `read_at` go together: sites are read at a commit.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EstimatesEdit {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sites: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub read_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tier: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blast: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
+}
+
+impl EstimatesEdit {
+    /// `later`'s fields over this one's.
+    pub fn merge(&mut self, later: &EstimatesEdit) {
+        if later.sites.is_some() {
+            self.sites = later.sites.clone();
+        }
+        if later.read_at.is_some() {
+            self.read_at = later.read_at.clone();
+        }
+        if later.tier.is_some() {
+            self.tier = later.tier.clone();
+        }
+        if later.blast.is_some() {
+            self.blast = later.blast.clone();
+        }
+        if later.effort.is_some() {
+            self.effort = later.effort.clone();
+        }
+    }
 }
 
 /// Why an issue is closed: GitHub's `state_reason`, as `gh issue close --reason` takes it.

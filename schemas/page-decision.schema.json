@@ -184,6 +184,9 @@
             "silent",
             "visible"
           ]
+        },
+        "estimates": {
+          "$ref": "common.schema.json#/$defs/estimatesEdit"
         }
       }
     },
@@ -403,7 +406,7 @@
       }
     },
     {
-      "description": "An edit names its suggestion; a Details edit of severity, reach or detectability may instead name only its item (triage spec 4.1-4.2).",
+      "description": "An edit names its suggestion; a Details edit of severity, reach, detectability or the estimates may instead name only its item (triage spec 4.1-4.2).",
       "if": {
         "properties": {
           "action": {
@@ -444,6 +447,11 @@
                   {
                     "required": [
                       "detectability"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "estimates"
                     ]
                   }
                 ]

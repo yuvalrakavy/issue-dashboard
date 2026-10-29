@@ -830,43 +830,97 @@
             "tier",
             "blast",
             "effort",
-            "backend"
+            "backend",
+            "edited"
           ],
           "properties": {
             "sites": {
-              "type": "array",
-              "items": {
-                "type": "string",
-                "minLength": 1
-              }
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "read_at": {
-              "$ref": "common.schema.json#/$defs/commit"
+              "anyOf": [
+                {
+                  "$ref": "common.schema.json#/$defs/commit"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "tier": {
-              "enum": [
-                "T0",
-                "T1",
-                "T2",
-                "T3"
+              "anyOf": [
+                {
+                  "enum": [
+                    "T0",
+                    "T1",
+                    "T2",
+                    "T3"
+                  ]
+                },
+                {
+                  "type": "null"
+                }
               ]
             },
             "blast": {
-              "type": "string",
-              "minLength": 1
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "effort": {
-              "enum": [
-                "S",
-                "M",
-                "L"
+              "anyOf": [
+                {
+                  "enum": [
+                    "S",
+                    "M",
+                    "L"
+                  ]
+                },
+                {
+                  "type": "null"
+                }
               ]
             },
             "backend": {
-              "type": "string",
-              "minLength": 1
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "edited": {
+              "anyOf": [
+                {
+                  "$ref": "common.schema.json#/$defs/estimatesEdit"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             }
-          }
+          },
+          "description": "The latest recorded estimates (null fields: none recorded) and `edited`, the owner's Details edit merged (null: none; triage spec 4.1)."
         },
         "stronger_look": {
           "description": "The latest answers about the item that need a stronger look (triage spec 2.5), while the item is open and the owner has not accepted, edited or dismissed them.",

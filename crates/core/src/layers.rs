@@ -14,7 +14,7 @@ use serde_json::{Value, json};
 
 use crate::config::ConfigSet;
 use crate::decision;
-use crate::docs::{Action, DecisionValue, Priority};
+use crate::docs::{Action, DecisionValue, EstimatesEdit, Priority};
 use crate::event::Kind;
 use crate::ledger;
 use crate::translate::Canonical;
@@ -45,6 +45,8 @@ pub struct Layers {
     pub areas: BTreeMap<String, Vec<String>>,
     /// Details edits: item → decision → the answer the owner set.
     pub details: BTreeMap<String, BTreeMap<String, String>>,
+    /// Estimates edits (triage spec 4.1): item → the owner's fields, later over earlier.
+    pub estimates: BTreeMap<String, EstimatesEdit>,
     /// The suggestion documents an applied accept or edit acted on.
     pub acted: BTreeSet<String>,
 }
@@ -156,6 +158,9 @@ pub fn layers(conn: &Connection, project: &str) -> crate::Result<Layers> {
                                     .or_default()
                                     .insert(decision.to_string(), v.clone());
                             }
+                        }
+                        if let Some(e) = &value.estimates {
+                            out.estimates.entry(item.clone()).or_default().merge(e);
                         }
                     }
                 }

@@ -279,11 +279,16 @@ fn a_brief_names_this_binary_and_a_root_with_a_space_and_an_apostrophe_as_shell_
     let mut found = 0;
     for line in text.lines().filter(|l| l.contains(" --root ")) {
         let start = line.find(BIN).expect("the prefix starts with the binary");
-        let end = line.find(" record-").expect("a command follows the prefix");
+        let end = [" record-", " prepare "]
+            .iter()
+            .filter_map(|c| line[start..].find(c).map(|e| start + e))
+            .min()
+            .expect("a command follows the prefix");
         assert_eq!(shell_words(&line[start..end]), [BIN, "--root", &root], "{line}");
         found += 1;
     }
-    assert!(found >= 2, "the rules and the recording section both name it: {found}");
+    // The alias is a closures triage run: the steps and the read-only rules name it.
+    assert!(found >= 2, "the steps and the rules both name it: {found}");
     // The command works as told: a session runs it with that root.
     let file = t.write(
         "one.json",

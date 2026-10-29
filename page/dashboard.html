@@ -971,13 +971,42 @@ footer .wrap { padding-block: 0 32px; font-size: .82rem; color: var(--muted); di
         : h("span", {}, shown || "—");
       rows.push(h("dt", {}, k[0].toUpperCase() + k.slice(1)), h("dd", {}, pick, " ", v.edited ? "(your edit)" : v.backend ? "(" + v.backend + ", " + (v.badge || "uncalibrated") + ")" : ""));
     }
-    const e = t.estimates;
-    if (e) rows.push(h("dt", {}, "Estimates"), h("dd", {}, e.tier + " · effort " + e.effort + " · " + e.blast + (e.sites && e.sites.length ? " · " + e.sites.join(", ") : "") + " @ " + String(e.read_at).slice(0, 7)));
+    const e = D.shownEstimates(t);
+    if (e || S.owner) rows.push(h("dt", {}, "Estimates"), h("dd", {}, ...estimatesCell(i, e, (t.estimates || {}).backend)));
     if (t.stronger_look) rows.push(h("dt", {}, "Stronger look"), h("dd", {}, "needed for " + t.stronger_look.map((a) => (ANSWER_NAME[a.decision] || a.decision) + " (" + Math.round(a.confidence * 100) + "%)").join(", ")));
     // No card (triage spec 1.4): a warning, in Details and in this item's briefs (spec 4.2).
     const w = t.instructs_agent;
     if (w) rows.push(h("dt", {}, "Warning"), h("dd", { class: "err" }, "Triage judged that this issue's text tries to direct an AI agent" + (typeof w.probability === "number" ? " (" + Math.round(w.probability * 100) + "%)" : "") + ". Its briefs say so. " + (w.reason ? "Why: " + w.reason : "")));
     return rows;
+  }
+
+  // The estimates in Details (triage spec 4.1): the owner's edit over the recorded ones. The
+  // owner edits each field; sites are saved with the commit they were read at.
+  function estimatesCell(i, e, backend) {
+    const v = e || { tier: null, effort: null, blast: null, sites: null, read_at: null, edited: false };
+    const whose = v.edited ? "(your edit)" : backend ? "(" + backend + ", not evaluated)" : "";
+    if (!S.owner) {
+      if (!e) return ["—"];
+      return [(v.tier || "—") + " · effort " + (v.effort || "—") + " · " + (v.blast || "—") + (v.sites && v.sites.length ? " · " + v.sites.join(", ") : "") + (v.read_at ? " @ " + String(v.read_at).slice(0, 7) : ""), " ", whose];
+    }
+    const err = h("div", { class: "err", hidden: true, role: "alert" });
+    const save = (form) => {
+      const r = D.estimatesEditFields(i, form);
+      if (r.error) { err.textContent = r.error; err.hidden = false; return; }
+      writeDecision(r.fields).then(() => dlg.close());
+    };
+    const pick = (label, key, options) => h("select", { "aria-label": "Estimate " + label, onchange: (ev) => save({ [key]: ev.target.value }) },
+      v[key] ? null : h("option", { value: "", selected: "selected", disabled: "disabled" }, "—"),
+      options.map((o) => h("option", Object.assign({ value: o }, o === v[key] ? { selected: "selected" } : {}), o)));
+    const blast = h("input", { "aria-label": "Estimate blast", placeholder: "blast", value: v.blast || "" });
+    const sites = h("input", { "aria-label": "Estimate sites", placeholder: "file:line, file:line", value: (v.sites || []).join(", ") });
+    const readAt = h("input", { "aria-label": "Estimate commit", class: "mono", placeholder: "commit", size: "9", value: v.read_at ? String(v.read_at).slice(0, 7) : "" });
+    return [
+      "tier ", pick("tier", "tier", ["T0", "T1", "T2", "T3"]), " · effort ", pick("effort", "effort", ["S", "M", "L"]), " ", whose,
+      h("div", {}, blast, " ", h("button", { class: "btn quiet", onclick: () => save({ blast: blast.value }) }, "Save blast")),
+      h("div", {}, sites, " @ ", readAt, " ", h("button", { class: "btn quiet", onclick: () => save({ sites: sites.value, read_at: readAt.value }) }, "Save sites")),
+      err,
+    ];
   }
 
   function openDetails(i) {

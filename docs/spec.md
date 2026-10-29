@@ -1219,14 +1219,16 @@ material like any other outside text. Its sections:
 6. **Out of scope**: side problems get filed, not fixed.
 7. **Reporting back**: the outcome record to write when it lands (7.7).
 
-**The recommend brief** (`recommend_closures`, 5.8) has its own template: the read-only rules
-(never close, label, comment or push; record only with `record-suggestions`); the generic
-closing procedure (`docs/closing-recommendations.md`) when some repo has no campaign skill;
-per repo, its campaign skill's path (the registry's `campaign_skill`, a path in the repo's
-`local_path` checkout), or a note that the file is missing and the generic procedure applies;
-then each issue's alias and title, fenced under its author, inside or outside; and the JSON
-the session writes. The skill named is the repo's own way of deciding what can close and what
-closes together; the tracker names it in config and never in code.
+**The recommend brief** (`recommend_closures`, 5.8) is the triage brief with scope `closures`
+(triage spec 2.1, 5.1): the read-only rules (never close, label, comment or push; run only
+`prepare` and `record-suggestions`); the steps (prepare, answer, record the answers with the
+estimates, batches and issues left open, in one file whose example the brief shows); per repo,
+its checkout and how to judge closures: its campaign skill's path (the registry's
+`campaign_skill`, a path in the repo's `local_path` checkout), or a note that the file is
+missing or that none is named, and that the closing procedure of the
+`issue-dashboard-triage-session` skill applies; then the issues by alias only (blinded), with
+any instructs_agent warning. The skill named is the repo's own way of deciding what can close
+and what closes together; the tracker names it in config and never in code.
 
 ### 7.6 Launch recipes
 
