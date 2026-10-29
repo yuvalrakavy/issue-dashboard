@@ -247,7 +247,9 @@ fn brief_of(t: &TempRoot, id: &str) -> brief::Brief {
 fn record(t: &TempRoot, launch: &str, input: Value) -> Result<suggest::Report> {
     let c = ConfigSet::load(t.path()).unwrap();
     let input: suggest::Input = serde_json::from_value(input).unwrap();
-    t.root.mutate(at(3), |tx| suggest::record(tx, &c, launch, &input))
+    let commits = commits_for(t, &input, &commit_lookup());
+    t.root
+        .mutate(at(3), |tx| suggest::record(tx, &c, launch, &input, &commits))
 }
 
 fn suggested_events(t: &TempRoot) -> usize {
@@ -706,7 +708,9 @@ fn a_suggestion_leaves_the_inbox_when_its_issue_closes() {
 fn record_at(t: &TempRoot, launch: &str, input: Value, minutes: i64) -> Result<suggest::Report> {
     let c = ConfigSet::load(t.path()).unwrap();
     let input: suggest::Input = serde_json::from_value(input).unwrap();
-    t.root.mutate(at(minutes), |tx| suggest::record(tx, &c, launch, &input))
+    let commits = commits_for(t, &input, &commit_lookup());
+    t.root
+        .mutate(at(minutes), |tx| suggest::record(tx, &c, launch, &input, &commits))
 }
 
 /// The refusal of `input`, which must have recorded nothing.

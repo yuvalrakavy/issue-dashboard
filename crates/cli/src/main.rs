@@ -601,9 +601,15 @@ fn run(cli: Cli) -> anyhow::Result<Value> {
             let text = std::fs::read_to_string(&file).with_context(|| file.display().to_string())?;
             let input: suggest::Input = serde_json::from_str(&text)
                 .map_err(|e| Error::refused(format!("{}: not a suggestions file: {e}", file.display())))?;
+            // A closure's commit is looked up read-only before the ledger is locked (spec 1.4).
+            let wanted = root.read(|l| suggest::commits_named(l.conn(), &input))?;
+            let commits = match wanted.is_empty() {
+                true => suggest::Commits::default(),
+                false => suggest::check_commits(github()?.as_ref(), &wanted),
+            };
             serde_json::to_value(root.mutate_with_clock(now, |tx| {
                 let config = ConfigSet::load(&dir)?;
-                suggest::record(tx, &config, &launch, &input)
+                suggest::record(tx, &config, &launch, &input, &commits)
             })?)?
         }
         Command::Launches { live } => {

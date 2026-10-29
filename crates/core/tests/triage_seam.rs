@@ -15,6 +15,7 @@ use issue_dashboard_core::config::{ConfigSet, READ_ONLY_RECIPE};
 use issue_dashboard_core::cycle;
 use issue_dashboard_core::docs::{LaunchKind, LaunchRequest, Priority};
 use issue_dashboard_core::event::{Event, Kind};
+use issue_dashboard_core::github::{GitHub, Replay, Request};
 use issue_dashboard_core::launch::{self, Via};
 use issue_dashboard_core::observe::{self, Observation, ObservedData};
 use issue_dashboard_core::root::parse_time;
@@ -167,9 +168,26 @@ fn prepare(t: &TempRoot, launch: &str, model: &str, stage: Stage, minutes: i64) 
 }
 
 fn record(t: &TempRoot, launch: &str, input: Value, minutes: i64) -> Result<suggest::Report> {
-    let c = ConfigSet::load(t.path()).unwrap();
+    record_via(t, launch, input, minutes, &commit_lookup())
+}
+
+/// [`record`], with the commits looked up through `gh`, as `record-suggestions` does.
+fn record_via(t: &TempRoot, launch: &str, input: Value, minutes: i64, gh: &dyn GitHub) -> Result<suggest::Report> {
     let input: suggest::Input = serde_json::from_value(input).unwrap();
-    t.root.mutate(at(minutes), |tx| suggest::record(tx, &c, launch, &input))
+    let commits = commits_for(t, &input, gh);
+    record_with(t, launch, &input, minutes, &commits)
+}
+
+fn record_with(
+    t: &TempRoot,
+    launch: &str,
+    input: &suggest::Input,
+    minutes: i64,
+    commits: &suggest::Commits,
+) -> Result<suggest::Report> {
+    let c = ConfigSet::load(t.path()).unwrap();
+    t.root
+        .mutate(at(minutes), |tx| suggest::record(tx, &c, launch, input, commits))
 }
 
 fn events(t: &TempRoot, kind: Kind) -> Vec<Event> {
@@ -628,16 +646,50 @@ fn a_question_counts_as_asked_once_recorded_and_returns_when_the_item_changes() 
 #[test]
 fn an_item_due_only_for_a_closure_recheck_gets_no_full_questions() {
     let tr = tracked();
+    let (id, alias) = tr.items[0].clone();
+    // An outside author's issue: instructs_agent is a boolean of scope both too, but no closure.
+    edit(&tr.t, &id, 2, |c| {
+        c["author"] = json!("someone");
+        c["author_association"] = json!("NONE");
+    });
+    launched(&tr.t, "T1", LaunchKind::Triage, &tr.items[..1], 3);
+    let p = prepare(&tr.t, "T1", BACKEND, Stage::First, 3).unwrap();
+    assert_eq!(p.report.questions, 10);
+    record(&tr.t, "T1", answer_all(&p), 4).unwrap();
+    // Answered at minute 4: the recheck is due 14 days later to the minute, not a minute before.
+    launched(&tr.t, "T2", LaunchKind::Triage, &tr.items[..1], 14 * DAY + 3);
+    let early = prepare(&tr.t, "T2", BACKEND, Stage::First, 14 * DAY + 3).unwrap();
+    assert_eq!(early.report.questions, 0, "a minute short of 14 days: nothing due");
+    launched(&tr.t, "T3", LaunchKind::Triage, &tr.items[..1], 14 * DAY + 4);
+    let late = prepare(&tr.t, "T3", BACKEND, Stage::First, 14 * DAY + 4).unwrap();
+    assert_eq!(asked_about(&late, &alias), CLOSURES);
+}
+
+#[test]
+fn a_project_s_closure_recheck_days_replaces_the_default() {
+    let tr = tracked();
     let alias = tr.items[0].1.clone();
+    let path = tr.t.path().join("projects/home.toml");
+    let text = fs::read_to_string(&path).unwrap();
+    fs::write(
+        &path,
+        text.replace("history_days = 30\n", "history_days = 30\nclosure_recheck_days = 2\n"),
+    )
+    .unwrap();
+    assert_eq!(
+        ConfigSet::load(tr.t.path())
+            .unwrap()
+            .project("home")
+            .unwrap()
+            .closure_recheck_days,
+        Some(2)
+    );
     launched(&tr.t, "T1", LaunchKind::Triage, &tr.items[..1], 2);
     let p = prepare(&tr.t, "T1", BACKEND, Stage::First, 3).unwrap();
     record(&tr.t, "T1", answer_all(&p), 4).unwrap();
-    launched(&tr.t, "T2", LaunchKind::Triage, &tr.items[..1], 13 * DAY);
-    let early = prepare(&tr.t, "T2", BACKEND, Stage::First, 13 * DAY + 1).unwrap();
-    assert_eq!(early.report.questions, 0, "13 days: nothing due");
-    launched(&tr.t, "T3", LaunchKind::Triage, &tr.items[..1], 14 * DAY + 5);
-    let late = prepare(&tr.t, "T3", BACKEND, Stage::First, 14 * DAY + 5).unwrap();
-    assert_eq!(asked_about(&late, &alias), CLOSURES);
+    launched(&tr.t, "T2", LaunchKind::Triage, &tr.items[..1], 2 * DAY + 4);
+    let p2 = prepare(&tr.t, "T2", BACKEND, Stage::First, 2 * DAY + 4).unwrap();
+    assert_eq!(asked_about(&p2, &alias), CLOSURES);
 }
 
 #[test]
@@ -703,6 +755,7 @@ fn recorded_answers_carry_raw_and_identity_calibrated_probabilities() {
     assert_eq!(ty["alias"], alias.as_str());
     assert_eq!(ty["backend"], BACKEND);
     assert_eq!(ty["evaluated"], false);
+    assert_eq!(ty["reason"], "from the body");
     assert_eq!(ty["map_id"], Value::Null);
     // Stated 0.7 and 0.3 / 3 each; normalising a sum a rounding away from 1 moves the last digit.
     for (answer, p) in [("bug", 0.7), ("todo", 0.1), ("decision", 0.1), ("docs", 0.1)] {
@@ -970,4 +1023,475 @@ fn a_phase_one_recommender_file_still_records_under_the_launch_s_routing() {
     assert_eq!(rep.recorded, 1);
     let evs = events(&tr.t, Kind::Suggested);
     assert_eq!(evs[0].data["suggestion"]["backend"], BACKEND);
+}
+
+// --- Mutation-gate gaps (round 1) -----------------------------------------------------------
+
+#[test]
+fn stated_probabilities_name_every_answer_once_and_ties_go_to_the_first() {
+    let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+    let p = |v: &[(&str, f64)]| v.iter().map(|(k, x)| (k.to_string(), *x)).collect::<BTreeMap<_, _>>();
+    let ty = s(&["bug", "todo", "decision", "docs"]);
+    let e = triage::check_probabilities(
+        AnswerKind::Choice,
+        &ty,
+        &p(&[
+            ("bug", 0.7),
+            ("todo", 0.1),
+            ("decision", 0.1),
+            ("docs", 0.1),
+            ("wontfix", 0.0),
+        ]),
+    )
+    .unwrap_err();
+    assert!(e.contains("must name exactly bug, todo, decision, docs"), "{e}");
+    for bad in [f64::NAN, f64::INFINITY] {
+        let e = triage::check_probabilities(
+            AnswerKind::Choice,
+            &ty,
+            &p(&[("bug", bad), ("todo", 0.0), ("decision", 0.0), ("docs", 0.0)]),
+        )
+        .unwrap_err();
+        assert!(e.contains("is not between 0 and 1"), "{bad}: {e}");
+    }
+    // Each bound on its own, the sum within tolerance.
+    for v in [
+        [("bug", 1.01), ("todo", 0.0), ("decision", 0.0), ("docs", 0.0)],
+        [("bug", 0.51), ("todo", 0.5), ("decision", -0.01), ("docs", 0.0)],
+    ] {
+        let e = triage::check_probabilities(AnswerKind::Choice, &ty, &p(&v)).unwrap_err();
+        assert!(e.contains("is not between 0 and 1"), "{v:?}: {e}");
+    }
+    let tie = p(&[("bug", 0.4), ("todo", 0.4), ("decision", 0.1), ("docs", 0.1)]);
+    assert_eq!(
+        triage::check_probabilities(AnswerKind::Choice, &ty, &tie).unwrap().0,
+        json!("bug")
+    );
+    let areas = s(&["kernel", "renderer", "sdl"]);
+    let under = p(&[("kernel", 0.45), ("renderer", 0.4), ("sdl", 0.0)]);
+    assert_eq!(
+        triage::check_probabilities(AnswerKind::Areas, &areas, &under)
+            .unwrap()
+            .0,
+        json!(["kernel"])
+    );
+    let tie = p(&[("kernel", 0.3), ("renderer", 0.3), ("sdl", 0.1)]);
+    assert_eq!(
+        triage::check_probabilities(AnswerKind::Areas, &areas, &tie).unwrap().0,
+        json!(["kernel"])
+    );
+}
+
+fn outside_source() -> Source {
+    let comment = |author: &str, inside: bool| Comment {
+        author: author.into(),
+        inside,
+        at: "2026-10-20T10:00:00Z".into(),
+        body: Some("+1".into()),
+    };
+    Source {
+        author: "reporter".into(),
+        inside: false,
+        comments: vec![
+            comment("reporter", false),
+            comment("someone", false),
+            comment("someone", false),
+            comment("yuvalrakavy", true),
+        ],
+        reactions: 3,
+        ..replay_source()
+    }
+}
+
+#[test]
+fn instructs_agent_sees_an_outside_author_s_text_and_never_an_inside_author_s() {
+    let t = store_translation();
+    let cat = Catalogue::embedded();
+    let inside = triage::input(cat, "instructs_agent", &replay_source(), &t, None, None).unwrap();
+    assert_eq!((&inside["title"], &inside["body"]), (&Value::Null, &Value::Null));
+    let outside = triage::input(cat, "instructs_agent", &outside_source(), &t, None, None).unwrap();
+    assert_eq!(outside["title"], "Scheduler stalls");
+    assert_eq!(outside["body"], "The scheduler stops after a reload.");
+    let authors: Vec<&str> = outside["comments"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["author"].as_str().unwrap())
+        .collect();
+    assert_eq!(authors, ["reporter", "someone", "someone"], "outside comments only");
+}
+
+#[test]
+fn reach_counts_distinct_outside_commenters_other_than_the_author_and_reactions() {
+    let t = store_translation();
+    let input = triage::input(Catalogue::embedded(), "reach", &outside_source(), &t, None, None).unwrap();
+    assert_eq!(
+        input["outside_demand"],
+        json!({"outside_commenters": 1, "reactions": 3})
+    );
+}
+
+#[test]
+fn prepare_skips_an_item_never_read() {
+    let tr = tracked();
+    let mut items = tr.items[..1].to_vec();
+    items.push(("I_kwDOneverRead0001".into(), format!("{STORE}#99999")));
+    launched(&tr.t, "T1", LaunchKind::Triage, &items, 2);
+    let p = prepare(&tr.t, "T1", BACKEND, Stage::First, 3).unwrap();
+    assert_eq!(
+        p.report.skipped,
+        [json!({"item": format!("{STORE}#99999"), "why": "never read"})]
+    );
+    assert_eq!(p.report.questions, 8);
+}
+
+#[test]
+fn prepare_skips_a_pull_request() {
+    let tr = tracked();
+    let (id, alias) = tr.items[0].clone();
+    // The observation's item kind is what makes a pull request.
+    tr.t.root
+        .mutate(at(2), |tx| {
+            let e = ledger::latest(tx.conn(), &id, Kind::Observed)?.expect("observed");
+            let mut data: ObservedData = serde_json::from_value(e.data)?;
+            // An unchanged content is no new observation.
+            data.content["title"] = json!("Scheduler stalls (pull request)");
+            observe::record(
+                tx,
+                &Observation {
+                    node_id: id.clone(),
+                    item: serde_json::from_value(json!("pull_request"))?,
+                    alias: data.alias.clone(),
+                    updated_at: parse_time(&data.updated_at)? + Duration::seconds(1),
+                    read_at: parse_time(&data.read_at)? + Duration::seconds(1),
+                    read_id: "read-pr".into(),
+                    content: data.content,
+                },
+            )
+        })
+        .unwrap();
+    launched(&tr.t, "T1", LaunchKind::Triage, &tr.items[..1], 3);
+    let p = prepare(&tr.t, "T1", BACKEND, Stage::First, 4).unwrap();
+    assert_eq!(p.report.skipped, [json!({"item": alias, "why": "not an issue"})]);
+}
+
+#[test]
+fn a_reworded_stage_one_file_holds_priority_back_until_answered_again() {
+    let tr = tracked();
+    launched(&tr.t, "T1", LaunchKind::Triage, &tr.items[..1], 2);
+    let first = prepare(&tr.t, "T1", BACKEND, Stage::First, 3).unwrap();
+    record(&tr.t, "T1", answer_all(&first), 4).unwrap();
+    let severity = DECISION_FILES.iter().find(|(s, _)| *s == "severity").unwrap().1;
+    let reworded = files_with("severity", &severity.replace("how bad is its effect", "how bad is it"));
+    let c = ConfigSet::load(tr.t.path()).unwrap();
+    let m = refused(tr.t.root.mutate(at(5), |tx| {
+        triage::prepare_with(tx, &c, &reworded, "T1", BACKEND, Stage::Priority)
+    }));
+    assert!(m.contains("stage 1 has no recorded severity answer"), "{m}");
+    // Under the reworded files stage 1 asks severity again, and nothing else.
+    let again =
+        tr.t.root
+            .mutate(at(6), |tx| {
+                triage::prepare_with(tx, &c, &reworded, "T1", BACKEND, Stage::First)
+            })
+            .unwrap();
+    assert_eq!(asked_about(&again, &tr.items[0].1), ["severity"]);
+}
+
+#[test]
+fn two_questions_of_one_item_and_decision_answered_together_refuse_the_file() {
+    let tr = tracked();
+    let (id, _) = tr.items[0].clone();
+    launched(&tr.t, "T1", LaunchKind::Triage, &tr.items[..1], 2);
+    let p = prepare(&tr.t, "T1", BACKEND, Stage::First, 3).unwrap();
+    edit(&tr.t, &id, 4, |c| c["body"] = json!("Edited."));
+    let p2 = prepare(&tr.t, "T1", BACKEND, Stage::First, 5).unwrap();
+    let type_id = |p: &triage::Prepared| questions(p).iter().find(|q| q["decision"] == "type").unwrap()["id"].clone();
+    assert_ne!(type_id(&p), type_id(&p2), "a changed input is a new question");
+    let mut file = answer_all(&p2);
+    let old = answer_all(&p)["answers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["question"] == type_id(&p))
+        .unwrap()
+        .clone();
+    file["answers"].as_array_mut().unwrap().push(old);
+    let m = refused(record(&tr.t, "T1", file, 6));
+    assert!(m.contains("has two type answers"), "{m}");
+}
+
+#[test]
+fn a_closure_s_subject_must_be_a_commit_hash_or_another_open_tracked_issue() {
+    let tr = tracked();
+    let (_, alias) = tr.items[0].clone();
+    let (other, other_alias) = tr.items[1].clone();
+    edit(&tr.t, &other, 2, |c| c["state"] = json!("closed"));
+    launched(&tr.t, "R1", LaunchKind::RecommendClosures, &tr.items[..1], 3);
+    let p = prepare(&tr.t, "R1", BACKEND, Stage::First, 4).unwrap();
+    let decision_of = |q: &Value| -> String {
+        questions(&p).iter().find(|x| x["id"] == q["question"]).unwrap()["decision"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    let file_with = |decision: &str, field: &str, value: Value| {
+        let mut file = answer_all(&p);
+        for a in file["answers"].as_array_mut().unwrap() {
+            if decision_of(a) == decision {
+                a["probabilities"] = json!({"true": 0.9, "false": 0.1});
+                a[field] = value.clone();
+            }
+        }
+        file
+    };
+    let forty_one = "a".repeat(41);
+    for bad in ["main", "abc123", "ABC1234", forty_one.as_str()] {
+        let m = refused(record(&tr.t, "R1", file_with("likely_fixed", "commit", json!(bad)), 5));
+        assert!(m.contains(&format!("{bad} is not a commit hash")), "{bad}: {m}");
+    }
+    let m = refused(record(&tr.t, "R1", file_with("duplicate", "related", json!(alias)), 5));
+    assert!(m.contains("cannot be a duplicate of itself"), "{m}");
+    let m = refused(record(
+        &tr.t,
+        "R1",
+        file_with("duplicate", "related", json!(other_alias)),
+        5,
+    ));
+    assert!(m.contains(&format!("{other_alias} is not an open issue")), "{m}");
+    let untracked = format!("{STORE}#99999");
+    let m = refused(record(
+        &tr.t,
+        "R1",
+        file_with("duplicate", "related", json!(untracked)),
+        5,
+    ));
+    assert!(m.contains("is not tracked by project home"), "{m}");
+    assert!(events(&tr.t, Kind::Suggested).is_empty());
+}
+
+/// A closure launch on one Store item, prepared, and its answers with likely_fixed true on
+/// `commit` and the rest false.
+fn likely_fixed_on(commit: &str) -> (Tracked, Value) {
+    let tr = tracked();
+    launched(&tr.t, "R1", LaunchKind::RecommendClosures, &tr.items[..1], 2);
+    let p = prepare(&tr.t, "R1", BACKEND, Stage::First, 3).unwrap();
+    let mut file = answer_all(&p);
+    for a in file["answers"].as_array_mut().unwrap() {
+        let q = questions(&p).iter().find(|x| x["id"] == a["question"]).unwrap();
+        if q["decision"] == "likely_fixed" {
+            a["probabilities"] = json!({"true": 0.9, "false": 0.1});
+            a["commit"] = json!(commit);
+        } else {
+            a["probabilities"] = json!({"true": 0.1, "false": 0.9});
+        }
+    }
+    (tr, file)
+}
+
+/// The commit lookup GitHub answered with a real commit of Store (a recording, no hook).
+#[test]
+fn a_closure_s_commit_that_github_finds_makes_the_card() {
+    let (tr, file) = likely_fixed_on(STORE_COMMIT);
+    let gh = Replay::load(&fixtures().join("replay")).unwrap();
+    record_via(&tr.t, "R1", file, 4, &gh).unwrap();
+    let docs = tr.t.root.read(|l| suggest::documents(l.conn(), "home")).unwrap();
+    assert_eq!(docs.len(), 1, "{docs:?}");
+    assert_eq!(
+        (docs[0]["kind"].as_str(), docs[0]["commit"].as_str()),
+        (Some("likely_fixed"), Some(STORE_COMMIT))
+    );
+}
+
+/// GitHub's recorded answer for a hash Store does not hold: the answer is refused by name.
+#[test]
+fn a_closure_s_commit_that_github_does_not_hold_is_refused() {
+    let (tr, file) = likely_fixed_on(MISSING_COMMIT);
+    let gh = Replay::load(&fixtures().join("replay")).unwrap();
+    let m = refused(record_via(&tr.t, "R1", file, 4, &gh));
+    assert!(m.contains(&format!("{MISSING_COMMIT} is no commit of {STORE}")), "{m}");
+    assert!(events(&tr.t, Kind::Suggested).is_empty());
+}
+
+/// A failed lookup is never taken for "exists": the answer is refused with its own reason.
+#[test]
+fn a_closure_s_commit_whose_lookup_fails_is_refused_not_trusted() {
+    let (tr, file) = likely_fixed_on(STORE_COMMIT);
+    let gh = Replay::load(&fixtures().join("replay"))
+        .unwrap()
+        .with_hook(Box::new(|req: &Request, recorded| match (req.name, recorded) {
+            ("commit", _) => Err(Error::GitHub("gh: connection reset".into())),
+            (_, Some(r)) => Ok(r),
+            (name, None) => Err(Error::GitHub(format!("no recording for {name}"))),
+        }));
+    let m = refused(record_via(&tr.t, "R1", file.clone(), 4, &gh));
+    assert!(
+        m.contains(&format!("commit {STORE_COMMIT} of {STORE} could not be checked")),
+        "{m}"
+    );
+    assert!(m.contains("connection reset"), "{m}");
+    let input: suggest::Input = serde_json::from_value(file).unwrap();
+    let m = refused(record_with(&tr.t, "R1", &input, 4, &suggest::Commits::default()));
+    assert!(
+        m.contains(&format!("commit {STORE_COMMIT} of {STORE} was not looked up")),
+        "{m}"
+    );
+    assert!(events(&tr.t, Kind::Suggested).is_empty());
+}
+
+#[test]
+fn an_estimate_needs_a_reason_a_blast_level_and_one_entry_per_item() {
+    let tr = tracked();
+    let alias = tr.items[0].1.clone();
+    launched(&tr.t, "T1", LaunchKind::Triage, &tr.items[..1], 2);
+    let est = json!({"item": alias, "sites": ["src/a.rs:1"], "read_at": "95c2531bb",
+        "tier": "T1", "blast": "quick", "effort": "S", "reason": "one guarded path"});
+    let with = |field: &str, v: Value| {
+        let mut e = est.clone();
+        e[field] = v;
+        json!({"backend": BACKEND, "estimates": [e]})
+    };
+    let m = refused(record(&tr.t, "T1", with("reason", json!(" ")), 3));
+    assert!(m.contains("needs a reason"), "{m}");
+    let m = refused(record(&tr.t, "T1", with("blast", json!("")), 3));
+    assert!(m.contains("blast names the gate level a fix needs"), "{m}");
+    let m = refused(record(
+        &tr.t,
+        "T1",
+        json!({"backend": BACKEND, "estimates": [est, est]}),
+        3,
+    ));
+    assert!(m.contains("has two estimates entries"), "{m}");
+    let m = refused(record(&tr.t, "T1", json!({"estimates": [est]}), 3));
+    assert!(m.contains("a file with answers or estimates names its backend"), "{m}");
+    record(&tr.t, "T1", json!({"backend": BACKEND, "estimates": [est]}), 4).unwrap();
+    let evs = events(&tr.t, Kind::Suggested);
+    let s = &evs[0].data["suggestion"];
+    assert_eq!(
+        (&s["evaluated"], &s["reason"]),
+        (&json!(false), &json!("one guarded path"))
+    );
+}
+
+#[test]
+fn a_triage_launch_still_records_a_batch() {
+    let tr = tracked();
+    let members: Vec<String> = tr.items[..2].iter().map(|(_, a)| a.clone()).collect();
+    launched(&tr.t, "T1", LaunchKind::Triage, &tr.items[..2], 2);
+    let rep = record(
+        &tr.t,
+        "T1",
+        json!({"suggestions": [{"kind": "batch", "members": members, "surface": "the scheduler",
+            "confidence": 0.6, "reason": "one fix"}]}),
+        3,
+    )
+    .unwrap();
+    assert_eq!(rep.recorded, 1);
+}
+
+// --- Depth-gate findings (round 1) ----------------------------------------------------------
+
+#[test]
+fn priority_never_reads_stage_one_answers_about_older_facts() {
+    let tr = tracked();
+    let (id, _) = tr.items[0].clone();
+    launched(&tr.t, "T1", LaunchKind::Triage, &tr.items[..1], 2);
+    let first = prepare(&tr.t, "T1", BACKEND, Stage::First, 3).unwrap();
+    record(&tr.t, "T1", answer_all(&first), 4).unwrap();
+    edit(&tr.t, &id, 5, |c| c["body"] = json!("It also loses the queue."));
+    let m = refused(prepare(&tr.t, "T1", BACKEND, Stage::Priority, 6));
+    assert!(
+        m.contains("stage 1 has no recorded severity, reach, detectability answer"),
+        "{m}"
+    );
+}
+
+#[test]
+fn a_decision_label_that_is_also_a_modifier_is_still_blinded_and_still_cuts_off() {
+    let mut t = store_translation();
+    t.priorities.get_mut(&Priority::P1).unwrap().push("urgent".into());
+    t.modifiers.insert("needs-decision".into(), vec!["urgent".into()]);
+    assert_eq!(
+        triage::blinded_labels(&t, &["URGENT".into(), "upstream".into()]),
+        ["upstream"]
+    );
+    let events = [LabelEvent {
+        label: "Urgent".into(),
+        at: "2026-10-20T11:00:00Z".into(),
+    }];
+    assert_eq!(
+        triage::replay_cutoff(&t, &events).unwrap().as_deref(),
+        Some("2026-10-20T11:00:00Z")
+    );
+}
+
+#[test]
+fn reach_counts_no_outside_commenter_after_the_replay_cutoff() {
+    let t = store_translation();
+    let cat = Catalogue::embedded();
+    let input = triage::input(cat, "reach", &outside_source(), &t, Some("2026-10-20T09:00:00Z"), None).unwrap();
+    assert_eq!(
+        input["outside_demand"],
+        json!({"outside_commenters": 0, "reactions": 3})
+    );
+}
+
+#[test]
+fn a_launch_re_asked_after_its_item_changed_records_the_new_answers_too() {
+    let tr = tracked();
+    let (id, _) = tr.items[0].clone();
+    launched(&tr.t, "T1", LaunchKind::Triage, &tr.items[..1], 2);
+    let p = prepare(&tr.t, "T1", BACKEND, Stage::First, 3).unwrap();
+    record(&tr.t, "T1", answer_all(&p), 4).unwrap();
+    edit(&tr.t, &id, 5, |c| c["body"] = json!("It also loses the queue."));
+    let p2 = prepare(&tr.t, "T1", BACKEND, Stage::First, 6).unwrap();
+    assert_eq!(p2.report.questions, 8);
+    let rep = record(&tr.t, "T1", answer_all(&p2), 7).unwrap();
+    assert_eq!((rep.recorded, rep.repeats), (8, 0));
+    // And a retry of either file is a repeat.
+    assert_eq!(record(&tr.t, "T1", answer_all(&p2), 8).unwrap().repeats, 8);
+}
+
+#[test]
+fn a_read_that_changes_only_blinded_labels_makes_new_questions_not_a_repeat() {
+    let tr = tracked();
+    let (id, _) = tr.items[0].clone();
+    launched(&tr.t, "T1", LaunchKind::Triage, &tr.items[..1], 2);
+    let p = prepare(&tr.t, "T1", BACKEND, Stage::First, 3).unwrap();
+    edit(&tr.t, &id, 4, |c| {
+        c["labels"] = json!(["bug", "p2", "kernel", "upstream"])
+    });
+    let p2 = prepare(&tr.t, "T1", BACKEND, Stage::First, 5).unwrap();
+    assert!(!p2.report.repeat, "the questions are about a newer observation");
+    assert_ne!(p2.report.seq, p.report.seq);
+    record(&tr.t, "T1", answer_all(&p2), 6).unwrap();
+    launched(&tr.t, "T2", LaunchKind::Triage, &tr.items[..1], 7);
+    assert_eq!(
+        prepare(&tr.t, "T2", BACKEND, Stage::First, 8).unwrap().report.questions,
+        0
+    );
+}
+
+#[test]
+fn an_area_answer_whose_area_list_changed_is_dropped_and_the_rest_recorded() {
+    let tr = tracked();
+    launched(&tr.t, "T1", LaunchKind::Triage, &tr.items[..1], 2);
+    let p = prepare(&tr.t, "T1", BACKEND, Stage::First, 3).unwrap();
+    let path = tr.t.path().join("repos.toml");
+    let text = fs::read_to_string(&path).unwrap();
+    let line = "translate.area.behaviors  = [\"behaviors\"]\n";
+    assert!(text.contains(line));
+    fs::write(
+        &path,
+        text.replace(line, &format!("{line}translate.area.vm         = [\"vm\"]\n")),
+    )
+    .unwrap();
+    let rep = record(&tr.t, "T1", answer_all(&p), 4).unwrap();
+    assert_eq!(rep.recorded, 7);
+    let dropped: Vec<(&str, &str)> = rep
+        .dropped
+        .iter()
+        .map(|d| (d.decision.as_str(), d.why.as_str()))
+        .collect();
+    assert_eq!(dropped, [("area", "the issue changed since prepare")]);
 }

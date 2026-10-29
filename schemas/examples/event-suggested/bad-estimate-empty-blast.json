@@ -1,0 +1,33 @@
+{
+  "seq": 15,
+  "time": "2026-10-29T08:20:00Z",
+  "kind": "suggested",
+  "subject": "I_kwDOAbCdEf5xYz34",
+  "pred": 1,
+  "distinct": {
+    "run_id": "triage-20261029",
+    "decision": "estimates"
+  },
+  "identity": "5da21c52222f57578c005c24506ff08a4232d1b8778b572c21c7aec574d7cdc4",
+  "data": {
+    "project": "home",
+    "run_id": "triage-20261029",
+    "suggestion": {
+      "item": "I_kwDOAbCdEf5xYz34",
+      "alias": "example-org/server#405",
+      "decision": "estimates",
+      "estimate": {
+        "sites": [
+          "store_server/src/command/delete.rs:212"
+        ],
+        "read_at": "95c2531bb",
+        "tier": "T1",
+        "blast": "",
+        "effort": "S"
+      },
+      "backend": "claude-opus-5-5@medium",
+      "evaluated": false,
+      "reason": "one guarded delete path"
+    }
+  }
+}

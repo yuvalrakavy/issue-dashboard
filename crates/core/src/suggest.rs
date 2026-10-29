@@ -23,6 +23,7 @@ use crate::config::ConfigSet;
 use crate::decision::{self, Status};
 use crate::docs::{Action, LaunchKind};
 use crate::event::Kind;
+use crate::github::{GitHub, Request};
 use crate::launch::Launch;
 use crate::ledger::{self, Dedupe, Tx};
 use crate::root::{format_time, parse_time};
@@ -228,6 +229,25 @@ impl Check<'_> {
         }
     }
 
+    /// Whether `sha`, named by `what` about item `alias`, is a commit of the item's repo as the
+    /// lookup found it; refuses the file otherwise, naming why.
+    fn commit(&mut self, commits: &Commits, what: &str, alias: &str, sha: &str) -> bool {
+        if !is_commit(sha) {
+            self.fail(format!("{what}: {sha} is not a commit hash"));
+            return false;
+        }
+        let repo = repo_of(alias).unwrap_or_default();
+        match commits.0.get(&(repo.clone(), sha.to_string())) {
+            Some(Ok(true)) => return true,
+            Some(Ok(false)) => self.fail(format!("{what}: {sha} is no commit of {repo}")),
+            Some(Err(e)) => self.fail(format!(
+                "{what}: commit {sha} of {repo} could not be checked ({e}); a closure's commit is recorded only once found"
+            )),
+            None => self.fail(format!("{what}: commit {sha} of {repo} was not looked up")),
+        }
+        false
+    }
+
     fn common(&mut self, what: &str, confidence: f64, reason: &str) {
         if !(0.0..=1.0).contains(&confidence) {
             self.fail(format!("{what}: confidence {confidence} is not between 0 and 1"));
@@ -242,13 +262,94 @@ fn is_commit(s: &str) -> bool {
     (7..=40).contains(&s.len()) && s.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
+/// The repo of an `owner/repo#n` alias, as the alias spells it: the lookup and the check that
+/// reads it both take it from the same alias.
+fn repo_of(alias: &str) -> Option<String> {
+    alias.rsplit_once('#').map(|(r, _)| r.to_string())
+}
+
+/// What a read-only lookup found for each (repo, commit) a file names (triage spec 1.4: a
+/// closure's commit must exist): `Ok(true)` a commit of that repo, `Ok(false)` none, `Err` the
+/// lookup failed. Built before the ledger transaction, by [`check_commits`].
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Commits(BTreeMap<(String, String), std::result::Result<bool, String>>);
+
+const COMMIT_QUERY: &str = "query($owner: String!, $name: String!, $rev: String!) { \
+     repository(owner: $owner, name: $name) { object(expression: $rev) { __typename ... on Commit { oid } } } }";
+
+/// The (repo, commit) pairs `input` names a commit for, spelled as a commit hash: an answer's
+/// by the repo of the item its question was prepared about, a phase-1 entry's by its item's.
+pub fn commits_named(conn: &Connection, input: &Input) -> Result<BTreeSet<(String, String)>> {
+    let mut wanted = BTreeSet::new();
+    let questions = if input.answers.iter().any(|a| a.commit.is_some()) {
+        triage::prepared_questions(conn)?
+    } else {
+        BTreeMap::new()
+    };
+    for a in &input.answers {
+        if let (Some(sha), Some((q, _))) = (a.commit.as_deref(), questions.get(&a.question))
+            && is_commit(sha)
+            && let Some(repo) = repo_of(&q.alias)
+        {
+            wanted.insert((repo, sha.to_string()));
+        }
+    }
+    for e in &input.suggestions {
+        if let (EntryKind::LikelyFixed, Some(sha), Some(item)) = (e.kind, e.commit.as_deref(), e.item.as_deref())
+            && is_commit(sha)
+            && let Some(repo) = repo_of(item)
+        {
+            wanted.insert((repo, sha.to_string()));
+        }
+    }
+    Ok(wanted)
+}
+
+/// Looks each of `wanted` up once, read-only. A failed lookup is recorded as one, never as
+/// found.
+pub fn check_commits(gh: &dyn GitHub, wanted: &BTreeSet<(String, String)>) -> Commits {
+    let mut found = BTreeMap::new();
+    for (repo, sha) in wanted {
+        let status = match repo.split_once('/') {
+            None => Err(format!("{repo} is not owner/name")),
+            Some((owner, name)) => {
+                let req = Request {
+                    name: "commit",
+                    query: COMMIT_QUERY,
+                    variables: json!({"owner": owner, "name": name, "rev": sha}),
+                };
+                match gh.graphql(&req) {
+                    Err(e) => Err(e.to_string()),
+                    Ok(doc) => match doc["data"]["repository"].get("object") {
+                        Some(Value::Null) => Ok(false),
+                        Some(o) => Ok(o["__typename"] == "Commit"),
+                        None => Err(match doc["errors"][0]["message"].as_str() {
+                            Some(m) => format!("GitHub answered: {m}"),
+                            None => "GitHub's answer holds no repository".to_string(),
+                        }),
+                    },
+                }
+            }
+        };
+        found.insert((repo.clone(), sha.clone()), status);
+    }
+    Commits(found)
+}
+
 fn probabilities(confidence: f64) -> Value {
     json!({"true": confidence, "false": 1.0 - confidence})
 }
 
 /// Records the suggestions of `input` for recommender launch `launch_id`, or refuses the whole
-/// file with every reason.
-pub fn record(tx: &mut Tx<'_>, config: &ConfigSet, launch_id: &str, input: &Input) -> Result<Report> {
+/// file with every reason. `commits` is what [`check_commits`] found of [`commits_named`]
+/// before the transaction; a closure's commit it does not show as found is refused.
+pub fn record(
+    tx: &mut Tx<'_>,
+    config: &ConfigSet,
+    launch_id: &str,
+    input: &Input,
+    commits: &Commits,
+) -> Result<Report> {
     let (l, _) = triage::answering_launch(tx.conn(), launch_id)?;
     let backend = triage::backend(&l.request.routing);
     let project = l.request.project.clone();
@@ -286,6 +387,7 @@ pub fn record(tx: &mut Tx<'_>, config: &ConfigSet, launch_id: &str, input: &Inpu
         &mut seen,
         &mut pending,
         &mut report.dropped,
+        commits,
     )?;
     for e in &input.estimates {
         let what = format!("{} (estimates)", e.item);
@@ -396,8 +498,11 @@ pub fn record(tx: &mut Tx<'_>, config: &ConfigSet, launch_id: &str, input: &Inpu
         match e.kind {
             EntryKind::LikelyFixed => match e.commit.as_deref() {
                 None => c.fail(format!("{alias}: likely_fixed needs the fixing commit")),
-                Some(sha) if !is_commit(sha) => c.fail(format!("{alias}: {sha} is not a commit hash")),
-                Some(sha) => body["commit"] = json!(sha),
+                Some(sha) => {
+                    if c.commit(commits, alias, alias, sha) {
+                        body["commit"] = json!(sha);
+                    }
+                }
             },
             EntryKind::Duplicate => match e.related.as_deref() {
                 None => c.fail(format!("{alias}: duplicate needs the other issue (related)")),
@@ -463,14 +568,13 @@ pub fn record(tx: &mut Tx<'_>, config: &ConfigSet, launch_id: &str, input: &Inpu
     }
 
     for p in pending {
+        // An answer is one per question: a launch re-asks a question when its item changes.
+        let mut distinct = json!({"run_id": launch_id, "decision": p.decision});
+        if let Some(q) = p.body.get("question") {
+            distinct["question"] = q.clone();
+        }
         let data = json!({"project": project, "run_id": launch_id, "suggestion": p.body});
-        let r = tx.record_valid(
-            Kind::Suggested,
-            &p.subject,
-            json!({"run_id": launch_id, "decision": p.decision}),
-            data.clone(),
-            Dedupe::Any,
-        )?;
+        let r = tx.record_valid(Kind::Suggested, &p.subject, distinct, data.clone(), Dedupe::Any)?;
         if r.is_new() {
             report.recorded += 1;
         } else if r.event().data == data {
@@ -502,6 +606,7 @@ fn answers(
     seen: &mut HashSet<(String, String)>,
     pending: &mut Vec<Pending>,
     dropped: &mut Vec<Dropped>,
+    commits: &Commits,
 ) -> Result<()> {
     if answers.is_empty() {
         return Ok(());
@@ -538,6 +643,26 @@ fn answers(
             c.fail(format!("{what}: {} has never been read", q.alias));
             continue;
         };
+        // Dropped, not refused: the item moved under the session (2.1). Checked before the
+        // answer itself, which is checked against what the question is now (its areas).
+        let changed = if !o.open {
+            Some("the issue closed since prepare".to_string())
+        } else {
+            match triage::live_input(config, cat, &asked, &o, &q.decision)? {
+                Ok((_, h)) if h == q.input_hash => None,
+                Ok(_) => Some("the issue changed since prepare".to_string()),
+                Err(why) => Some(why),
+            }
+        };
+        if let Some(why) = changed {
+            dropped.push(Dropped {
+                question: q.id.clone(),
+                item: o.source.alias.clone(),
+                decision: q.decision.clone(),
+                why,
+            });
+            continue;
+        }
         let areas = triage::areas_of(&triage::translation_of(config, &o.repo));
         let allowed = cat.allowed(&q.decision, &areas)?;
         let (answer, raw) = match triage::check_probabilities(f.kind, &allowed, &a.probabilities) {
@@ -565,8 +690,11 @@ fn answers(
         match (f.subject, yes) {
             (Some(Subject::Commit), true) => match a.commit.as_deref() {
                 None => c.fail(format!("{what}: likely_fixed needs the fixing commit")),
-                Some(sha) if !is_commit(sha) => c.fail(format!("{what}: {sha} is not a commit hash")),
-                Some(sha) => body["commit"] = json!(sha),
+                Some(sha) => {
+                    if c.commit(commits, &what, &q.alias, sha) {
+                        body["commit"] = json!(sha);
+                    }
+                }
             },
             (Some(Subject::Related), true) => match a.related.as_deref() {
                 None => c.fail(format!("{what}: duplicate needs the other issue (related)")),
@@ -589,25 +717,6 @@ fn answers(
         }
         if f.kind == AnswerKind::Areas && areas.is_empty() {
             c.fail(format!("{what}: the repo declares no areas"));
-        }
-        // Dropped, not refused: the item moved under the session (2.1).
-        let changed = if !o.open {
-            Some("the issue closed since prepare".to_string())
-        } else {
-            match triage::live_input(config, cat, &asked, &o, &q.decision)? {
-                Ok((_, h)) if h == q.input_hash => None,
-                Ok(_) => Some("the issue changed since prepare".to_string()),
-                Err(why) => Some(why),
-            }
-        };
-        if let Some(why) = changed {
-            dropped.push(Dropped {
-                question: q.id.clone(),
-                item: o.source.alias.clone(),
-                decision: q.decision.clone(),
-                why,
-            });
-            continue;
         }
         pending.push(Pending {
             subject: q.item.clone(),

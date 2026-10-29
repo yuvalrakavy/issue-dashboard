@@ -26,7 +26,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::canonical::{hash_value, sha256_hex};
-use crate::config::ConfigSet;
+use crate::config::{ConfigSet, Labels};
 use crate::derive::INSIDE;
 use crate::docs::{LaunchKind, Priority, Routing};
 use crate::event::Kind;
@@ -345,10 +345,15 @@ impl Source {
     }
 }
 
-/// Whether `label` is a label of a label decision (type, area or priority) in `t`.
+/// Whether `label` is a label of a label decision (type, area or priority) in `t`, whatever
+/// else (a modifier) it also means.
 fn is_decision_label(t: &Translation, label: &str) -> bool {
-    let c = t.translate(&[label.to_string()]);
-    c.untranslated.is_empty() && c.modifiers.is_empty()
+    let hit = |names: &Labels| names.iter().any(|n| n.eq_ignore_ascii_case(label));
+    t.types
+        .values()
+        .chain(t.areas.values())
+        .chain(t.priorities.values())
+        .any(hit)
 }
 
 /// An item's replay cutoff (1.1): the earliest time a label of a label decision was set or
@@ -420,12 +425,20 @@ pub fn input(
         AnswerKind::Choice | AnswerKind::Boolean => {}
     }
     if decision == "reach" {
-        let outside: BTreeSet<&str> = source
+        // Counted under the same cutoff as the comments shown; reactions carry no time.
+        let mut outside: BTreeSet<&str> = BTreeSet::new();
+        for c in source
             .comments
             .iter()
             .filter(|c| !c.inside && c.author != source.author)
-            .map(|c| c.author.as_str())
-            .collect();
+        {
+            if let Some(cut) = cutoff
+                && parse_time(&c.at)? >= cut
+            {
+                continue;
+            }
+            outside.insert(c.author.as_str());
+        }
         v["outside_demand"] = json!({
             "outside_commenters": outside.len(),
             "reactions": source.reactions,
@@ -637,11 +650,13 @@ pub(crate) fn areas_of(t: &Translation) -> Vec<String> {
 }
 
 /// The first stage's recorded answers priority reads, with the rubric (2.1 stage 2); `None`
-/// while one of them has no answer under its current question hash.
+/// while one of them has no answer under its current question hash about observation `seq`
+/// (an answer about older facts is no answer: stage 1 is due again).
 fn stage_one(
     cat: &Catalogue,
     asked: &BTreeMap<(String, String), Asked>,
     item: &str,
+    seq: i64,
 ) -> Result<std::result::Result<Value, Vec<String>>> {
     let f = cat.file("priority")?;
     let mut answers = serde_json::Map::new();
@@ -650,7 +665,7 @@ fn stage_one(
     for d in &f.reads {
         let current = cat.question_hash(d, &[])?;
         match asked.get(&(item.to_string(), d.clone())) {
-            Some(a) if a.question.question_hash == current => {
+            Some(a) if a.question.question_hash == current && a.question.observed >= seq => {
                 top.insert(
                     d.clone(),
                     a.suggestion["answer"].as_str().unwrap_or_default().to_string(),
@@ -691,7 +706,7 @@ pub(crate) fn live_input(
 ) -> Result<std::result::Result<(Value, String), String>> {
     let t = translation_of(config, &o.repo);
     let extra = if decision == "priority" {
-        match stage_one(cat, asked, &o.source.id)? {
+        match stage_one(cat, asked, &o.source.id, o.seq)? {
             Ok(v) => Some(v),
             Err(missing) => {
                 return Ok(Err(format!("stage 1 has no recorded {} answer", missing.join(", "))));
@@ -705,11 +720,13 @@ pub(crate) fn live_input(
     Ok(Ok((v, h)))
 }
 
-/// The id of a question: the launch, item, decision, question hash and input hash.
-fn question_id(launch: &str, item: &str, decision: &str, qhash: &str, ihash: &str) -> String {
+/// The id of a question: the launch, item, decision, question hash, input hash and the
+/// observation it was built from (a read that leaves the input alone still makes a new
+/// question, so the observation an answer is counted against is never an older one).
+fn question_id(launch: &str, item: &str, decision: &str, qhash: &str, ihash: &str, seq: i64) -> String {
     format!(
         "q-{}",
-        &sha256_hex(&format!("{launch}|{item}|{decision}|{qhash}|{ihash}"))[..20]
+        &sha256_hex(&format!("{launch}|{item}|{decision}|{qhash}|{ihash}|{seq}"))[..20]
     )
 }
 
@@ -733,7 +750,19 @@ pub fn prepare(
     session_model: &str,
     stage: Stage,
 ) -> Result<Prepared> {
-    let cat = Catalogue::embedded();
+    prepare_with(tx, config, Catalogue::embedded(), launch_id, session_model, stage)
+}
+
+/// [`prepare`] with the question files `cat` in place of the embedded ones: what a reworded
+/// file does to what is due.
+pub fn prepare_with(
+    tx: &mut Tx<'_>,
+    config: &ConfigSet,
+    cat: &Catalogue,
+    launch_id: &str,
+    session_model: &str,
+    stage: Stage,
+) -> Result<Prepared> {
     let (l, scope) = answering_launch(tx.conn(), launch_id)?;
     let backend = backend(&l.request.routing);
     if session_model != backend {
@@ -807,7 +836,7 @@ pub fn prepare(
                     continue;
                 }
             };
-            let qid = question_id(launch_id, id, &f.decision, &qhash, &ihash);
+            let qid = question_id(launch_id, id, &f.decision, &qhash, &ihash, o.seq);
             let map_id = map_in_force(tx.conn(), &project, &backend, &f.decision, &qhash);
             entries.push(json!({
                 "id": qid,
