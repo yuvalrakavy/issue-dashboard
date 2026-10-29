@@ -349,6 +349,7 @@
       aliases: fields.aliases,
       recipe: fields.recipe,
       routing: fields.routing,
+      ...(fields.scope ? { scope: fields.scope } : {}),
     };
   }
 
@@ -810,6 +811,52 @@
     };
   }
 
+  // Triage launches (triage spec 5.1). `recommend_closures` is the alias of scope `closures`.
+  const TRIAGE_KINDS = ["triage", "recommend_closures"];
+  const LIVE_STATES = ["requested", "queued", "reserved", "unconfirmed", "started"];
+
+  // Whether a triage launch is live: one the tracker reports in a live state (the daily run's
+  // included, which the page did not write), or one the page wrote that the tracker has not
+  // reported yet and that was sent.
+  function triageLive(launches, statuses) {
+    const status = new Map((statuses || []).map((s) => [s.launch, s]));
+    for (const s of statuses || []) {
+      if (TRIAGE_KINDS.includes(s.kind) && LIVE_STATES.includes(s.state)) return true;
+    }
+    const notSent = new Set((launches || []).filter((l) => l.not_sent).map((l) => l.not_sent.launch));
+    return (launches || []).some((l) => TRIAGE_KINDS.includes(l.kind) && !status.has(l.id) && !notSent.has(l.id));
+  }
+
+  // Run triage… (triage spec 5.1): the items the tracker found due for `scope`
+  // (meta.triage_queue, already in the 2.2 order and capped), kept to the open issues in view.
+  function triageLaunchFields(issues, meta, scope, routing) {
+    const queue = ((meta && meta.triage_queue) || {})[scope] || [];
+    const byId = new Map((issues || []).filter((i) => i.state === "open").map((i) => [i.id, i]));
+    const items = queue.filter((id) => byId.has(id)).map((id) => byId.get(id));
+    if (!items.length) return { error: scope === "closures" ? "No open issue in view is due for a closure check." : "No open issue in view is due for triage." };
+    return {
+      fields: {
+        kind: "triage",
+        scope,
+        items: items.map((i) => i.id),
+        aliases: items.map((i) => i.alias),
+        routing,
+        recipe: READ_ONLY_RECIPE,
+      },
+    };
+  }
+
+  // Evaluate… (triage spec 5.1, 3.2): an eval names no items; its routing is the backend measured.
+  function evalLaunchFields(routing) {
+    return { fields: { kind: "eval", items: [], aliases: [], recipe: READ_ONLY_RECIPE, routing } };
+  }
+
+  // Whether `routing` is a backend no evaluation measured (triage spec 5.3).
+  function noEvaluation(routing, meta) {
+    const measured = (meta && meta.evaluated_backends) || [];
+    return !measured.includes(routing.model + "@" + routing.effort);
+  }
+
   const api = {
     PRIORITIES, COLLECTIONS, LIST_LIMIT, CLOSE_REASONS, ACK_DAYS,
     loadGeneration, follower, ackHorizon, threadDoc, repoOf, inScope, showOptions, showChoice, tiles, inbox, queue, decisionStates, synced, syncedRepo, nextRunMinutes,
@@ -817,6 +864,7 @@
     closable, closeComment, closeFields, describeClose, pendingClose, dismissed, recentlyClosed, dismissFields,
     sessionLines, inProgress, ownerNotice,
     dismissedSuggestions, suggestionCards, dismissSuggestionFields, closePrefill, fixLaunchFields, recommendFields, READ_ONLY_RECIPE,
+    triageLive, triageLaunchFields, evalLaunchFields, noEvaluation,
     actedSuggestions, answerText, triageCards, acceptFields, acceptCardFields, editFields, applyAllFields, detailsEditFields, rubricNote, secondOpinionNote,
   };
   root.IssueDashboard = api;

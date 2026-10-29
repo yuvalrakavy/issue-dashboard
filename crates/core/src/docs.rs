@@ -35,15 +35,40 @@ pub enum LaunchKind {
     StrongerLook,
     Design,
     /// A read-only session that recommends which issues to close, and which together (5.8).
+    /// An alias of `triage` with scope `closures` (triage spec 5.1).
     RecommendClosures,
+    /// A read-only session that answers one `eval prepare` file (triage spec 3.2, 5.1); its
+    /// routing is the backend measured.
+    Eval,
 }
 
 impl LaunchKind {
     /// Whether a launch of this kind holds its items against other launches (10.7). A
-    /// read-only recommender changes nothing, so it neither holds an item nor waits for one.
+    /// read-only session changes nothing, so it neither holds an item nor waits for one: the
+    /// recommender and its triage, stronger-look and eval kin (triage spec 4.6).
     pub fn holds_items(self) -> bool {
-        self != LaunchKind::RecommendClosures
+        !matches!(
+            self,
+            LaunchKind::RecommendClosures | LaunchKind::Triage | LaunchKind::StrongerLook | LaunchKind::Eval
+        )
     }
+
+    /// Whether a launch of this kind must take its slot from the `read-only` recipe pool
+    /// (triage spec 5.1).
+    pub fn read_only(self) -> bool {
+        matches!(
+            self,
+            LaunchKind::RecommendClosures | LaunchKind::Triage | LaunchKind::Eval
+        )
+    }
+}
+
+/// What a triage launch asks (triage spec 5.1): every decision, or the closures only.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TriageScope {
+    Full,
+    Closures,
 }
 
 /// A `launches` document asking for a launch (5.4). Written once, never changed.
@@ -63,6 +88,22 @@ pub struct LaunchRequest {
     pub routing: Routing,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub suggested_routing: Option<Routing>,
+    /// A triage launch's scope (triage spec 5.1); `full` when absent. Only `triage` takes it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<TriageScope>,
+}
+
+impl LaunchRequest {
+    /// The scope this launch asks in when it is a triage launch: `triage` by its `scope`
+    /// (`full` when absent), `recommend_closures` as its alias with scope `closures`, and
+    /// `None` for every other kind (triage spec 5.1).
+    pub fn triage_scope(&self) -> Option<TriageScope> {
+        match self.kind {
+            LaunchKind::Triage => Some(self.scope.unwrap_or(TriageScope::Full)),
+            LaunchKind::RecommendClosures => Some(TriageScope::Closures),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

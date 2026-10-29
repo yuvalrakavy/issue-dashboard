@@ -19,6 +19,70 @@
     "schema": {
       "const": 1
     },
+    "routing": {
+      "description": "The routing each launch kind the Run triage… sheet offers gets (triage spec 5.3): the project's, else the tracker's default; null when neither names one.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "triage": {
+          "oneOf": [
+            {
+              "$ref": "common.schema.json#/$defs/routing"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "stronger_look": {
+          "oneOf": [
+            {
+              "$ref": "common.schema.json#/$defs/routing"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "evaluated_backends": {
+      "description": "Every backend (model@effort) an evaluation of the project measured, passing or not; the sheet warns of a routing outside it (triage spec 5.1).",
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "max_triage_items": {
+      "description": "The most items one triage launch names (triage spec 2.2).",
+      "type": "integer",
+      "minimum": 1
+    },
+    "triage_queue": {
+      "description": "The items a triage launch of each scope would name now, in the 2.2 order, capped at max_triage_items.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "full",
+        "closures"
+      ],
+      "properties": {
+        "full": {
+          "type": "array",
+          "items": {
+            "$ref": "common.schema.json#/$defs/docId"
+          }
+        },
+        "closures": {
+          "type": "array",
+          "items": {
+            "$ref": "common.schema.json#/$defs/docId"
+          }
+        }
+      }
+    },
     "project": {
       "$ref": "common.schema.json#/$defs/projectName"
     },

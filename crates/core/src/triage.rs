@@ -28,7 +28,7 @@ use serde_json::{Value, json};
 use crate::canonical::{hash_value, sha256_hex};
 use crate::config::{ConfigSet, Labels};
 use crate::derive::INSIDE;
-use crate::docs::{LaunchKind, Priority, Routing};
+use crate::docs::{Priority, Routing, TriageScope};
 use crate::event::Kind;
 use crate::launch::{self, Launch, State};
 use crate::ledger::{self, Dedupe, Tx};
@@ -544,15 +544,16 @@ pub struct PrepareReport {
     pub skipped: Vec<Value>,
 }
 
-/// The scope a launch asks in (5.1): `full` for triage, `closures` for the phase-1 alias.
+/// The scope a launch asks in (5.1): a triage launch's own scope (`full` when it names none),
+/// and `closures` for the phase-1 alias `recommend_closures`.
 pub(crate) fn launch_scope(l: &Launch) -> Result<Scope> {
-    match l.request.kind {
-        LaunchKind::Triage => Ok(Scope::Full),
-        LaunchKind::RecommendClosures => Ok(Scope::Both),
-        other => Err(Error::refused(format!(
+    match l.request.triage_scope() {
+        Some(TriageScope::Full) => Ok(Scope::Full),
+        Some(TriageScope::Closures) => Ok(Scope::Both),
+        None => Err(Error::refused(format!(
             "launch {} is a {} launch; only triage and recommend_closures launches answer questions",
             l.id,
-            serde_json::to_value(other)?.as_str().unwrap_or_default()
+            serde_json::to_value(l.request.kind)?.as_str().unwrap_or_default()
         ))),
     }
 }
@@ -737,13 +738,173 @@ fn question_id(launch: &str, item: &str, decision: &str, qhash: &str, ihash: &st
 }
 
 /// Whether (item, decision) is due (2.2): never answered under `qhash`, observed again since
-/// its last answer, or a closure answered more than `recheck` ago.
-fn due(asked: Option<&Asked>, qhash: &str, seq: i64, closure: bool, recheck: Duration, now: &str) -> Result<bool> {
+/// its last answer, asked for by the owner after it (`owner_asked`, the time of the owner's
+/// latest Triage… request of the item), or a closure answered more than `recheck` ago.
+#[allow(clippy::too_many_arguments)]
+fn due(
+    asked: Option<&Asked>,
+    qhash: &str,
+    seq: i64,
+    closure: bool,
+    recheck: Duration,
+    owner_asked: Option<&str>,
+    now: &str,
+) -> Result<bool> {
     let Some(a) = asked else { return Ok(true) };
     if a.question.question_hash != qhash || seq > a.question.observed {
         return Ok(true);
     }
+    if let Some(t) = owner_asked
+        && parse_time(t)? > parse_time(&a.time)?
+    {
+        return Ok(true);
+    }
     Ok(closure && parse_time(now)? - parse_time(&a.time)? >= recheck)
+}
+
+/// Whether `f` is a closure decision: re-asked after `closure_recheck_days` (2.2).
+fn is_closure(f: &QuestionFile) -> bool {
+    f.scope == Scope::Both && f.kind == AnswerKind::Boolean && f.decision != "instructs_agent"
+}
+
+/// The time of the owner's latest Triage… request (the page's `requests` document of kind
+/// `triage`, 2.2) of each item of `project`.
+pub(crate) fn owner_asked(conn: &Connection, project: &str) -> Result<BTreeMap<String, String>> {
+    let mut out = BTreeMap::new();
+    for e in ledger::events_by_kind(conn, Kind::Request)? {
+        if e.data["project"] != project || e.data["document"]["kind"] != "triage" {
+            continue;
+        }
+        for item in e.data["document"]["items"].as_array().into_iter().flatten() {
+            if let Some(id) = item.as_str() {
+                out.insert(id.to_string(), e.time.clone());
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// Every issue `project` tracks in a repo it may write to: a read-only member's issues are
+/// someone else's to label (1.4).
+fn project_items(conn: &Connection, config: &ConfigSet, project: &str) -> Result<BTreeSet<String>> {
+    let mut out = BTreeSet::new();
+    for view in config.views(project)?.into_values() {
+        if view.read_only {
+            continue;
+        }
+        let node = match crate::snapshot::read_state(conn, project, &view.repo)?.and_then(|s| s.repo_node) {
+            Some(n) => Some(n),
+            None => crate::snapshot::repo_node_of(conn, &view.repo)?,
+        };
+        let Some(node) = node else { continue };
+        if let Some((_, members)) = crate::snapshot::membership(conn, project, &node)? {
+            out.extend(members.issues.iter().cloned());
+        }
+    }
+    Ok(out)
+}
+
+/// One item a triage launch would ask about (2.2).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Candidate {
+    pub item: String,
+    pub alias: String,
+    /// Untriaged on the page: no effective type or priority, or no area where the repo
+    /// declares areas. These go first.
+    pub untriaged: bool,
+    /// When the item was last answered, any decision; `None` if never.
+    pub last_triaged: Option<String>,
+}
+
+/// The items a triage launch of `scope` would ask about now (2.2), in order: untriaged items
+/// first, then the oldest last triage; uncapped (the caller caps at `max_triage_items`). An
+/// item is selected when any question of the scope is due about it, by the rule `prepare`
+/// applies to each (item, decision).
+pub fn select(
+    conn: &Connection,
+    config: &ConfigSet,
+    project: &str,
+    scope: TriageScope,
+    now: &str,
+) -> Result<Vec<Candidate>> {
+    select_with(conn, config, Catalogue::embedded(), project, scope, now)
+}
+
+pub(crate) fn select_with(
+    conn: &Connection,
+    config: &ConfigSet,
+    cat: &Catalogue,
+    project: &str,
+    scope: TriageScope,
+    now: &str,
+) -> Result<Vec<Candidate>> {
+    let scope = match scope {
+        TriageScope::Full => Scope::Full,
+        TriageScope::Closures => Scope::Both,
+    };
+    let recheck = Duration::days(i64::from(
+        config
+            .project(project)?
+            .closure_recheck_days
+            .unwrap_or(CLOSURE_RECHECK_DAYS),
+    ));
+    let asked = asked(conn)?;
+    let by_owner = owner_asked(conn, project)?;
+    let layers = crate::layers::layers(conn, project)?;
+    let mut out = Vec::new();
+    for id in project_items(conn, config, project)? {
+        let Some(o) = observed(conn, config, project, &id)? else {
+            continue;
+        };
+        if !o.issue || !o.open {
+            continue;
+        }
+        let t = translation_of(config, &o.repo);
+        let areas = areas_of(&t);
+        let mut any = false;
+        let mut last: Option<String> = None;
+        for f in cat.decisions() {
+            let a = asked.get(&(id.clone(), f.decision.clone()));
+            if let Some(a) = a
+                && last.as_ref().is_none_or(|l| &a.time > l)
+            {
+                last = Some(a.time.clone());
+            }
+            if any || !(scope == Scope::Full || f.scope == Scope::Both) || !applies(f, &o.source, &areas) {
+                continue;
+            }
+            let qhash = cat.question_hash(&f.decision, &areas)?;
+            any = due(
+                a,
+                &qhash,
+                o.seq,
+                is_closure(f),
+                recheck,
+                by_owner.get(&id).map(String::as_str),
+                now,
+            )?;
+        }
+        if !any {
+            continue;
+        }
+        let untriaged = crate::layers::effective_of(conn, config, &layers, &id)?
+            .is_some_and(|e| e.type_.is_none() || e.priority.is_none() || (t.declares_areas() && e.areas.is_empty()));
+        out.push(Candidate {
+            item: id,
+            alias: o.source.alias.clone(),
+            untriaged,
+            last_triaged: last,
+        });
+    }
+    // Untriaged first; then never triaged before the oldest last triage; then by alias.
+    out.sort_by(|a, b| {
+        b.untriaged
+            .cmp(&a.untriaged)
+            .then_with(|| a.last_triaged.is_some().cmp(&b.last_triaged.is_some()))
+            .then_with(|| a.last_triaged.cmp(&b.last_triaged))
+            .then_with(|| a.alias.cmp(&b.alias))
+    });
+    Ok(out)
 }
 
 /// `prepare` (2.1 step 2): checks the session's model and effort against the launch's
@@ -791,6 +952,7 @@ pub fn prepare_with(
     ));
     let now = tx.now().to_string();
     let asked = asked(tx.conn())?;
+    let by_owner = owner_asked(tx.conn(), &project)?;
 
     let mut questions = Vec::new();
     let mut entries = Vec::new();
@@ -824,13 +986,13 @@ pub fn prepare_with(
                 continue;
             }
             let qhash = cat.question_hash(&f.decision, &areas)?;
-            let closure = f.scope == Scope::Both && f.kind == AnswerKind::Boolean && f.decision != "instructs_agent";
             if !due(
                 asked.get(&(id.clone(), f.decision.clone())),
                 &qhash,
                 o.seq,
-                closure,
+                is_closure(f),
                 recheck,
+                by_owner.get(id).map(String::as_str),
                 &now,
             )? {
                 continue;

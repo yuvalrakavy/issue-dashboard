@@ -43,12 +43,20 @@
             "go_back",
             "stronger_look",
             "design",
-            "recommend_closures"
+            "recommend_closures",
+            "eval"
+          ]
+        },
+        "scope": {
+          "description": "A triage launch's scope (triage spec 5.1): every decision, or the closures only. Absent means full; only kind triage takes it.",
+          "enum": [
+            "full",
+            "closures"
           ]
         },
         "items": {
+          "description": "The items the launch names; an eval names none (it chooses its own sample, triage spec 3.2).",
           "type": "array",
-          "minItems": 1,
           "uniqueItems": true,
           "items": {
             "$ref": "common.schema.json#/$defs/nodeId"
@@ -56,7 +64,6 @@
         },
         "aliases": {
           "type": "array",
-          "minItems": 1,
           "items": {
             "$ref": "common.schema.json#/$defs/alias"
           }
@@ -72,7 +79,44 @@
         "suggested_routing": {
           "$ref": "common.schema.json#/$defs/routing"
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "not": {
+                  "const": "eval"
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "items": {
+                "minItems": 1
+              },
+              "aliases": {
+                "minItems": 1
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "scope"
+            ]
+          },
+          "then": {
+            "properties": {
+              "kind": {
+                "const": "triage"
+              }
+            }
+          }
+        }
+      ]
     },
     {
       "type": "object",

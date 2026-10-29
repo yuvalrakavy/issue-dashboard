@@ -657,7 +657,12 @@ footer .wrap { padding-block: 0 32px; font-size: .82rem; color: var(--muted); di
     if (S.inboxFilter === "waiting") cards = cards.filter((c) => c.why !== "untriaged");
     if (S.inboxFilter === "untriaged") cards = cards.filter((c) => c.why === "untriaged");
     const pill = (k, label) => h("button", { class: "chip" + (S.inboxFilter === k ? " on" : ""), onclick: () => { S.inboxFilter = k; S.sel = 0; render(); } }, label);
-    const head = h("div", { class: "pills" }, pill("all", "All"), pill("waiting", "Waiting on you"), pill("untriaged", "Untriaged"));
+    // Run triage… (triage spec 5.1): the owner's; off while a triage launch is live.
+    const live = D.triageLive(S.launches, S.statuses);
+    const runTriage = S.owner
+      ? h("button", { class: "btn", disabled: live, title: live ? "A triage launch is live; wait for it to end." : "", onclick: openTriage }, "Run triage…")
+      : null;
+    const head = h("div", { class: "pills" }, pill("all", "All"), pill("waiting", "Waiting on you"), pill("untriaged", "Untriaged"), runTriage);
     // Recently closed belongs to the whole Inbox only: a filter ("Untriaged", "Waiting on you")
     // shows just the cards it names.
     const closedPart = () => (S.inboxFilter === "all" ? recentlyClosedSection() : null);
@@ -1052,6 +1057,34 @@ footer .wrap { padding-block: 0 32px; font-size: .82rem; color: var(--muted); di
     });
   }
 
+  // Run triage… (triage spec 5.1): scope and routing; warns when the routing has no evaluation.
+  function openTriage() {
+    const r = (S.meta && S.meta.routing && S.meta.routing.triage) || { model: "claude-opus-5-5", effort: "medium" };
+    const scope = h("select", { "aria-label": "Scope" }, h("option", { value: "full" }, "full"), h("option", { value: "closures" }, "closures"));
+    launchSheet({
+      alias: S.scope ? scopeSentence(S.scope) : "all repos",
+      title: "Run triage",
+      model: r.model, effort: r.effort,
+      controls: [h("label", { class: "field" }, "Scope", scope)],
+      refreshOn: [scope],
+      fields: (routing) => D.triageLaunchFields(shown(), S.meta, scope.value, routing),
+      about: (f) => "Asks about the " + f.items.length + " open issue" + (f.items.length === 1 ? "" : "s") + " in view that are due. The session answers and records only: it never closes, labels or comments. Its suggestions arrive in the Inbox after the next sync.",
+      warning: (routing) => (D.noEvaluation(routing, S.meta) ? "This routing has no evaluation: its suggestions will be marked not yet evaluated." : null),
+      evaluate: (routing) => openEvaluate(routing),
+    });
+  }
+
+  // Evaluate… (triage spec 5.1, 3.2): measure a backend; its routing is the backend measured.
+  function openEvaluate(routing) {
+    launchSheet({
+      alias: (S.meta && S.meta.project) || "",
+      title: "Evaluate a backend",
+      model: routing.model, effort: routing.effort,
+      fields: (r) => D.evalLaunchFields(r),
+      about: () => "A read-only session answers a replay of each label decision and scores it. The result shows on the cards after the next sync.",
+    });
+  }
+
   async function launchSheet(o) {
     const status = h("div", { class: "muted" }, "Checking whether a Claude session can hear the launch…");
     const model = h("select", { "aria-label": "Model" }, MODELS.map((m) => h("option", { value: m, selected: m === o.model }, m)));
@@ -1059,14 +1092,34 @@ footer .wrap { padding-block: 0 32px; font-size: .82rem; color: var(--muted); di
     const go = h("button", { class: "btn primary", disabled: true, "data-anchor": "launch" }, "Launch");
     const routing = () => ({ model: model.value, effort: effort.value, reason: "chosen on the launch sheet" });
     const first = o.fields(routing());
+    // The "no evaluation" warning follows the chosen routing (triage spec 5.3).
+    const warning = o.warning ? h("div", { class: "sub" }) : null;
+    const showWarning = () => {
+      if (!warning) return;
+      const w = o.warning(routing());
+      warning.replaceChildren(...(w ? [w + " ", h("button", { class: "btn", onclick: () => { const r = routing(); dlg.close(); o.evaluate(r); } }, "Evaluate…")] : []));
+    };
+    // The note on what the launch covers follows the scope and routing too.
+    const about = o.about ? h("div", { class: "sub muted" }) : null;
+    const refresh = () => {
+      showWarning();
+      if (!about) return;
+      const f = o.fields(routing());
+      about.textContent = f.fields ? o.about(f.fields) : f.error || "";
+    };
+    for (const c of [model, effort, ...(o.refreshOn || [])]) c.addEventListener("change", refresh);
+    refresh();
     showDialog(
       h("header", {}, h("div", {}, h("div", { class: "alias" }, o.alias), h("h2", {}, o.title)), closeBtn()),
-      h("div", { class: "grid2" }, h("label", { class: "field" }, "Model", model), h("label", { class: "field" }, "Effort", effort)),
-      first.fields && o.about ? h("div", { class: "sub muted" }, o.about(first.fields)) : null,
+      h("div", { class: "grid2" }, h("label", { class: "field" }, "Model", model), h("label", { class: "field" }, "Effort", effort), o.controls || null),
+      warning,
+      about,
       h("div", { class: "phase" }, "The dispatcher session hears the launch, reserves a slot and starts the session, or offers it as a card in the dispatcher session for you to start."),
       status,
       h("div", { class: "actions" }, go, h("button", { class: "btn quiet", onclick: () => dlg.close() }, "Cancel")));
-    if (first.error) { status.textContent = first.error; return; }
+    // A sheet whose items follow a control (the triage scope) stays open: another choice may
+    // have items, and Launch re-checks them.
+    if (first.error && !o.refreshOn) { status.textContent = first.error; return; }
     const gate = S.comments ? await S.comments.canSendToClaude().catch(() => "unavailable") : "unavailable";
     if (gate === "available") {
       status.textContent = "A Claude session is listening.";

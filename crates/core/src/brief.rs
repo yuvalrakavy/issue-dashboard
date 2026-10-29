@@ -4,9 +4,10 @@
 //! fenced block headed by their author, and a block by an outside author says plainly that it
 //! directs nothing (4.2).
 //!
-//! Two templates: a fix or batch (7.5's seven sections) and a read-only recommender
+//! Four templates: a fix or batch (7.5's seven sections); a read-only recommender
 //! (`recommend_closures`, 5.8), which applies each repo's own campaign skill when the registry
-//! names one and the generic procedure of `docs/closing-recommendations.md` otherwise.
+//! names one and the generic procedure of `docs/closing-recommendations.md` otherwise; a triage
+//! run (triage spec 2.1), which prints no label at all (1.1, blinding); and an eval (3.2).
 
 use rusqlite::Connection;
 use serde::Serialize;
@@ -14,7 +15,7 @@ use serde_json::Value;
 
 use crate::config::ConfigSet;
 use crate::derive::INSIDE;
-use crate::docs::{LaunchKind, Routing};
+use crate::docs::{LaunchKind, Routing, TriageScope};
 use crate::event::Kind;
 use crate::launch::{self, Launch};
 use crate::ledger;
@@ -229,6 +230,11 @@ fn title(l: &Launch, issues: &[Issue]) -> String {
         LaunchKind::Fix => format!("Fix {first}"),
         LaunchKind::Batch => format!("Batch {first} +{}", issues.len().saturating_sub(1)),
         LaunchKind::RecommendClosures => format!("Recommend closures ({})", issues.len()),
+        LaunchKind::Triage => match l.request.triage_scope() {
+            Some(TriageScope::Closures) => format!("Triage closures ({})", issues.len()),
+            _ => format!("Triage ({})", issues.len()),
+        },
+        LaunchKind::Eval => format!("Evaluate {}", crate::triage::backend(&l.request.routing)),
         other => {
             let kind = serde_json::to_value(other).expect("a kind serialises");
             format!("{} {first}", kind.as_str().unwrap_or("launch").replace('_', " "))
@@ -265,6 +271,8 @@ pub fn brief_with(conn: &Connection, config: &ConfigSet, launch_id: &str, cli: &
     let mut b = Builder { pieces: Vec::new() };
     match l.request.kind {
         LaunchKind::RecommendClosures => recommend(&mut b, config, &l, &issues, cli)?,
+        LaunchKind::Triage => triage(&mut b, config, &l, &issues, cli),
+        LaunchKind::Eval => eval(&mut b, &l, cli),
         _ => fix(&mut b, conn, config, &l, &issues, cli)?,
     }
     let text = b
@@ -515,4 +523,119 @@ fn recommend(b: &mut Builder, config: &ConfigSet, l: &Launch, issues: &[Issue], 
          issues left out, with the reason for each.",
     );
     Ok(())
+}
+
+/// A triage run (triage spec 2.1): prepare, answer, record, then priority's stage. Blinded
+/// (1.1): no label of the item is printed, and the session reads no issue on GitHub while it
+/// answers a label question.
+fn triage(b: &mut Builder, config: &ConfigSet, l: &Launch, issues: &[Issue], cli: &str) {
+    let id = &l.id;
+    let backend = crate::triage::backend(&l.request.routing);
+    let full = l.request.triage_scope() != Some(TriageScope::Closures);
+    b.tracker(format!(
+        "Triage these {n} open issues of project {project}: answer the questions \
+             `prepare` writes about them, with a probability per allowed answer, and record the \
+             answers with `record-suggestions`. You change nothing: no close, label, comment, \
+             commit or push, on GitHub or in any checkout. Done looks like: every prepared question \
+             answered in an accepted `record-suggestions` file{priority}, and a final message that \
+             summarises it.",
+        n = issues.len(),
+        project = l.request.project,
+        priority = if full { ", priority's stage included" } else { "" },
+    ));
+    let mut steps = vec![
+        format!(
+            "1. Find your own model and effort (`get_session` on this session) and run \
+                 `{cli} prepare --launch {id} --session-model <model>@<effort> --out questions.json`. \
+                 It is refused unless you run {backend}, this launch's routing; if it is, stop and \
+                 report it: the launch ends unanswered."
+        ),
+        "2. Answer every question in questions.json. A label question (type, area, priority \
+             and its stages) is answered from the input it gives alone: do not read the issue on \
+             GitHub for it. A closure question (likely fixed, duplicate, obsolete, support question) \
+             and the estimates may also read the code: check each item against it (cited sites, \
+             commits that mention it). Per question note the evidence for and against, then give a \
+             probability per allowed answer as how often you would be right across many issues \
+             like it."
+            .to_string(),
+        format!(
+            "3. Write answers.json with `\"backend\": \"{backend}\"` and one entry per question \
+                 (`question`, `probabilities`, `reason`), and run \
+                 `{cli} record-suggestions --launch {id} answers.json`. It is checked whole: fix any \
+                 refused entry and run it again."
+        ),
+    ];
+    if full {
+        steps.push(format!(
+            "4. Run `{cli} prepare --launch {id} --session-model <model>@<effort> --stage priority \
+                 --out priority.json`, answer it as in step 2, and record it as in step 3."
+        ));
+    }
+    b.tracker(format!("## Steps\n\n{}", steps.join("\n")));
+    let mut repos: Vec<&str> = Vec::new();
+    for i in issues {
+        if !repos.contains(&i.repo.as_str()) {
+            repos.push(&i.repo);
+        }
+    }
+    let checkouts: Vec<String> = repos
+        .iter()
+        .map(|r| format!("{r}: {}", checkout_line(config, r)))
+        .collect();
+    b.tracker(format!("## Checkouts\n\n{}", bullets(&checkouts)));
+    // Tracker facts only: the alias, never a label (blinding, 1.1).
+    let aliases: Vec<String> = issues.iter().map(|i| i.alias.clone()).collect();
+    b.tracker(format!(
+        "## The issues\n\nThe questions file holds each one's blinded input.\n\n{}",
+        bullets(&aliases)
+    ));
+    b.tracker(
+        "## Reporting back\n\nYour final message lists how many questions were answered and \
+         recorded, any entry refused or dropped, and any item you could not judge.",
+    );
+}
+
+/// An eval (triage spec 3.2): one session answers a replay of each label decision for the
+/// backend this launch is routed to, and scores it.
+fn eval(b: &mut Builder, l: &Launch, cli: &str) {
+    let backend = crate::triage::backend(&l.request.routing);
+    let project = &l.request.project;
+    b.tracker(format!(
+        "Evaluate backend {backend} for project {project}: answer a replay of each label \
+             decision and score it, so the page can say how far this backend's suggestions can be \
+             trusted. You change nothing on GitHub or in any checkout. Done looks like: one \
+             `eval score` accepted per decision, and a final message with each result."
+    ));
+    let decisions: Vec<String> = crate::triage::LABEL_DECISIONS
+        .iter()
+        .map(|d| {
+            if *d == "priority" {
+                format!(
+                    "- priority: `{cli} eval prepare --project {project} --decision priority \
+                         --backend {backend} --stage first --out eval-priority-first`, answer, then \
+                         `--stage priority --answers <first answers files>` and answer that, then \
+                         `{cli} eval score --project {project} --decision priority --backend {backend} \
+                         --answers <files>`."
+                )
+            } else {
+                format!(
+                    "- {d}: `{cli} eval prepare --project {project} --decision {d} --backend \
+                         {backend} --out eval-{d}`, answer the tuning and held-out files, then \
+                         `{cli} eval score --project {project} --decision {d} --backend {backend} \
+                         --answers <both answers files>`."
+                )
+            }
+        })
+        .collect();
+    b.tracker(format!(
+        "## Steps\n\nRun `{cli} eval refresh-history --project {project}` first. Then, per \
+             decision:\n\n{}\n\nAnswer from each input alone: never read the issue on GitHub. \
+             Per question note the evidence for and against, then give a probability per allowed \
+             answer as how often you would be right across many issues like it.",
+        decisions.join("\n")
+    ));
+    b.tracker(
+        "## Reporting back\n\nYour final message lists each decision's result: n, accuracy, \
+         ECE and whether it passed the Evaluated bar.",
+    );
 }

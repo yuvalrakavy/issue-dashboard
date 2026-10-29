@@ -64,6 +64,14 @@ MUTANTS = [
     ("triage: area edit is a set", "[...new Set([].concat(answer))].sort()", "[].concat(answer)"),
     ("triage: unmeasured false alarms said", 'o.false_alarm_rate == null ? "false-alarm rate not measured" :', ""),
     ("support question closes as not planned", 'if (s.kind === "obsolete" || s.kind === "support_question")', 'if (s.kind === "obsolete")'),
+    ("launch: triage live from the tracker's report", "if (TRIAGE_KINDS.includes(s.kind) && LIVE_STATES.includes(s.state)) return true;", ""),
+    ("launch: an ended triage is not live", "LIVE_STATES.includes(s.state)) return true;", "true) return true;"),
+    ("launch: the alias counts as triage", 'const TRIAGE_KINDS = ["triage", "recommend_closures"];', 'const TRIAGE_KINDS = ["triage"];'),
+    ("launch: a reported page launch defers to the tracker", "!status.has(l.id) && !notSent", "!notSent"),
+    ("launch: a not-sent page launch is not live", "&& !status.has(l.id) && !notSent.has(l.id));", "&& !status.has(l.id));"),
+    ("launch: triage names only open issues", '.filter((i) => i.state === "open")', ""),
+    ("launch: triage document carries the scope", "...(fields.scope ? { scope: fields.scope } : {}),", ""),
+    ("launch: no evaluation reads the measured backends", 'return !measured.includes(routing.model + "@" + routing.effort);', "return false;"),
 ]
 
 src = open(os.path.join(REPO, "page/core.js")).read()
@@ -76,7 +84,7 @@ def run(code):
     for shared in ("schemas", "crates"):
         os.symlink(os.path.join(REPO, shared), os.path.join(root, shared))
     for t in os.listdir(os.path.join(REPO, "page")):
-        if t.endswith(".test.js"):
+        if t.endswith(".test.js") or t == "dashboard.html":
             shutil.copy(os.path.join(REPO, "page", t), d)
     open(os.path.join(d, "core.js"), "w").write(code)
     r = subprocess.run(["node", "--test"], cwd=d, capture_output=True, text=True)
