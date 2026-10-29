@@ -1,16 +1,18 @@
-//! Suggestions from a read-only recommender (5.8): what `record-suggestions` records, and the
-//! `suggestions` documents derive builds from them.
+//! Suggestions from a triage launch or a read-only recommender (5.8, triage spec 2.1): what
+//! `record-suggestions` records, and the `suggestions` documents derive builds from them.
 //!
 //! A file is checked whole before anything is recorded: every entry must name an issue of the
-//! launch by its alias, open at its latest observation, with the facts its kind needs. One bad
-//! entry refuses the file with every reason listed. Each entry is one `suggested` event, its
-//! run id the launch id, so the same file recorded again is a repeat.
+//! launch by its alias, open at its latest observation, with the facts its kind needs; every
+//! answer must answer a question `prepare` froze for the launch, under the launch's backend.
+//! One bad entry refuses the file with every reason listed. An answer whose item changed since
+//! prepare is dropped and reported, and the rest recorded. Each entry is one `suggested` event,
+//! its run id the launch id, so the same file recorded again is a repeat.
 //!
 //! A document shows the latest suggestion of each kind for each issue until the issue closes,
 //! or until the owner dismisses it. A dismissal holds for that issue and kind across later
 //! runs, until the issue's observation changes after it (5.8: "unless its facts change").
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use rusqlite::Connection;
 use serde::Deserialize;
@@ -21,14 +23,12 @@ use crate::config::ConfigSet;
 use crate::decision::{self, Status};
 use crate::docs::{Action, LaunchKind};
 use crate::event::Kind;
-use crate::launch::{self, Launch, State};
+use crate::launch::Launch;
 use crate::ledger::{self, Dedupe, Tx};
 use crate::root::{format_time, parse_time};
 use crate::sync;
+use crate::triage::{self, AnswerKind, Catalogue, Subject};
 use crate::{Error, Result};
-
-/// The backend name a recommender's suggestions carry.
-pub const BACKEND: &str = "recommend_closures";
 
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -37,6 +37,61 @@ pub struct Input {
     pub suggestions: Vec<Entry>,
     #[serde(default)]
     pub left_out: Vec<LeftOut>,
+    /// The backend that answered: the launch's routing as model@effort (triage spec 2.1).
+    /// Required with answers or estimates.
+    #[serde(default)]
+    pub backend: Option<String>,
+    /// Answers to the launch's prepared questions.
+    #[serde(default)]
+    pub answers: Vec<Answer>,
+    #[serde(default)]
+    pub estimates: Vec<Estimate>,
+}
+
+/// An answer to one prepared question (triage spec 1.4).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Answer {
+    pub question: String,
+    pub probabilities: BTreeMap<String, f64>,
+    #[serde(default)]
+    pub reason: String,
+    /// The fixing commit, for likely_fixed answered true.
+    #[serde(default)]
+    pub commit: Option<String>,
+    /// The other open issue, owner/repo#N, for duplicate answered true.
+    #[serde(default)]
+    pub related: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, serde::Serialize)]
+pub enum Tier {
+    T0,
+    T1,
+    T2,
+    T3,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, serde::Serialize)]
+pub enum Effort {
+    S,
+    M,
+    L,
+}
+
+/// The unevaluated estimates of one item (triage spec 1.1): recorded, never a question.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Estimate {
+    pub item: String,
+    pub sites: Vec<String>,
+    /// The commit the sites were read at.
+    pub read_at: String,
+    pub tier: Tier,
+    pub blast: String,
+    pub effort: Effort,
+    #[serde(default)]
+    pub reason: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -114,13 +169,23 @@ pub struct Report {
     pub launch: String,
     pub recorded: usize,
     pub repeats: usize,
+    /// Answers not recorded because their item changed since prepare (triage spec 2.1).
+    pub dropped: Vec<Dropped>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct Dropped {
+    pub question: String,
+    pub item: String,
+    pub decision: String,
+    pub why: String,
 }
 
 /// One event to record: its subject (the item, or a batch's first member), its kind, and the
 /// suggestion body.
 struct Pending {
     subject: String,
-    decision: &'static str,
+    decision: String,
     body: Value,
 }
 
@@ -184,18 +249,8 @@ fn probabilities(confidence: f64) -> Value {
 /// Records the suggestions of `input` for recommender launch `launch_id`, or refuses the whole
 /// file with every reason.
 pub fn record(tx: &mut Tx<'_>, config: &ConfigSet, launch_id: &str, input: &Input) -> Result<Report> {
-    let l = launch::load(tx.conn(), launch_id)?.ok_or_else(|| Error::refused(format!("no launch {launch_id}")))?;
-    if l.request.kind != LaunchKind::RecommendClosures {
-        return Err(Error::refused(format!(
-            "launch {launch_id} is not a recommend_closures launch; only a recommender records suggestions"
-        )));
-    }
-    if matches!(l.state, State::Requested | State::Queued | State::Withdrawn) {
-        return Err(Error::refused(format!(
-            "launch {launch_id} is {}; only a launch that holds or held a slot records suggestions",
-            l.state
-        )));
-    }
+    let (l, _) = triage::answering_launch(tx.conn(), launch_id)?;
+    let backend = triage::backend(&l.request.routing);
     let project = l.request.project.clone();
     let mut c = Check {
         conn: tx.conn(),
@@ -203,11 +258,78 @@ pub fn record(tx: &mut Tx<'_>, config: &ConfigSet, launch_id: &str, input: &Inpu
         errors: Vec::new(),
     };
     let mut pending: Vec<Pending> = Vec::new();
-    let mut seen: HashSet<(String, &'static str)> = HashSet::new();
+    let mut seen: HashSet<(String, String)> = HashSet::new();
     let mut batched: HashSet<String> = HashSet::new();
+    let mut report = Report {
+        launch: launch_id.to_string(),
+        recorded: 0,
+        repeats: 0,
+        dropped: Vec::new(),
+    };
+
+    // The backend is the launch's routing, never the file's claim (triage spec 2.1).
+    match input.backend.as_deref() {
+        None if !input.answers.is_empty() || !input.estimates.is_empty() => {
+            c.fail("a file with answers or estimates names its backend")
+        }
+        Some(b) if b != backend => c.fail(format!(
+            "the file's backend {b} is not launch {launch_id}'s routing {backend}; only the routed backend answers"
+        )),
+        _ => {}
+    }
+    answers(
+        &mut c,
+        config,
+        &project,
+        &backend,
+        &input.answers,
+        &mut seen,
+        &mut pending,
+        &mut report.dropped,
+    )?;
+    for e in &input.estimates {
+        let what = format!("{} (estimates)", e.item);
+        c.common(&what, 1.0, &e.reason);
+        if !is_commit(&e.read_at) {
+            c.fail(format!("{what}: {} is not a commit hash", e.read_at));
+        }
+        if e.blast.trim().is_empty() {
+            c.fail(format!("{what}: blast names the gate level a fix needs"));
+        }
+        if let Some((id, current)) = c.open_item(&e.item)? {
+            if !seen.insert((id.clone(), "estimates".into())) {
+                c.fail(format!("{} has two estimates entries", e.item));
+            }
+            pending.push(Pending {
+                subject: id.clone(),
+                decision: "estimates".into(),
+                body: json!({
+                    "item": id,
+                    "alias": current,
+                    "decision": "estimates",
+                    "estimate": {
+                        "sites": e.sites,
+                        "read_at": e.read_at,
+                        "tier": e.tier,
+                        "blast": e.blast,
+                        "effort": e.effort,
+                    },
+                    "backend": backend,
+                    "evaluated": false,
+                    "reason": e.reason,
+                }),
+            });
+        }
+    }
 
     for e in &input.suggestions {
         let kind = e.kind.as_str();
+        if e.kind != EntryKind::Batch && l.request.kind == LaunchKind::Triage {
+            c.fail(format!(
+                "a {kind} entry: a triage launch answers its prepared {kind} questions instead"
+            ));
+            continue;
+        }
         if e.kind == EntryKind::Batch {
             let what = format!("the batch of {}", e.members.join(", "));
             c.common(&what, e.confidence, &e.reason);
@@ -238,14 +360,14 @@ pub fn record(tx: &mut Tx<'_>, config: &ConfigSet, launch_id: &str, input: &Inpu
                 let subject = members.iter().map(|m| m.0.clone()).min().expect("two or more members");
                 pending.push(Pending {
                     subject,
-                    decision: kind,
+                    decision: kind.into(),
                     body: json!({
                         "item": members[0].0,
                         "alias": members[0].1,
                         "decision": kind,
                         "answer": true,
                         "probabilities": probabilities(e.confidence),
-                        "backend": BACKEND,
+                        "backend": backend,
                         "evaluated": false,
                         "reason": e.reason,
                         "members": members.iter().map(|m| &m.0).collect::<Vec<_>>(),
@@ -267,7 +389,7 @@ pub fn record(tx: &mut Tx<'_>, config: &ConfigSet, launch_id: &str, input: &Inpu
             "decision": kind,
             "answer": true,
             "probabilities": probabilities(e.confidence),
-            "backend": BACKEND,
+            "backend": backend,
             "evaluated": false,
             "reason": e.reason,
         });
@@ -294,14 +416,14 @@ pub fn record(tx: &mut Tx<'_>, config: &ConfigSet, launch_id: &str, input: &Inpu
             EntryKind::Obsolete | EntryKind::Batch => {}
         }
         if let Some((id, current)) = found {
-            if !seen.insert((id.clone(), kind)) {
+            if !seen.insert((id.clone(), kind.into())) {
                 c.fail(format!("{alias} has two {kind} entries"));
             }
             body["item"] = json!(id);
             body["alias"] = json!(current);
             pending.push(Pending {
                 subject: id,
-                decision: kind,
+                decision: kind.into(),
                 body,
             });
         }
@@ -310,19 +432,19 @@ pub fn record(tx: &mut Tx<'_>, config: &ConfigSet, launch_id: &str, input: &Inpu
         let what = format!("{} (left_out)", o.item);
         c.common(&what, 1.0, &o.reason);
         if let Some((id, current)) = c.open_item(&o.item)? {
-            if !seen.insert((id.clone(), "left_out")) {
+            if !seen.insert((id.clone(), "left_out".into())) {
                 c.fail(format!("{} is left out twice", o.item));
             }
             pending.push(Pending {
                 subject: id.clone(),
-                decision: "left_out",
+                decision: "left_out".into(),
                 body: json!({
                     "item": id,
                     "alias": current,
                     "decision": "left_out",
                     "answer": o.why.as_str(),
                     "probabilities": {o.why.as_str(): 1.0},
-                    "backend": BACKEND,
+                    "backend": backend,
                     "evaluated": false,
                     "reason": o.reason,
                     "why": o.why.as_str(),
@@ -330,8 +452,8 @@ pub fn record(tx: &mut Tx<'_>, config: &ConfigSet, launch_id: &str, input: &Inpu
             });
         }
     }
-    if c.errors.is_empty() && pending.is_empty() {
-        c.fail("the file has no suggestions and nothing left out");
+    if c.errors.is_empty() && pending.is_empty() && report.dropped.is_empty() {
+        c.fail("the file has no answers, suggestions or estimates and nothing left out");
     }
     if !c.errors.is_empty() {
         return Err(Error::refused(format!(
@@ -340,11 +462,6 @@ pub fn record(tx: &mut Tx<'_>, config: &ConfigSet, launch_id: &str, input: &Inpu
         )));
     }
 
-    let mut report = Report {
-        launch: launch_id.to_string(),
-        recorded: 0,
-        repeats: 0,
-    };
     for p in pending {
         let data = json!({"project": project, "run_id": launch_id, "suggestion": p.body});
         let r = tx.record_valid(
@@ -370,9 +487,147 @@ pub fn record(tx: &mut Tx<'_>, config: &ConfigSet, launch_id: &str, input: &Inpu
     Ok(report)
 }
 
+/// Checks each answer against the question `prepare` froze for this launch (triage spec 2.1):
+/// an unknown question, a second answer to one question or to one (item, decision), bad
+/// probabilities, a missing reason or a missing closure subject refuse the file; an answer
+/// whose item closed or whose input changed since prepare is dropped. The calibration map is
+/// the one the question froze (2.4).
+#[allow(clippy::too_many_arguments)]
+fn answers(
+    c: &mut Check<'_>,
+    config: &ConfigSet,
+    project: &str,
+    backend: &str,
+    answers: &[Answer],
+    seen: &mut HashSet<(String, String)>,
+    pending: &mut Vec<Pending>,
+    dropped: &mut Vec<Dropped>,
+) -> Result<()> {
+    if answers.is_empty() {
+        return Ok(());
+    }
+    let cat = Catalogue::embedded();
+    let conn = c.conn;
+    let questions = triage::prepared_questions(conn)?;
+    let asked = triage::asked(conn)?;
+    let mut answered: BTreeSet<&str> = BTreeSet::new();
+    for a in answers {
+        let q = match questions.get(&a.question) {
+            Some((q, launch)) if *launch == c.launch.id => q,
+            _ => {
+                c.fail(format!(
+                    "{}: launch {} prepared no such question",
+                    a.question, c.launch.id
+                ));
+                continue;
+            }
+        };
+        let what = format!("{} ({}, {})", q.alias, q.decision, q.id);
+        if !answered.insert(&a.question) {
+            c.fail(format!("{what} is answered twice"));
+            continue;
+        }
+        if !seen.insert((q.item.clone(), q.decision.clone())) {
+            c.fail(format!("{what}: {} has two {} answers", q.alias, q.decision));
+        }
+        if a.reason.trim().is_empty() {
+            c.fail(format!("{what} needs a reason"));
+        }
+        let f = cat.file(&q.decision)?;
+        let Some(o) = triage::observed(conn, config, project, &q.item)? else {
+            c.fail(format!("{what}: {} has never been read", q.alias));
+            continue;
+        };
+        let areas = triage::areas_of(&triage::translation_of(config, &o.repo));
+        let allowed = cat.allowed(&q.decision, &areas)?;
+        let (answer, raw) = match triage::check_probabilities(f.kind, &allowed, &a.probabilities) {
+            Ok(x) => x,
+            Err(m) => {
+                c.fail(format!("{what}: {m}"));
+                continue;
+            }
+        };
+        let mut body = json!({
+            "item": q.item,
+            "alias": o.source.alias,
+            "decision": q.decision,
+            "answer": answer,
+            "probabilities": triage::calibrate(&raw, q.map_id.as_deref())?,
+            "raw": raw,
+            "map_id": q.map_id,
+            "question": q.id,
+            "backend": backend,
+            "evaluated": false,
+            "reason": a.reason,
+        });
+        // A closure answered true names its subject (1.4).
+        let yes = answer == json!(true);
+        match (f.subject, yes) {
+            (Some(Subject::Commit), true) => match a.commit.as_deref() {
+                None => c.fail(format!("{what}: likely_fixed needs the fixing commit")),
+                Some(sha) if !is_commit(sha) => c.fail(format!("{what}: {sha} is not a commit hash")),
+                Some(sha) => body["commit"] = json!(sha),
+            },
+            (Some(Subject::Related), true) => match a.related.as_deref() {
+                None => c.fail(format!("{what}: duplicate needs the other issue (related)")),
+                Some(other) => match sync::tracked(conn, config, project, other) {
+                    Err(Error::Refused(m)) => c.fail(m),
+                    Err(err) => return Err(err),
+                    Ok(other_id) if other_id == q.item => {
+                        c.fail(format!("{what}: {} cannot be a duplicate of itself", q.alias))
+                    }
+                    Ok(other_id) => {
+                        if observed_open(conn, &other_id)? != Some(true) {
+                            c.fail(format!("{what}: {other} is not an open issue"));
+                        }
+                        body["related"] = json!(other_id);
+                        body["related_alias"] = json!(alias_of(conn, &other_id)?.unwrap_or(other.to_string()));
+                    }
+                },
+            },
+            _ => {}
+        }
+        if f.kind == AnswerKind::Areas && areas.is_empty() {
+            c.fail(format!("{what}: the repo declares no areas"));
+        }
+        // Dropped, not refused: the item moved under the session (2.1).
+        let changed = if !o.open {
+            Some("the issue closed since prepare".to_string())
+        } else {
+            match triage::live_input(config, cat, &asked, &o, &q.decision)? {
+                Ok((_, h)) if h == q.input_hash => None,
+                Ok(_) => Some("the issue changed since prepare".to_string()),
+                Err(why) => Some(why),
+            }
+        };
+        if let Some(why) = changed {
+            dropped.push(Dropped {
+                question: q.id.clone(),
+                item: o.source.alias.clone(),
+                decision: q.decision.clone(),
+                why,
+            });
+            continue;
+        }
+        pending.push(Pending {
+            subject: q.item.clone(),
+            decision: q.decision.clone(),
+            body,
+        });
+    }
+    Ok(())
+}
+
+fn observed_open(conn: &Connection, id: &str) -> Result<Option<bool>> {
+    Ok(ledger::latest(conn, id, Kind::Observed)?.map(|e| e.data["content"]["state"] == "open"))
+}
+
 fn alias_of(conn: &Connection, id: &str) -> Result<Option<String>> {
     Ok(ledger::latest(conn, id, Kind::Observed)?.and_then(|e| e.data["alias"].as_str().map(str::to_string)))
 }
+
+/// The decisions a `suggestions` document shows.
+const CARDS: [&str; 5] = ["likely_fixed", "duplicate", "obsolete", "batch", "left_out"];
 
 /// The document id of the suggestion of `decision` about `subject` in run `run`.
 fn doc_id(run: &str, decision: &str, subject: &str) -> String {
@@ -432,6 +687,11 @@ pub fn documents(conn: &Connection, project: &str) -> Result<Vec<Value>> {
 
     let mut out = Vec::new();
     for ((subject, decision), e) in latest {
+        // Phase 1's cards only (5.8): the page shows the other decisions from triage phase 3.
+        // A closure answered false is no card, and hides an older true one of the same kind.
+        if !CARDS.contains(&decision.as_str()) || e.data["suggestion"]["answer"] == json!(false) {
+            continue;
+        }
         let Some((mut seen_at, open, _)) = observed(conn, &subject)? else {
             continue;
         };

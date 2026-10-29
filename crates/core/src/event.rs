@@ -34,6 +34,9 @@ pub enum Kind {
     SessionSeen,
     /// A session seen before was archived, or left the list (10.10).
     SessionGone,
+    /// A triage launch's questions were prepared (triage spec 2.1): each question's hashes,
+    /// the observation it was built from and the calibration map in force, frozen.
+    Prepared,
 }
 
 impl Kind {
@@ -56,6 +59,7 @@ impl Kind {
             Kind::WriteFailed => "write_failed",
             Kind::SessionSeen => "session_seen",
             Kind::SessionGone => "session_gone",
+            Kind::Prepared => "prepared",
         }
     }
 

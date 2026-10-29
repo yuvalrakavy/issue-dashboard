@@ -200,6 +200,11 @@
       "type": "integer",
       "minimum": 1,
       "description": "Wall-clock minutes per job-size point, the unit shared by effort and gate cost (6.3). Default 15."
+    },
+    "closure_recheck_days": {
+      "description": "How many days a closure answer (likely_fixed, duplicate, obsolete) holds before triage asks it again (triage spec 2.2); 14 when unset.",
+      "type": "integer",
+      "minimum": 1
     }
   }
 }

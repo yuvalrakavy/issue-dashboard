@@ -1,0 +1,9 @@
+# The `duplicate` question (triage spec 1.1): a closure, asked in both scopes.
+decision = "duplicate"
+kind     = "boolean"
+scope    = "both"
+subject  = "related"
+question = """
+Does another open issue of this project describe the same problem or the same work? Name the
+one other open issue (`related`, owner/repo#N) that this one duplicates.
+"""
