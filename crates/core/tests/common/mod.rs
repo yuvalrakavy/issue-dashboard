@@ -138,6 +138,7 @@ pub fn launch_doc(id: &str, project: &str, items: &[&str], recipe: &str) -> Laun
             reason: None,
         },
         suggested_routing: None,
+        scope: None,
     }
 }
 

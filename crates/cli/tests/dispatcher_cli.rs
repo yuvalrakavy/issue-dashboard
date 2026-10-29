@@ -395,6 +395,7 @@ fn live_launches_are_those_holding_a_slot_or_queued_with_every_field() {
         row("L1"),
         json!({
             "id": "L1", "project": "home", "kind": "recommend_closures",
+            "scope": "closures", "author": "user_owner",
             "aliases": [open[0].1, open[1].1], "recipe": "read-only", "routing": routing,
             "state": "started", "token": t1, "dispatcher": D, "session": "local_one",
             "reserved_at": t.now.replace('Z', ".000Z"), "outcome": true,
@@ -422,6 +423,179 @@ fn live_launches_are_those_holding_a_slot_or_queued_with_every_field() {
     assert_eq!(queued["token"], json!(null), "a queued launch has no token yet");
     assert_eq!(queued["reserved_at"], json!(null), "a queued launch has no slot time");
     assert_eq!(queued["dispatcher"], json!(null), "{queued}");
+}
+
+// --- triage phase 4/5: the daily run (triage spec 5.2) ------------------------------------
+
+#[test]
+fn the_daily_run_from_request_to_reservation() {
+    let t = Tracker::new();
+    t.outbox();
+    let r = t.ok(&["triage-request", "--project", "home"]);
+    assert_eq!(r["result"], "requested", "{r}");
+    assert_eq!(
+        r["routing"],
+        json!({"model": "claude-opus-5-5", "effort": "medium", "reason": "the tracker's default routing (triage spec 5.3)"})
+    );
+    assert_eq!(r["aliases"].as_array().unwrap().len(), 40, "{r}");
+    let id = r["launch"].as_str().unwrap().to_string();
+
+    // It waits as requested, the schedule's, at scope full.
+    let waiting = t.ok(&["launches", "--requested"]);
+    let rows = waiting["launches"].as_array().unwrap();
+    assert_eq!(rows.len(), 1, "{waiting}");
+    assert_eq!(
+        (
+            rows[0]["id"].as_str(),
+            rows[0]["author"].as_str(),
+            rows[0]["kind"].as_str(),
+            rows[0]["scope"].as_str(),
+            rows[0]["state"].as_str()
+        ),
+        (
+            Some(id.as_str()),
+            Some("schedule"),
+            Some("triage"),
+            Some("full"),
+            Some("requested")
+        )
+    );
+    assert_eq!(
+        t.ok(&["launches", "--live"])["launches"],
+        json!([]),
+        "requested is not live"
+    );
+
+    // A second run while no dispatcher has taken it records nothing: it is pending, and the
+    // task wakes the dispatcher for it again.
+    let p = t.ok(&["triage-request", "--project", "home"]);
+    assert_eq!(
+        (p["result"].clone(), p["launch"].clone()),
+        (json!("pending"), json!(id)),
+        "{p}"
+    );
+    assert_eq!(p["aliases"], r["aliases"]);
+    assert_eq!(t.ok(&["launches"])["launches"].as_array().unwrap().len(), 1);
+
+    // The dispatcher reserves it as it reserves the owner's.
+    let res = t.ok(&["reserve", "--launch", &id, "--dispatcher", D]);
+    assert_eq!(res["result"], "reserved", "{res}");
+    let token = res["token"].as_str().unwrap().to_string();
+    assert_eq!(
+        t.ok(&["launches", "--requested"])["launches"],
+        json!([]),
+        "a reserved launch is no longer requested"
+    );
+    // Now a run is refused while it is live.
+    let m = t.refused(&["triage-request", "--project", "home"]);
+    assert!(
+        m.contains(&format!(
+            "triage launch {id} of project home is live (reserved); the daily run requests nothing until it ends"
+        )),
+        "{m}"
+    );
+    let b = t.ok(&["brief", "--launch", &id]);
+    assert_eq!(b["title"], json!(format!("Triage (40) {token}")));
+    let text = b["text"].as_str().unwrap();
+    assert!(
+        text.contains(&format!(
+            "prepare --launch {id} --session-model <model>@<effort> --out questions.json"
+        )),
+        "{text}"
+    );
+    assert!(text.contains("--stage priority"), "a full triage has priority's stage");
+    assert!(!text.contains("labels:"), "the triage brief prints no label (1.1)");
+
+    // The page sees it: its kind, scope and author, and what the sheet needs.
+    let d = t.outbox();
+    let st = d["launch_status"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["launch"] == json!(id))
+        .unwrap()
+        .clone();
+    assert_eq!(
+        (
+            st["kind"].clone(),
+            st["scope"].clone(),
+            st["author"].clone(),
+            st["state"].clone()
+        ),
+        (json!("triage"), json!("full"), json!("schedule"), json!("reserved"))
+    );
+    assert_eq!(d["meta"]["routing"]["triage"]["model"], "claude-opus-5-5");
+    assert_eq!(d["meta"]["routing"]["stronger_look"]["model"], "claude-fable-5-1");
+    assert_eq!(d["meta"]["routing"]["stronger_look"]["effort"], "high");
+    assert_eq!(d["meta"]["max_triage_items"], 40);
+    assert_eq!(d["meta"]["evaluated_backends"], json!([]));
+    // Uncapped: the page caps after keeping the repos in view.
+    assert_eq!(d["meta"]["triage_queue"]["full"].as_array().unwrap().len(), 82);
+}
+
+#[test]
+fn reserve_refuses_a_schedule_launch_of_another_kind() {
+    let t = Tracker::new();
+    let open = open_store_issues(&t.outbox());
+    let mut doc = launch_doc("L1", "schedule", &[open[0].clone()]);
+    doc["kind"] = json!("fix");
+    doc["recipe"] = json!("lanes");
+    let file = t.write("L1.json", &doc);
+    let m = t.refused(&["reserve", "--request", &file, "--dispatcher", D]);
+    assert!(
+        m.contains("launch L1: author schedule requests triage launches only, not fix"),
+        "{m}"
+    );
+}
+
+#[test]
+fn reserve_by_id_checks_the_author_against_today_s_owner() {
+    let t = Tracker::new();
+    let open = open_store_issues(&t.outbox());
+    // The owner's launch is ingested by a cycle, then the project changes owner before the
+    // dispatcher reserves it by id.
+    let pages = t.write(
+        "pages.json",
+        &json!({"decisions": [], "launches": [launch_doc("L1", "user_owner", &[open[0].clone()])], "views": [], "requests": []}),
+    );
+    t.ok(&["cycle", "--project", "home", "--pages", &pages]);
+    let cfg = t.root.join("projects/home.toml");
+    let text = fs::read_to_string(&cfg).unwrap();
+    fs::write(
+        &cfg,
+        text.replace("owner_id = \"user_owner\"", "owner_id = \"user_new_owner\""),
+    )
+    .unwrap();
+    let m = t.refused(&["reserve", "--launch", "L1", "--dispatcher", D]);
+    assert!(
+        m.contains("launch L1: author user_owner is not project home's owner_id"),
+        "{m}"
+    );
+}
+
+#[test]
+fn an_eval_launch_is_briefed_for_the_backend_it_measures() {
+    let t = Tracker::new();
+    t.outbox();
+    let doc = json!({
+        "id": "E1", "project": "home", "author": "user_owner", "created_at": "2026-10-23T08:00:00Z",
+        "kind": "eval", "items": [], "aliases": [], "recipe": "read-only",
+        "routing": {"model": "claude-sonnet-5-5", "effort": "high"},
+    });
+    let file = t.write("E1.json", &doc);
+    let r = t.ok(&["reserve", "--request", &file, "--dispatcher", D]);
+    assert_eq!(r["result"], "reserved", "{r}");
+    let token = r["token"].as_str().unwrap();
+    let b = t.ok(&["brief", "--launch", "E1"]);
+    // The label is cut to leave the token room within 60 characters.
+    assert_eq!(b["title"], json!(format!("Evaluate claude-sonnet- {token}")));
+    let text = b["text"].as_str().unwrap();
+    for d in ["type", "area", "priority"] {
+        assert!(
+            text.contains(&format!("--decision {d} --backend claude-sonnet-5-5@high")),
+            "{d}: {text}"
+        );
+    }
 }
 
 #[test]

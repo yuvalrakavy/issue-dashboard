@@ -248,6 +248,9 @@ pub struct Project {
     /// How many days a closure answer holds before triage asks it again (triage spec 2.2).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub closure_recheck_days: Option<u32>,
+    /// The most items one triage launch names (triage spec 2.2); 40 when unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_triage_items: Option<u32>,
     /// How many days `eval refresh-history` reads back (triage spec 3.2); 730 when unset.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub eval_history_days: Option<u32>,
@@ -545,6 +548,42 @@ impl ConfigSet {
 
 /// The pool a read-only launch (a recommender) takes its slot from (10.7).
 pub const READ_ONLY_RECIPE: &str = "read-only";
+
+/// How many items one triage launch names when the project does not say (triage spec 2.2).
+pub const MAX_TRIAGE_ITEMS: u32 = 40;
+
+/// The routing of a launch kind when the project's `routing` table does not name it (triage
+/// spec 5.3): triage on Opus 5.5 at medium, a stronger look on the strongest model at high.
+/// An eval has none: its routing is the backend it measures.
+pub fn default_routing(kind: &str) -> Option<crate::docs::Routing> {
+    let (model, effort) = match kind {
+        "triage" => ("claude-opus-5-5", "medium"),
+        "stronger_look" => ("claude-fable-5-1", "high"),
+        _ => return None,
+    };
+    Some(crate::docs::Routing {
+        model: model.to_string(),
+        effort: effort.to_string(),
+        workspace: None,
+        reason: Some("the tracker's default routing (triage spec 5.3)".to_string()),
+    })
+}
+
+impl ConfigSet {
+    /// The routing a launch of `kind` gets in `project`: the project's `routing` entry for the
+    /// kind, else [`default_routing`] (triage spec 5.3). A changed routing is a new backend.
+    pub fn routing(&self, project: &str, kind: &str) -> Result<crate::docs::Routing> {
+        let p = self.project(project)?;
+        if let Some(r) = p.routing.as_ref().and_then(|t| t.get(kind)) {
+            return Ok(r.clone());
+        }
+        default_routing(kind).ok_or_else(|| {
+            Error::refused(format!(
+                "project {project} has no routing for {kind} launches; add one under [routing.{kind}]"
+            ))
+        })
+    }
+}
 
 /// Expands a leading `~/` to the home directory.
 pub fn expand_home(path: &str) -> PathBuf {

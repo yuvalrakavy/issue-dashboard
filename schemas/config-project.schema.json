@@ -178,7 +178,7 @@
       }
     },
     "routing": {
-      "description": "Overrides of the default routing table (7.4), by launch kind.",
+      "description": "Overrides of the default routing table (7.4), by launch kind. Triage defaults to claude-opus-5-5 at medium and stronger_look to claude-fable-5-1 at high (triage spec 5.3); a changed routing is a new backend.",
       "type": "object",
       "additionalProperties": {
         "$ref": "common.schema.json#/$defs/routing"
@@ -203,6 +203,11 @@
     },
     "closure_recheck_days": {
       "description": "How many days a closure answer (likely_fixed, duplicate, obsolete) holds before triage asks it again (triage spec 2.2); 14 when unset.",
+      "type": "integer",
+      "minimum": 1
+    },
+    "max_triage_items": {
+      "description": "The most items one triage launch names (triage spec 2.2); 40 when unset.",
       "type": "integer",
       "minimum": 1
     },

@@ -138,6 +138,17 @@ enum Command {
         /// Only those holding a slot (reserved, unconfirmed or started) or queued.
         #[arg(long)]
         live: bool,
+        /// Only those recorded and not yet reserved or queued: the daily triage run's request
+        /// waits here until the dispatcher reserves it (triage spec 5.2).
+        #[arg(long, conflicts_with = "live")]
+        requested: bool,
+    },
+    /// The daily triage run (triage spec 5.2): record a `triage` launch request authored by
+    /// `schedule`, naming the items due, at the project's configured routing. Refused while a
+    /// triage launch of the project is live; with nothing due it records nothing.
+    TriageRequest {
+        #[arg(long)]
+        project: String,
     },
     /// One cycle of a project (10.4): ingest the page documents, read GitHub, and write the
     /// project's outbox.
@@ -565,6 +576,7 @@ fn run(cli: Cli) -> anyhow::Result<Value> {
         Command::Cycle { .. } => "cycle",
         Command::Snapshot { .. } => "snapshot",
         Command::SyncNow { .. } => "sync-now",
+        Command::TriageRequest { .. } => "triage-request",
         Command::Eval(EvalCommand::RefreshHistory { .. }) => "eval-refresh-history",
         Command::Eval(EvalCommand::Prepare { .. }) => "eval-prepare",
         Command::Eval(EvalCommand::Score { .. }) => "eval-score",
@@ -619,14 +631,9 @@ fn run(cli: Cli) -> anyhow::Result<Value> {
                 }
                 let id = match &request {
                     Some(doc) => {
-                        // 7.3 step 1: only the owner's launch documents are acted on.
-                        let owner = &config.project(&doc.project)?.owner_id;
-                        if &doc.author != owner {
-                            return Err(Error::refused(format!(
-                                "launch {}: author {} is not project {}'s owner_id",
-                                doc.id, doc.author, doc.project
-                            )));
-                        }
+                        // 7.3 step 1: only the owner's launch documents are acted on, and the
+                        // daily run's triage requests (triage spec 5.2).
+                        launch::check_author(&config, doc)?;
                         launch::request(tx, doc, Via::Reserve)?;
                         // A cancel ingested before this launch was requested takes effect now,
                         // or did on an earlier try of this command: either way it is withdrawn.
@@ -636,7 +643,15 @@ fn run(cli: Cli) -> anyhow::Result<Value> {
                         }
                         doc.id.clone()
                     }
-                    None => a.launch.clone().expect("clap requires --launch without --request"),
+                    None => {
+                        let id = a.launch.clone().expect("clap requires --launch without --request");
+                        // The same check for a launch already recorded: the daily run records
+                        // its request itself, and reserve is where the author is checked.
+                        if let Some(l) = launch::load(tx.conn(), &id)? {
+                            launch::check_author(&config, &l.request)?;
+                        }
+                        id
+                    }
                 };
                 Ok(serde_json::to_value(launch::reserve(
                     tx,
@@ -721,11 +736,14 @@ fn run(cli: Cli) -> anyhow::Result<Value> {
                 suggest::record(tx, &config, &launch, &input, &commits)
             })?)?
         }
-        Command::Launches { live } => {
+        Command::Launches { live, requested } => {
             let rows = root.read(|l| {
                 let mut out = Vec::new();
                 for x in launch::all(l.conn())? {
                     if live && !(x.state.holds() || x.state == launch::State::Queued) {
+                        continue;
+                    }
+                    if requested && x.state != launch::State::Requested {
                         continue;
                     }
                     let outcome = ledger::latest(l.conn(), &x.id, Kind::Outcome)?.is_some();
@@ -733,6 +751,8 @@ fn run(cli: Cli) -> anyhow::Result<Value> {
                         "id": x.id,
                         "project": x.request.project,
                         "kind": x.request.kind,
+                        "scope": x.request.triage_scope(),
+                        "author": x.request.author,
                         "aliases": x.request.aliases,
                         "recipe": x.request.recipe,
                         "routing": x.request.routing,
@@ -792,6 +812,12 @@ fn run(cli: Cli) -> anyhow::Result<Value> {
             let config = ConfigSet::load(&dir)?;
             config.record(tx)?;
             sync::request(tx, &config, &project, issue.as_deref())
+        })?)?,
+        Command::TriageRequest { project } => serde_json::to_value(root.mutate_with_clock(now, |tx| {
+            // Read under the lock, as `reserve` does.
+            let config = ConfigSet::load(&dir)?;
+            config.record(tx)?;
+            issue_dashboard_core::daily::request(tx, &config, &project)
         })?)?,
         Command::Snapshot { project } => {
             let gh = github()?;

@@ -80,7 +80,15 @@
         "via": {
           "enum": [
             "ingest",
-            "reserve"
+            "reserve",
+            "schedule"
+          ]
+        },
+        "scope": {
+          "description": "A triage launch's scope, on its requested transition (triage spec 4.6).",
+          "enum": [
+            "full",
+            "closures"
           ]
         }
       },

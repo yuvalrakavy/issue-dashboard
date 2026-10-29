@@ -10,6 +10,7 @@ pub mod brief;
 pub mod canonical;
 pub mod config;
 pub mod cycle;
+pub mod daily;
 pub mod decision;
 pub mod derive;
 pub mod docs;

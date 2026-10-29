@@ -471,6 +471,9 @@ fn launch_status(conn: &Connection, project: &str) -> Result<Vec<Value>> {
         out.push(json!({
             "id": l.id,
             "launch": l.id,
+            "kind": l.request.kind,
+            "scope": l.request.triage_scope(),
+            "author": l.request.author,
             "state": l.state,
             "token": l.token,
             "session": l.session,
@@ -483,6 +486,43 @@ fn launch_status(conn: &Connection, project: &str) -> Result<Vec<Value>> {
         }));
     }
     Ok(out)
+}
+
+/// What the page's Run triage… sheet needs (triage spec 5.1, 5.3): the routing each launch kind
+/// gets, the backends any evaluation measured, and the items each scope would ask about now
+/// (in the 2.2 order, uncapped).
+fn triage_meta(conn: &Connection, config: &ConfigSet, project: &str, now: &str) -> Result<Value> {
+    let routing = |kind: &str| -> Result<Value> {
+        Ok(match config.routing(project, kind) {
+            Ok(r) => serde_json::to_value(r)?,
+            Err(_) => Value::Null,
+        })
+    };
+    let mut evaluated = std::collections::BTreeSet::new();
+    for e in ledger::events_by_kind(conn, Kind::Evaluated)? {
+        if e.data["project"] == project
+            && let Some(b) = e.data["backend"].as_str()
+        {
+            evaluated.insert(b.to_string());
+        }
+    }
+    let p = config.project(project)?;
+    let max = p.max_triage_items.unwrap_or(crate::config::MAX_TRIAGE_ITEMS) as usize;
+    // Uncapped: the page keeps the items of the repos in view and only then caps at
+    // `max_triage_items`, so one busy repo cannot hide another's due items.
+    let queue = |scope| -> Result<Vec<String>> {
+        let c = crate::triage::select(conn, config, project, scope, now)?;
+        Ok(c.into_iter().map(|c| c.item).collect())
+    };
+    Ok(json!({
+        "routing": {"triage": routing("triage")?, "stronger_look": routing("stronger_look")?},
+        "evaluated_backends": evaluated,
+        "max_triage_items": max,
+        "triage_queue": {
+            "full": queue(crate::docs::TriageScope::Full)?,
+            "closures": queue(crate::docs::TriageScope::Closures)?,
+        },
+    }))
 }
 
 /// Each group a member of `project` names, with the tracked repos it holds (the page's scope
@@ -631,6 +671,7 @@ pub fn derive(
         "open": open.len(),
     });
     let taken = format_time(taken_at);
+    let triage = triage_meta(conn, config, project, &taken)?;
     let meta = json!({
         "schema": 1,
         "project": project,
@@ -648,6 +689,10 @@ pub fn derive(
         "recently_closed_days": p.recently_closed_days.unwrap_or(DEFAULT_RECENTLY_CLOSED_DAYS).min(history_days),
         // The page tells a viewer whose actions would all be refused (10.5): none is set yet.
         "owner_id": Some(p.owner_id.as_str()).filter(|o| !o.is_empty() && *o != PENDING_OWNER),
+        "routing": triage["routing"],
+        "evaluated_backends": triage["evaluated_backends"],
+        "max_triage_items": triage["max_triage_items"],
+        "triage_queue": triage["triage_queue"],
     });
     let out = Outbox {
         project: project.to_string(),
