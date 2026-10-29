@@ -304,6 +304,22 @@ pub fn owner_records(conn: &Connection, project: &str) -> Result<Vec<Record>> {
                         out.push(from(s, "owner_edit", &s.decision, set));
                     }
                 }
+                // A Details edit (triage spec 4.2) names its item, and its suggestion when the
+                // page showed one: the owner's answer is truth for that decision.
+                let item = d.target.item.clone().or_else(|| about.map(|s| s.item.clone()));
+                for (decision, v) in [
+                    ("severity", &value.severity),
+                    ("reach", &value.reach),
+                    ("detectability", &value.detectability),
+                ] {
+                    let (Some(item), Some(v)) = (item.as_deref(), v) else {
+                        continue;
+                    };
+                    match about.filter(|s| s.decision == decision && s.item == item) {
+                        Some(s) => out.push(from(s, "owner_edit", decision, vec![v.clone()])),
+                        None => out.push(plain(item, decision, vec![v.clone()])),
+                    }
+                }
             }
             Action::DismissSuggestion => {
                 // A dismissed second opinion confirms the current label (3.1, 4.2).

@@ -12,8 +12,10 @@ use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
+use crate::config::ConfigSet;
 use crate::docs::{Action, Decision, DecisionValue, Priority};
 use crate::event::{Event, Kind};
+use crate::layers;
 use crate::ledger::{self, Dedupe, Recorded, Tx};
 use crate::root::{format_time, parse_time};
 use crate::{Error, Result};
@@ -39,6 +41,28 @@ pub struct DecidedData {
 /// - Once accepted, a decision stays accepted: a later ingest is a repeat whatever it would say.
 /// - Page documents are never changed, so a different document under an ingested id is refused.
 pub fn ingest(tx: &mut Tx<'_>, project: &str, owner_id: &str, doc: &Decision) -> Result<Recorded> {
+    ingest_with(tx, None, project, owner_id, doc)
+}
+
+/// [`ingest`], with the checks that read the item's values through the project's labels
+/// (triage spec 4.2, 4.3): a stale accept, and an apply-all accept a card may not take.
+pub fn ingest_checked(
+    tx: &mut Tx<'_>,
+    config: &ConfigSet,
+    project: &str,
+    owner_id: &str,
+    doc: &Decision,
+) -> Result<Recorded> {
+    ingest_with(tx, Some(config), project, owner_id, doc)
+}
+
+fn ingest_with(
+    tx: &mut Tx<'_>,
+    config: Option<&ConfigSet>,
+    project: &str,
+    owner_id: &str,
+    doc: &Decision,
+) -> Result<Recorded> {
     let earlier: Vec<(Event, DecidedData)> = ledger::events_of(tx.conn(), &doc.id, Kind::Decided)?
         .into_iter()
         .map(|e| Ok((e.clone(), serde_json::from_value::<DecidedData>(e.data)?)))
@@ -61,6 +85,8 @@ pub fn ingest(tx: &mut Tx<'_>, project: &str, owner_id: &str, doc: &Decision) ->
         Some(format!("author {} is not the project's owner_id", doc.author))
     } else if doc.action == Action::DismissClosed {
         dismiss_refusal(tx.conn(), doc)?
+    } else if let (Action::AcceptSuggestion, Some(config)) = (doc.action, config) {
+        accept_refusal(tx.conn(), config, project, doc)?
     } else {
         None
     };
@@ -110,6 +136,79 @@ fn dismiss_refusal(conn: &Connection, doc: &Decision) -> Result<Option<String>> 
             "{item} was closed at {}, not at {asked}: the close the page showed is gone",
             closed.map_or("an unknown time".into(), format_time)
         )));
+    }
+    Ok(None)
+}
+
+/// Why an `accept_suggestion` cannot take effect (triage spec 4.2, 4.3):
+///
+/// - a label card's item no longer has the value the suggestion saw (`current`): the owner
+///   accepted a card about facts that changed (stale);
+/// - apply all (`value.bulk`) on anything but an untriaged item's type, area or priority card,
+///   on a second opinion, or on a key that does not pass Bulk or is drifting now.
+fn accept_refusal(conn: &Connection, config: &ConfigSet, project: &str, doc: &Decision) -> Result<Option<String>> {
+    let bulk = doc.value.as_ref().and_then(|v| v.bulk) == Some(true);
+    let found = match doc.target.suggestion.as_deref() {
+        Some(id) => crate::truth::suggestions(conn, project)?.remove(id),
+        None => None,
+    };
+    let Some(s) = found else {
+        return Ok(bulk.then(|| "apply all names no recorded suggestion".to_string()));
+    };
+    let label = layers::LABEL_DECISIONS.contains(&s.decision.as_str());
+    let alias = s.body["alias"].as_str().unwrap_or(&s.item).to_string();
+    if bulk {
+        if !label {
+            return Ok(Some(format!(
+                "apply all takes only type, area and priority cards; {} is not one",
+                s.decision
+            )));
+        }
+        if s.body["second_opinion"].is_object() {
+            return Ok(Some(format!(
+                "apply all never takes a second opinion ({alias}'s {})",
+                s.decision
+            )));
+        }
+    }
+    if !label {
+        return Ok(None);
+    }
+    let Some(recorded) = s.body.get("current") else {
+        return Ok(Some(format!(
+            "{alias}'s {} suggestion was recorded before cards existed; it has no card to accept",
+            s.decision
+        )));
+    };
+    let l = layers::layers(conn, project)?;
+    let now = layers::effective_of(conn, config, &l, &s.item)?.map(|e| e.current(&s.decision));
+    if now.as_ref() != Some(recorded) {
+        let shown = |v: Option<&serde_json::Value>| match v {
+            None => "unknown".to_string(),
+            Some(v) if layers::is_unset(v) => "unset".to_string(),
+            Some(v) => v.to_string(),
+        };
+        return Ok(Some(format!(
+            "stale: {alias}'s {} is now {}, not the {} the suggestion saw",
+            s.decision,
+            shown(now.as_ref()),
+            shown(Some(recorded))
+        )));
+    }
+    if bulk {
+        if !layers::is_unset(recorded) {
+            return Ok(Some(format!(
+                "apply all takes only an untriaged item's card; {alias} has a {}",
+                s.decision
+            )));
+        }
+        let (badge, ok) = crate::suggest::Badges::load(conn, project)?.of(&s.body)?;
+        if !ok {
+            return Ok(Some(format!(
+                "apply all: {alias}'s {} key does not pass Bulk or is drifting now (badge {badge})",
+                s.decision
+            )));
+        }
     }
     Ok(None)
 }
@@ -255,24 +354,10 @@ pub fn effective(conn: &Connection, project: &str) -> Result<Vec<Decision>> {
 }
 
 /// The project priority each item has from the effective decisions: the later of two
-/// decisions about one item wins; a cleared priority is absent.
+/// decisions about one item wins (`set_priority`, or an accepted or edited priority suggestion,
+/// triage spec 4.2); a cleared priority is absent.
 pub fn project_priorities(conn: &Connection, project: &str) -> Result<BTreeMap<String, Priority>> {
-    let mut out = BTreeMap::new();
-    for d in effective(conn, project)? {
-        let Some(item) = d.target.item.clone() else { continue };
-        match d.action {
-            Action::SetPriority => {
-                if let Some(p) = d.value.as_ref().and_then(|v| v.priority) {
-                    out.insert(item, p);
-                }
-            }
-            Action::ClearPriority => {
-                out.remove(&item);
-            }
-            _ => {}
-        }
-    }
-    Ok(out)
+    Ok(crate::layers::layers(conn, project)?.priorities)
 }
 
 /// The overrides (4.3) each item has from the effective decisions: `set_override` replaces the

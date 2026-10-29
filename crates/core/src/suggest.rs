@@ -12,6 +12,7 @@
 //! or until the owner dismisses it. A dismissal holds for that issue and kind across later
 //! runs, until the issue's observation changes after it (5.8: "unless its facts change").
 
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use rusqlite::Connection;
@@ -22,9 +23,11 @@ use crate::canonical::sha256_hex;
 use crate::config::ConfigSet;
 use crate::decision::{self, Status};
 use crate::docs::{Action, LaunchKind};
+use crate::eval;
 use crate::event::Kind;
 use crate::github::{GitHub, Request};
 use crate::launch::Launch;
+use crate::layers;
 use crate::ledger::{self, Dedupe, Tx};
 use crate::root::{format_time, parse_time};
 use crate::sync;
@@ -63,6 +66,9 @@ pub struct Answer {
     /// The other open issue, owner/repo#N, for duplicate answered true.
     #[serde(default)]
     pub related: Option<String>,
+    /// The answer repeats a request in the reporter's own text (triage spec 4.1: marked).
+    #[serde(default)]
+    pub from_reporter: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, serde::Serialize)]
@@ -620,6 +626,7 @@ fn answers(
     let conn = c.conn;
     let questions = triage::prepared_questions(conn)?;
     let asked = triage::asked(conn)?;
+    let mut label_layers: Option<layers::Layers> = None;
     let mut answered: BTreeSet<&str> = BTreeSet::new();
     for a in answers {
         let q = match questions.get(&a.question) {
@@ -650,11 +657,15 @@ fn answers(
         };
         // Dropped, not refused: the item moved under the session (2.1). Checked before the
         // answer itself, which is checked against what the question is now (its areas).
+        let mut live = Value::Null;
         let changed = if !o.open {
             Some("the issue closed since prepare".to_string())
         } else {
             match triage::live_input(config, cat, &asked, &o, &q.decision)? {
-                Ok((_, h)) if h == q.input_hash => None,
+                Ok((input, h)) if h == q.input_hash => {
+                    live = input;
+                    None
+                }
                 Ok(_) => Some("the issue changed since prepare".to_string()),
                 Err(why) => Some(why),
             }
@@ -677,12 +688,13 @@ fn answers(
                 continue;
             }
         };
+        let calibrated = triage::calibrate(conn, f.kind, &raw, q.map_id.as_deref())?;
         let mut body = json!({
             "item": q.item,
             "alias": o.source.alias,
             "decision": q.decision,
             "answer": answer,
-            "probabilities": triage::calibrate(conn, f.kind, &raw, q.map_id.as_deref())?,
+            "probabilities": calibrated,
             "raw": raw,
             "map_id": q.map_id,
             "question": q.id,
@@ -690,6 +702,27 @@ fn answers(
             "evaluated": false,
             "reason": a.reason,
         });
+        if a.from_reporter {
+            body["from_reporter"] = json!(true);
+        }
+        if q.decision == "priority" {
+            body["rubric_level"] = live.get("rubric_level").cloned().unwrap_or(Value::Null);
+        }
+        // What the item's value was when the answer was recorded, and whether the answer is a
+        // confident disagreement with it (triage spec 4.1): the card shows only while the value
+        // is still this one (4.2's stale accept).
+        if layers::LABEL_DECISIONS.contains(&q.decision.as_str()) {
+            if label_layers.is_none() {
+                label_layers = Some(layers::layers(conn, project)?);
+            }
+            let l = label_layers.as_ref().expect("loaded above");
+            let current =
+                layers::effective_of(conn, config, l, &q.item)?.map_or(Value::Null, |e| e.current(&q.decision));
+            if let Some(opinion) = second_opinion(conn, &q.decision, &current, &calibrated, q.map_id.as_deref())? {
+                body["second_opinion"] = opinion;
+            }
+            body["current"] = current;
+        }
         // A closure answered true names its subject (1.4).
         let yes = answer == json!(true);
         match (f.subject, yes) {
@@ -740,22 +773,112 @@ fn alias_of(conn: &Connection, id: &str) -> Result<Option<String>> {
     Ok(ledger::latest(conn, id, Kind::Observed)?.and_then(|e| e.data["alias"].as_str().map(str::to_string)))
 }
 
-/// The decisions a `suggestions` document shows.
-const CARDS: [&str; 5] = ["likely_fixed", "duplicate", "obsolete", "batch", "left_out"];
+/// The closing decisions a `suggestions` document shows (5.8); the label decisions' cards are
+/// triage spec 4.1's.
+const CARDS: [&str; 6] = [
+    "likely_fixed",
+    "duplicate",
+    "obsolete",
+    "support_question",
+    "batch",
+    "left_out",
+];
+
+/// A labelled item's label is a second opinion's subject when its calibrated probability is at
+/// most this (triage spec 4.1).
+pub const SECOND_OPINION_AT: f64 = 0.2;
+
+/// At most this many second opinions a run (4.1).
+pub const SECOND_OPINIONS_PER_RUN: usize = 5;
+
+/// The second opinion an answer gives about the item's `current` value, if it is one (4.1):
+/// type and priority when the current value's calibrated probability is at most
+/// [`SECOND_OPINION_AT`]; area when any current area's is (`flagged`). It names the current value
+/// and the false-alarm rate the map's evaluation measured (null without a map).
+fn second_opinion(
+    conn: &Connection,
+    decision: &str,
+    current: &Value,
+    calibrated: &BTreeMap<String, f64>,
+    map_id: Option<&str>,
+) -> Result<Option<Value>> {
+    let p = |a: &str| calibrated.get(a).copied();
+    let (p_current, flagged) = match (decision, current) {
+        ("area", Value::Array(set)) => {
+            let flagged: Vec<(String, f64)> = set
+                .iter()
+                .filter_map(|a| a.as_str())
+                .filter_map(|a| p(a).filter(|x| *x <= SECOND_OPINION_AT).map(|x| (a.to_string(), x)))
+                .collect();
+            let Some(low) = flagged.iter().map(|(_, x)| *x).reduce(f64::min) else {
+                return Ok(None);
+            };
+            (low, Some(flagged.into_iter().map(|(a, _)| a).collect::<Vec<_>>()))
+        }
+        (_, Value::String(c)) => match p(c) {
+            Some(x) if x <= SECOND_OPINION_AT => (x, None),
+            _ => return Ok(None),
+        },
+        _ => return Ok(None),
+    };
+    let false_alarm = match map_id {
+        Some(m) => evaluation_of_map(conn, m)?.and_then(|d| d["false_alarm_rate"].as_f64()),
+        None => None,
+    };
+    let mut o = json!({"current": current, "p_current": p_current, "false_alarm_rate": false_alarm});
+    if let Some(f) = flagged {
+        o["flagged"] = json!(f);
+    }
+    Ok(Some(o))
+}
+
+/// The `evaluated` data that wrote map `map_id`.
+fn evaluation_of_map(conn: &Connection, map_id: &str) -> Result<Option<Value>> {
+    Ok(ledger::events_by_kind(conn, Kind::Evaluated)?
+        .into_iter()
+        .find(|e| e.data["map_id"] == map_id)
+        .map(|e| e.data))
+}
 
 /// The document id of the suggestion of `decision` about `subject` in run `run`.
 pub(crate) fn doc_id(run: &str, decision: &str, subject: &str) -> String {
     format!("sg-{}", &sha256_hex(&format!("{run}|{decision}|{subject}"))[..24])
 }
 
+/// The id of a combined card (4.1) over its type and priority parts.
+pub(crate) fn card_id(type_doc: &str, priority_doc: &str) -> String {
+    format!("cd-{}", &sha256_hex(&format!("{type_doc}|{priority_doc}"))[..24])
+}
+
 fn action_label(decision: &str) -> Option<&'static str> {
     match decision {
         "likely_fixed" => Some("Check and close…"),
         "duplicate" => Some("Close as duplicate…"),
-        "obsolete" => Some("Close as not planned…"),
+        "obsolete" | "support_question" => Some("Close as not planned…"),
         "batch" => Some("Launch batch…"),
         _ => None,
     }
+}
+
+/// How a label answer reads on its button: "bug", "p1", "kernel, sdl".
+fn answer_text(answer: &Value) -> String {
+    match answer {
+        Value::String(s) => s.clone(),
+        Value::Array(a) => a.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(", "),
+        other => other.to_string(),
+    }
+}
+
+/// A label card's confidence: the calibrated probability of its answer; for area the lowest of
+/// the chosen set's.
+fn label_confidence(s: &Value) -> f64 {
+    let p = |a: &str| s["probabilities"][a].as_f64();
+    match &s["answer"] {
+        Value::String(a) => p(a),
+        Value::Array(set) => set.iter().filter_map(|a| a.as_str().and_then(p)).reduce(f64::min),
+        _ => None,
+    }
+    .unwrap_or(0.0)
 }
 
 /// The latest observation's seq and whether it shows the item open.
@@ -769,8 +892,90 @@ fn observed(conn: &Connection, id: &str) -> Result<Option<(i64, bool, Option<Str
     }))
 }
 
-/// The `suggestions` documents of `project` (5.8).
-pub fn documents(conn: &Connection, project: &str) -> Result<Vec<Value>> {
+/// A suggestion's badge (triage spec 4.1, 3.5) and whether apply all may take it (4.3), from the
+/// evaluations in the ledger.
+pub(crate) struct Badges<'a> {
+    conn: &'a Connection,
+    project: &'a str,
+    /// The evaluation that wrote each map.
+    by_map: BTreeMap<String, Value>,
+    /// Each key's latest evaluation.
+    latest: BTreeMap<String, Value>,
+    drift: RefCell<BTreeMap<String, bool>>,
+}
+
+impl<'a> Badges<'a> {
+    pub(crate) fn load(conn: &'a Connection, project: &'a str) -> Result<Badges<'a>> {
+        let mut by_map = BTreeMap::new();
+        let mut latest = BTreeMap::new();
+        for e in ledger::events_by_kind(conn, Kind::Evaluated)? {
+            if e.data["project"] != project {
+                continue;
+            }
+            if let Some(m) = e.data["map_id"].as_str() {
+                by_map.insert(m.to_string(), e.data.clone());
+            }
+            latest.insert(e.subject.clone(), e.data);
+        }
+        Ok(Badges {
+            conn,
+            project,
+            by_map,
+            latest,
+            drift: RefCell::new(BTreeMap::new()),
+        })
+    }
+
+    /// The badge of suggestion `body`, and whether its key passes Bulk and is not drifting.
+    /// The badge is the evaluation of the suggestion's own map (2.4): uncalibrated without one,
+    /// unevaluated when that evaluation failed its bars, drifting when its key drifts (3.5).
+    /// Bulk needs the suggestion's own map and the key's latest evaluation both to pass it.
+    pub(crate) fn of(&self, body: &Value) -> Result<(&'static str, bool)> {
+        let Some(data) = body["map_id"].as_str().and_then(|m| self.by_map.get(m)) else {
+            return Ok(("uncalibrated", false));
+        };
+        if data["bars"]["evaluated"] != true {
+            return Ok(("unevaluated", false));
+        }
+        let backend = body["backend"].as_str().unwrap_or_default();
+        let decision = body["decision"].as_str().unwrap_or_default();
+        let hash = data["question_hash"].as_str().unwrap_or_default();
+        let key = eval::key_subject(self.project, backend, decision, hash);
+        let cached = self.drift.borrow().get(&key).copied();
+        let drifting = match cached {
+            Some(d) => d,
+            None => {
+                let d = eval::drift(self.conn, self.project, backend, decision, hash)?.drifting;
+                self.drift.borrow_mut().insert(key.clone(), d);
+                d
+            }
+        };
+        if drifting {
+            return Ok(("drifting", false));
+        }
+        let bulk = data["bars"]["bulk"] == true && self.latest.get(&key).is_some_and(|l| l["bars"]["bulk"] == true);
+        Ok(("evaluated", bulk))
+    }
+}
+
+/// The order second opinions are kept in under the cap (4.1): priority, type, area.
+fn opinion_rank(decision: &str) -> usize {
+    match decision {
+        "priority" => 0,
+        "type" => 1,
+        _ => 2,
+    }
+}
+
+/// The `suggestions` documents of `project` (5.8, triage spec 4.1).
+///
+/// - Closing cards as phase 1: a closure answered false is no card and hides an older true one.
+/// - A label card (type, area, priority) shows while the item's value is still the one the
+///   suggestion recorded (`current`): for an item untriaged on it, or as a second opinion, at
+///   most [`SECOND_OPINIONS_PER_RUN`] of a run's. An agreeing answer is no card. A card an
+///   applied accept or edit acted on never returns.
+/// - Untriaged on both type and priority, the two parts share one combined card.
+pub fn documents(conn: &Connection, config: &ConfigSet, project: &str) -> Result<Vec<Value>> {
     let events: Vec<_> = ledger::events_by_kind(conn, Kind::Suggested)?
         .into_iter()
         .filter(|e| e.data["project"] == project)
@@ -798,12 +1003,42 @@ pub fn documents(conn: &Connection, project: &str) -> Result<Vec<Value>> {
             *at = (*at).max(seq);
         }
     }
+    let is_label = |d: &str| layers::LABEL_DECISIONS.contains(&d);
+    let layers = layers::layers(conn, project)?;
+    let badges = Badges::load(conn, project)?;
+
+    // The cap is over the second opinions a run recorded (4.1: "at most 5 a run"), so acting on
+    // one never brings a sixth forward.
+    let mut kept_opinions: BTreeSet<String> = BTreeSet::new();
+    {
+        let mut by_run: BTreeMap<&str, Vec<(usize, f64, String)>> = BTreeMap::new();
+        for ((subject, decision), e) in &latest {
+            let o = &e.data["suggestion"]["second_opinion"];
+            if !is_label(decision) || !o.is_object() {
+                continue;
+            }
+            let run = e.distinct["run_id"].as_str().unwrap_or_default();
+            by_run.entry(run).or_default().push((
+                opinion_rank(decision),
+                o["p_current"].as_f64().unwrap_or(0.0),
+                doc_id(run, decision, subject),
+            ));
+        }
+        for (_, mut v) in by_run {
+            v.sort_by(|a, b| {
+                (a.0, a.1)
+                    .partial_cmp(&(b.0, b.1))
+                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .then(a.2.cmp(&b.2))
+            });
+            kept_opinions.extend(v.into_iter().take(SECOND_OPINIONS_PER_RUN).map(|x| x.2));
+        }
+    }
 
     let mut out = Vec::new();
     for ((subject, decision), e) in latest {
-        // Phase 1's cards only (5.8): the page shows the other decisions from triage phase 3.
-        // A closure answered false is no card, and hides an older true one of the same kind.
-        if !CARDS.contains(&decision.as_str()) || e.data["suggestion"]["answer"] == json!(false) {
+        let label = is_label(&decision);
+        if !label && (!CARDS.contains(&decision.as_str()) || e.data["suggestion"]["answer"] == json!(false)) {
             continue;
         }
         let Some((mut seen_at, open, _)) = observed(conn, &subject)? else {
@@ -823,8 +1058,27 @@ pub fn documents(conn: &Connection, project: &str) -> Result<Vec<Value>> {
         {
             continue;
         }
+        let run = e.distinct["run_id"].as_str().unwrap_or_default();
+        let id = doc_id(run, &decision, &subject);
         let mut s = e.data["suggestion"].clone();
-        if decision == "batch" {
+        let mut second = false;
+        if label {
+            if !open || layers.acted.contains(&id) {
+                continue;
+            }
+            // A suggestion recorded before cards existed holds no `current`: no card.
+            let Some(recorded) = s.get("current").cloned() else {
+                continue;
+            };
+            let now = layers::effective_of(conn, config, &layers, &subject)?.map(|v| v.current(&decision));
+            if now.as_ref() != Some(&recorded) {
+                continue;
+            }
+            second = s["second_opinion"].is_object();
+            if !layers::is_unset(&recorded) && !(second && kept_opinions.contains(&id)) {
+                continue;
+            }
+        } else if decision == "batch" {
             // A closed member leaves the batch; below two members there is no batch.
             let mut kept = Vec::new();
             let members = s["members"].as_array().cloned().unwrap_or_default();
@@ -845,20 +1099,119 @@ pub fn documents(conn: &Connection, project: &str) -> Result<Vec<Value>> {
         } else if !open {
             continue;
         }
-        let run = e.distinct["run_id"].as_str().unwrap_or_default();
-        let confidence = s["probabilities"]["true"].as_f64().unwrap_or(1.0);
+        let (badge, bulk) = badges.of(&s)?;
+        let confidence = if label {
+            label_confidence(&s)
+        } else {
+            s["probabilities"]["true"].as_f64().unwrap_or(1.0)
+        };
+        let button = if label {
+            let verb = if second { "Change to" } else { "Set" };
+            Some(format!("{verb} {}", answer_text(&s["answer"])))
+        } else {
+            action_label(&decision).map(str::to_string)
+        };
         let Value::Object(mut doc) = s else { continue };
-        doc.insert("id".into(), json!(doc_id(run, &decision, &subject)));
+        doc.insert("id".into(), json!(id));
         doc.insert("project".into(), json!(project));
         doc.insert("run_id".into(), json!(run));
         doc.insert("kind".into(), json!(decision));
         doc.insert("made_at".into(), json!(format_time(parse_time(&e.time)?)));
         doc.insert("confidence".into(), json!(confidence));
-        if let Some(label) = action_label(&decision) {
+        doc.insert("badge".into(), json!(badge));
+        // Apply all takes only an untriaged item's label card on a Bulk key (4.3).
+        doc.insert("bulk_ok".into(), json!(label && !second && bulk));
+        doc.insert("card".into(), json!(id));
+        if let Some(label) = button {
             doc.insert("action_label".into(), json!(label));
         }
         out.push(Value::Object(doc));
     }
+    // One combined card for an item untriaged on type and priority (4.1).
+    let mut parts: BTreeMap<String, [Option<usize>; 2]> = BTreeMap::new();
+    for (i, d) in out.iter().enumerate() {
+        if d.get("second_opinion").is_some_and(Value::is_object) {
+            continue;
+        }
+        let slot = match d["kind"].as_str() {
+            Some("type") => 0,
+            Some("priority") => 1,
+            _ => continue,
+        };
+        parts
+            .entry(d["item"].as_str().unwrap_or_default().to_string())
+            .or_default()[slot] = Some(i);
+    }
+    for [t, p] in parts.into_values() {
+        let (Some(t), Some(p)) = (t, p) else { continue };
+        let card = card_id(
+            out[t]["id"].as_str().unwrap_or_default(),
+            out[p]["id"].as_str().unwrap_or_default(),
+        );
+        let label = format!(
+            "Set {} · {}",
+            answer_text(&out[t]["answer"]),
+            answer_text(&out[p]["answer"])
+        );
+        for i in [t, p] {
+            out[i]["card"] = json!(card);
+            out[i]["action_label"] = json!(label);
+        }
+    }
     out.sort_by(|a, b| (a["made_at"].as_str(), a["id"].as_str()).cmp(&(b["made_at"].as_str(), b["id"].as_str())));
+    Ok(out)
+}
+
+/// The `triage` of each item's issue document (4.5): its latest severity, reach and
+/// detectability answers, each {answer, probabilities, backend, badge, suggestion, edited},
+/// `edited` the owner's Details edit (null: none); and its latest estimates.
+pub fn triage_details(conn: &Connection, project: &str, layers: &layers::Layers) -> Result<BTreeMap<String, Value>> {
+    let badges = Badges::load(conn, project)?;
+    let mut latest: BTreeMap<(String, String), crate::event::Event> = BTreeMap::new();
+    for e in ledger::events_by_kind(conn, Kind::Suggested)? {
+        let decision = e.distinct["decision"].as_str().unwrap_or_default().to_string();
+        if e.data["project"] == project
+            && (layers::DETAIL_DECISIONS.contains(&decision.as_str()) || decision == "estimates")
+        {
+            latest.insert((e.subject.clone(), decision), e);
+        }
+    }
+    let mut out: BTreeMap<String, Value> = BTreeMap::new();
+    for ((item, decision), e) in &latest {
+        let s = &e.data["suggestion"];
+        let entry = out.entry(item.clone()).or_insert_with(|| json!({}));
+        if decision == "estimates" {
+            let mut est = s["estimate"].clone();
+            est["backend"] = s["backend"].clone();
+            entry["estimates"] = est;
+            continue;
+        }
+        let run = e.distinct["run_id"].as_str().unwrap_or_default();
+        let edited = layers.details.get(item).and_then(|d| d.get(decision)).cloned();
+        entry[decision.as_str()] = json!({
+            "answer": s["answer"],
+            "probabilities": s["probabilities"],
+            "backend": s["backend"],
+            "badge": badges.of(s)?.0,
+            "suggestion": doc_id(run, decision, item),
+            "edited": edited,
+        });
+    }
+    // A Details edit without a suggestion still holds.
+    for (item, edits) in &layers.details {
+        let entry = out.entry(item.clone()).or_insert_with(|| json!({}));
+        for (decision, v) in edits {
+            if entry.get(decision.as_str()).is_none() {
+                entry[decision.as_str()] = json!({
+                    "answer": null,
+                    "probabilities": null,
+                    "backend": null,
+                    "badge": null,
+                    "suggestion": null,
+                    "edited": v,
+                });
+            }
+        }
+    }
     Ok(out)
 }

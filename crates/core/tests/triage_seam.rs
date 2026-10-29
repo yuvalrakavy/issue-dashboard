@@ -740,7 +740,10 @@ fn a_closure_answered_true_names_its_subject_and_becomes_a_card_and_false_does_n
     }
     let rep = record(&tr.t, "R1", file, 4).unwrap();
     assert_eq!(rep.recorded, 3);
-    let docs = tr.t.root.read(|l| suggest::documents(l.conn(), "home")).unwrap();
+    let docs =
+        tr.t.root
+            .read(|l| suggest::documents(l.conn(), &ConfigSet::load(tr.t.path()).unwrap(), "home"))
+            .unwrap();
     let mut kinds: Vec<&str> = docs.iter().map(|d| d["kind"].as_str().unwrap()).collect();
     kinds.sort();
     assert_eq!(kinds, ["duplicate", "likely_fixed"], "obsolete was answered false");
@@ -758,17 +761,22 @@ fn a_closure_answered_true_names_its_subject_and_becomes_a_card_and_false_does_n
 }
 
 #[test]
-fn label_decisions_make_no_card_until_the_page_shows_them() {
+fn an_agreeing_label_is_no_card_and_a_confident_disagreement_a_second_opinion() {
+    // Triage phase 3 (spec 4.1) replaced phase 1's "no label card": the item is labelled bug and
+    // kernel; answer_all says bug at 0.7 (agreeing: no card) and kernel at 0.1 (a second opinion).
     let tr = tracked();
     launched(&tr.t, "T1", LaunchKind::Triage, &tr.items[..1], 2);
     let p = prepare(&tr.t, "T1", BACKEND, Stage::First, 3).unwrap();
     record(&tr.t, "T1", answer_all(&p), 4).unwrap();
-    let docs = tr.t.root.read(|l| suggest::documents(l.conn(), "home")).unwrap();
-    assert_eq!(
-        docs,
-        Vec::<Value>::new(),
-        "every closure was answered false; no label decision is a card yet"
-    );
+    let docs =
+        tr.t.root
+            .read(|l| suggest::documents(l.conn(), &ConfigSet::load(tr.t.path()).unwrap(), "home"))
+            .unwrap();
+    let kinds: Vec<&str> = docs.iter().map(|d| d["kind"].as_str().unwrap()).collect();
+    assert_eq!(kinds, ["area"], "every closure was answered false and type agrees");
+    assert_eq!(docs[0]["second_opinion"]["current"], json!(["kernel"]));
+    assert_eq!(docs[0]["second_opinion"]["flagged"], json!(["kernel"]));
+    assert_eq!(docs[0]["action_label"], "Change to admin-ui");
 }
 
 #[test]
@@ -1098,7 +1106,10 @@ fn a_closure_s_commit_that_github_finds_makes_the_card() {
     let (tr, file) = likely_fixed_on(STORE_COMMIT);
     let gh = Replay::load(&fixtures().join("replay")).unwrap();
     record_via(&tr.t, "R1", file, 4, &gh).unwrap();
-    let docs = tr.t.root.read(|l| suggest::documents(l.conn(), "home")).unwrap();
+    let docs =
+        tr.t.root
+            .read(|l| suggest::documents(l.conn(), &ConfigSet::load(tr.t.path()).unwrap(), "home"))
+            .unwrap();
     assert_eq!(docs.len(), 1, "{docs:?}");
     assert_eq!(
         (docs[0]["kind"].as_str(), docs[0]["commit"].as_str()),

@@ -516,6 +516,359 @@
           }
         }
       }
+    },
+    "type_source": {
+      "description": "Where type came from (triage spec 4.2): override > accepted suggestion > label. A suggestion's value is not on GitHub yet.",
+      "anyOf": [
+        {
+          "enum": [
+            "override",
+            "suggestion",
+            "label"
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "areas_source": {
+      "description": "Where areas came from (triage spec 4.2).",
+      "anyOf": [
+        {
+          "enum": [
+            "override",
+            "suggestion",
+            "label"
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "triage": {
+      "description": "Triage spec 4.5: the latest severity, reach and detectability answers, each with the owner's Details edit, and the estimates.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "severity": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "answer",
+            "probabilities",
+            "backend",
+            "badge",
+            "suggestion",
+            "edited"
+          ],
+          "properties": {
+            "answer": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "cosmetic",
+                    "degraded",
+                    "wrong_result",
+                    "hang_or_data_loss"
+                  ]
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "probabilities": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "backend": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "badge": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "evaluated",
+                    "unevaluated",
+                    "uncalibrated",
+                    "drifting"
+                  ]
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "suggestion": {
+              "anyOf": [
+                {
+                  "$ref": "common.schema.json#/$defs/docId"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "edited": {
+              "description": "The owner's Details edit; null: none.",
+              "anyOf": [
+                {
+                  "enum": [
+                    "cosmetic",
+                    "degraded",
+                    "wrong_result",
+                    "hang_or_data_loss"
+                  ]
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        },
+        "reach": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "answer",
+            "probabilities",
+            "backend",
+            "badge",
+            "suggestion",
+            "edited"
+          ],
+          "properties": {
+            "answer": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "one_corner",
+                    "one_subsystem",
+                    "most",
+                    "all"
+                  ]
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "probabilities": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "backend": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "badge": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "evaluated",
+                    "unevaluated",
+                    "uncalibrated",
+                    "drifting"
+                  ]
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "suggestion": {
+              "anyOf": [
+                {
+                  "$ref": "common.schema.json#/$defs/docId"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "edited": {
+              "description": "The owner's Details edit; null: none.",
+              "anyOf": [
+                {
+                  "enum": [
+                    "one_corner",
+                    "one_subsystem",
+                    "most",
+                    "all"
+                  ]
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        },
+        "detectability": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "answer",
+            "probabilities",
+            "backend",
+            "badge",
+            "suggestion",
+            "edited"
+          ],
+          "properties": {
+            "answer": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "silent",
+                    "visible"
+                  ]
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "probabilities": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "backend": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "badge": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "evaluated",
+                    "unevaluated",
+                    "uncalibrated",
+                    "drifting"
+                  ]
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "suggestion": {
+              "anyOf": [
+                {
+                  "$ref": "common.schema.json#/$defs/docId"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "edited": {
+              "description": "The owner's Details edit; null: none.",
+              "anyOf": [
+                {
+                  "enum": [
+                    "silent",
+                    "visible"
+                  ]
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        },
+        "estimates": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "sites",
+            "read_at",
+            "tier",
+            "blast",
+            "effort",
+            "backend"
+          ],
+          "properties": {
+            "sites": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "read_at": {
+              "$ref": "common.schema.json#/$defs/commit"
+            },
+            "tier": {
+              "enum": [
+                "T0",
+                "T1",
+                "T2",
+                "T3"
+              ]
+            },
+            "blast": {
+              "type": "string",
+              "minLength": 1
+            },
+            "effort": {
+              "enum": [
+                "S",
+                "M",
+                "L"
+              ]
+            },
+            "backend": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      }
     }
   }
 }

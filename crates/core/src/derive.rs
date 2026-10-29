@@ -18,9 +18,10 @@ use serde_json::{Value, json};
 
 use crate::config::{ConfigSet, View};
 use crate::decision::{self, Status};
-use crate::docs::{Action, Decision, DecisionValue, Priority};
+use crate::docs::{Action, Decision, Priority};
 use crate::event::Kind;
 use crate::launch::{self, State};
+use crate::layers::{self, Layers};
 use crate::ledger;
 use crate::observe::{ItemKind, ObservedData};
 use crate::root::{format_time, parse_time};
@@ -118,8 +119,10 @@ struct Context<'a> {
     translation: Translation,
     maintainers: &'a [String],
     limits: BTreeMap<Priority, u32>,
-    project_priorities: &'a BTreeMap<String, Priority>,
-    overrides: &'a BTreeMap<String, (DecisionValue, Option<String>)>,
+    /// Override > accepted suggestion > label (triage spec 4.2).
+    layers: &'a Layers,
+    /// The Details of each item's triage (4.5), by item.
+    triage: &'a BTreeMap<String, Value>,
     taken_at: DateTime<Utc>,
     stale: bool,
     closes: &'a BTreeMap<String, Value>,
@@ -162,20 +165,16 @@ impl Context<'_> {
         let c = &o.content;
         let labels = strings(c, "labels");
         let canon = self.translation.translate(&labels);
-        let over = self.overrides.get(id);
-        let type_ = over.and_then(|(v, _)| v.type_.clone()).or(canon.type_.clone());
-        let areas = over.and_then(|(v, _)| v.areas.clone()).unwrap_or(canon.areas.clone());
+        let over = self.layers.overrides.get(id);
+        let eff = self.layers.effective(id, &canon);
+        let type_ = eff.type_.clone();
+        let areas = eff.areas.clone();
         let override_priority = over.and_then(|(v, reason)| {
             v.priority
                 .map(|p| json!({"value": p, "reason": reason.clone().unwrap_or_else(|| "set on the dashboard".into())}))
         });
-        let project = self.project_priorities.get(id).copied();
-        let (value, source) = match (over.and_then(|(v, _)| v.priority), project, canon.priority) {
-            (Some(p), _, _) => (Some(p), Some("override")),
-            (None, Some(p), _) => (Some(p), Some("project")),
-            (None, None, Some(p)) => (Some(p), Some("label")),
-            _ => (None, None),
-        };
+        let project = self.layers.priorities.get(id).copied();
+        let (value, source) = (eff.priority, eff.priority_source);
 
         let association = c.get("author_association").and_then(Value::as_str).unwrap_or("NONE");
         let author = c.get("author").and_then(Value::as_str).unwrap_or("ghost").to_string();
@@ -228,7 +227,10 @@ impl Context<'_> {
             "title": c.get("title").and_then(Value::as_str).unwrap_or(""),
             "state": state,
             "type": type_,
+            "type_source": eff.type_source,
             "areas": areas,
+            "areas_source": eff.areas_source,
+            "triage": self.triage.get(id).cloned().unwrap_or_else(|| json!({})),
             "modifiers": canon.modifiers,
             "priority": {
                 "value": value,
@@ -571,8 +573,8 @@ pub fn derive(
     let sync_minutes = p.sync_interval_minutes.unwrap_or(DEFAULT_SYNC_MINUTES);
     let maintainers = p.maintainers.clone().unwrap_or_default();
     let limits = limits(config, project)?;
-    let project_priorities = decision::project_priorities(conn, project)?;
-    let overrides: BTreeMap<String, (DecisionValue, Option<String>)> = decision::overrides(conn, project)?;
+    let layers = layers::layers(conn, project)?;
+    let triage = suggest::triage_details(conn, project, &layers)?;
     let window = taken_at - Duration::days(history_days as i64);
     let closes = write::standing_closes(conn, project)?;
     let dismissals = decision::dismissals(conn, project)?;
@@ -595,8 +597,8 @@ pub fn derive(
             translation: Translation::for_repo(config, &view.repo),
             maintainers: &maintainers,
             limits: limits.clone(),
-            project_priorities: &project_priorities,
-            overrides: &overrides,
+            layers: &layers,
+            triage: &triage,
             taken_at,
             stale,
             closes: &closes,
@@ -655,7 +657,7 @@ pub fn derive(
         issues,
         acks: acks(conn, project, taken_at)?,
         launch_status: launch_status(conn, project)?,
-        suggestions: suggest::documents(conn, project)?,
+        suggestions: suggest::documents(conn, config, project)?,
         plans: Vec::new(),
         forks: Vec::new(),
         metrics: Vec::new(),

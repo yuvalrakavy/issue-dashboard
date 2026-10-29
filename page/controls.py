@@ -44,6 +44,23 @@ MUTANTS = [
     ("show marks a saved view", 'scopeName ? "View: " + scopeName : "Custom view"', '"Custom view"'),
     ("show ignores a scope with excludes", "scope && !(scope.exclude && scope.exclude.length) && ", "scope && "),
     ("next run counts from the heartbeat", "Date.parse(synced(meta, heartbeat).at)", "Date.parse(meta && meta.taken_at)"),
+    ("triage: acted part hides at once", "if (!LABEL_KINDS.includes(s.kind) || gone.has(s.id)) continue;", "if (!LABEL_KINDS.includes(s.kind)) continue;"),
+    ("triage: consumed accept defers to the tracker", "if (s.ack || s.settled || s.undoneBy) continue;", "if (s.settled || s.undoneBy) continue;"),
+    ("triage: undone accept hides nothing", "if (s.ack || s.settled || s.undoneBy) continue;", "if (s.ack || s.settled) continue;"),
+    ("triage: closing kinds are no triage card", "if (!LABEL_KINDS.includes(s.kind) || gone", "if (gone"),
+    ("triage: closed issue has no card", "if (!shownIssue) continue;", "if (false) continue;"),
+    ("triage: apply all needs every part", "c.parts.every((s) => s.bulk_ok === true)", "c.parts.some((s) => s.bulk_ok === true)"),
+    ("triage: apply all never a second opinion (card)", "c.bulk_ok = !c.second && ", "c.bulk_ok = "),
+    ("triage: apply all never a second opinion (fields)", "cards.filter((c) => c.bulk_ok && !c.second)", "cards.filter((c) => c.bulk_ok)"),
+    ("triage: worst badge", "sort((a, b) => BADGES.indexOf(b) - BADGES.indexOf(a))[0]", "sort((a, b) => BADGES.indexOf(a) - BADGES.indexOf(b))[0]"),
+    ("triage: lone part relabelled", 'c.label = lone ? "Set " + answerText(c.parts[0].answer) :', "c.label ="),
+    ("triage: opinions after untriaged", "(a.second - b.second) || ", ""),
+    ("triage: apply all marks bulk", "if (bulk) f.value = { bulk: true };", ""),
+    ("triage: accept names card and component", "card: card.id, component: s.kind } };", "} };"),
+    ("triage: rubric only past one level", "Math.abs(a - r) <= 1", "Math.abs(a - r) < 1"),
+    ("triage: details edit needs a suggestion", "if (!t || !t.suggestion) return null;", "if (!t) return null;"),
+    ("triage: unmeasured false alarms said", 'o.false_alarm_rate == null ? "false-alarm rate not measured" :', ""),
+    ("support question closes as not planned", 'if (s.kind === "obsolete" || s.kind === "support_question")', 'if (s.kind === "obsolete")'),
 ]
 
 src = open(os.path.join(REPO, "page/core.js")).read()
