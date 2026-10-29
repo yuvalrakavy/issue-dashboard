@@ -588,7 +588,7 @@ pub fn record(
         let r = tx.record_valid(Kind::Suggested, &p.subject, distinct, data.clone(), Dedupe::Any)?;
         if r.is_new() {
             report.recorded += 1;
-        } else if r.event().data == data {
+        } else if without_context(&r.event().data) == without_context(&data) {
             report.repeats += 1;
         } else {
             return Err(Error::refused(format!(
@@ -607,6 +607,26 @@ pub fn record(
 /// probabilities, a missing reason or a missing closure subject refuse the file; an answer
 /// whose item closed or whose input changed since prepare is dropped. The calibration map is
 /// the one the question froze (2.4).
+/// A recorded suggestion's data without what the tracker computes when it records it (the
+/// item's `current` value and the second opinion against it): a retry of the same answer file
+/// is the same suggestion although the item's value moved since (2.1).
+fn without_context(data: &Value) -> Value {
+    let mut d = data.clone();
+    if let Some(s) = d.get_mut("suggestion").and_then(Value::as_object_mut) {
+        s.remove("current");
+        s.remove("second_opinion");
+    }
+    d
+}
+
+/// Whether an applied page decision has dismissed suggestion `id` (an accept or edit is in
+/// [`layers::Layers::acted`]).
+fn acted_on(conn: &Connection, project: &str, id: &str) -> Result<bool> {
+    Ok(crate::decision::effective(conn, project)?
+        .iter()
+        .any(|d| d.action == crate::docs::Action::DismissSuggestion && d.target.suggestion.as_deref() == Some(id)))
+}
+
 #[allow(clippy::too_many_arguments)]
 fn answers(
     c: &mut Check<'_>,
@@ -678,6 +698,23 @@ fn answers(
                 why,
             });
             continue;
+        }
+        // The owner accepted, edited or dismissed this run's card: a new answer under the same
+        // card would inherit that verdict (4.2), so it is dropped.
+        if layers::LABEL_DECISIONS.contains(&q.decision.as_str()) {
+            if label_layers.is_none() {
+                label_layers = Some(layers::layers(conn, project)?);
+            }
+            let id = doc_id(&c.launch.id, &q.decision, &q.item);
+            if label_layers.as_ref().expect("loaded above").acted.contains(&id) || acted_on(conn, project, &id)? {
+                dropped.push(Dropped {
+                    question: q.id.clone(),
+                    item: o.source.alias.clone(),
+                    decision: q.decision.clone(),
+                    why: "the owner already acted on this run's card".to_string(),
+                });
+                continue;
+            }
         }
         let areas = triage::areas_of(&triage::translation_of(config, &o.repo));
         let allowed = cat.allowed(&q.decision, &areas)?;

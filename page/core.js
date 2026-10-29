@@ -663,6 +663,7 @@
 
   const LABEL_KINDS = ["type", "area", "priority"];
   const BADGES = ["evaluated", "unevaluated", "uncalibrated", "drifting"];
+  const OPINION_RANK = ["priority", "type", "area"];
 
   // The suggestions an accept, edit or dismiss of the page's hides before a cycle has seen
   // it. Once a cycle has consumed the decision (any ack), the tracker's documents are the word.
@@ -714,7 +715,13 @@
       c.label = lone ? "Set " + answerText(c.parts[0].answer) : c.parts[0].action_label || "Accept";
       cards.push(c);
     }
-    cards.sort((a, b) => (a.second - b.second) || cmp(a.made_at, b.made_at) || cmp(a.issue.alias, b.issue.alias));
+    // Second opinions in 4.1's order: priority, type, area, then the most confident
+    // disagreement (the current value's lowest probability) first.
+    const rank = (c) => Math.min(...c.parts.map((s) => OPINION_RANK.indexOf(s.kind)));
+    const pCurrent = (c) => Math.min(...c.parts.map((s) => (s.second_opinion ? s.second_opinion.p_current : 1)));
+    cards.sort((a, b) => (a.second - b.second)
+      || (a.second ? (rank(a) - rank(b)) || (pCurrent(a) - pCurrent(b)) : 0)
+      || cmp(a.made_at, b.made_at) || cmp(a.issue.alias, b.issue.alias));
     return { cards, applyAll: cards.filter((c) => c.bulk_ok) };
   }
 
@@ -733,7 +740,7 @@
 
   // One part of a card edited: accepted with the owner's value (4.2).
   function editFields(card, s, answer) {
-    const value = s.kind === "type" ? { type: answer } : s.kind === "area" ? { areas: [].concat(answer) } : { priority: answer };
+    const value = s.kind === "type" ? { type: answer } : s.kind === "area" ? { areas: [...new Set([].concat(answer))].sort() } : { priority: answer };
     return { action: "edit_suggestion", target: { suggestion: s.id, item: s.item, alias: s.alias, card: card.id, component: s.kind }, value };
   }
 
@@ -742,12 +749,12 @@
     return cards.filter((c) => c.bulk_ok && !c.second).flatMap((c) => acceptCardFields(c, true));
   }
 
-  // A Details edit of severity, reach or detectability (4.2): null when the issue holds no
-  // suggestion for it to name.
+  // A Details edit of severity, reach or detectability (4.2): it names the issue's suggestion
+  // for that decision when there is one, and otherwise only the item.
   function detailsEditFields(issue, decision, answer) {
     const t = issue.triage && issue.triage[decision];
-    if (!t || !t.suggestion) return null;
-    return { action: "edit_suggestion", target: { suggestion: t.suggestion, item: issue.id, alias: issue.alias }, value: { [decision]: answer } };
+    const target = t && t.suggestion ? { suggestion: t.suggestion, item: issue.id, alias: issue.alias } : { item: issue.id, alias: issue.alias };
+    return { action: "edit_suggestion", target, value: { [decision]: answer } };
   }
 
   // A priority card more than one level from the rubric's (4.1) says so; otherwise null.

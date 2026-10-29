@@ -744,7 +744,7 @@ footer .wrap { padding-block: 0 32px; font-size: .82rem; color: var(--muted); di
         : s.kind === "likely_fixed" ? "fixed by " + s.commit
         : s.kind === "duplicate" ? "duplicate of " + (s.related_alias || "?") : null;
       return h("article", { class: "card", tabindex: "0", "data-nav": "1", "data-gh": ghUrl(i), "data-id": i.id },
-        h("div", { class: "why recommend" }, "Recommended · " + SUGGESTED[s.kind] + " · " + pct(s) + (about ? " · " + about : "")),
+        h("div", { class: "why recommend" }, "Recommended · " + SUGGESTED[s.kind] + " · " + pct(s) + (about ? " · " + about : "") + (s.badge ? " · " + BADGE_TEXT[s.badge] : "") + (s.from_reporter ? " · the reporter's own request" : "")),
         s.kind === "batch"
           ? members.map((m) => h("div", { class: "head" }, h("a", { class: "alias", href: ghUrl(m), target: "_blank", rel: "noopener" }, m.alias), h("span", { class: "title" }, m.title)))
           : h("div", { class: "head" }, h("a", { class: "alias", href: ghUrl(i), target: "_blank", rel: "noopener" }, i.alias), h("span", { class: "title" }, i.title)),
@@ -921,11 +921,11 @@ footer .wrap { padding-block: 0 32px; font-size: .82rem; color: var(--muted); di
     const t = i.triage || {};
     const rows = [];
     for (const k of Object.keys(TRIAGE_ANSWERS)) {
-      const v = t[k];
-      if (!v) continue;
+      const v = t[k] || {};
       const shown = v.edited || v.answer;
-      const pick = S.owner && v.suggestion
-        ? h("select", { "aria-label": k, onchange: (e) => { const f = D.detailsEditFields(i, k, e.target.value); if (f) writeDecision(f).then(() => dlg.close()); } },
+      const pick = S.owner
+        ? h("select", { "aria-label": k, onchange: (e) => writeDecision(D.detailsEditFields(i, k, e.target.value)).then(() => dlg.close()) },
+          shown ? null : h("option", { value: "", selected: "selected", disabled: "disabled" }, "—"),
           TRIAGE_ANSWERS[k].map((a) => h("option", Object.assign({ value: a }, a === shown ? { selected: "selected" } : {}), a)))
         : h("span", {}, shown || "—");
       rows.push(h("dt", {}, k[0].toUpperCase() + k.slice(1)), h("dd", {}, pick, " ", v.edited ? "(your edit)" : v.backend ? "(" + v.backend + ", " + (v.badge || "uncalibrated") + ")" : ""));

@@ -85,8 +85,10 @@ fn ingest_with(
         Some(format!("author {} is not the project's owner_id", doc.author))
     } else if doc.action == Action::DismissClosed {
         dismiss_refusal(tx.conn(), doc)?
-    } else if let (Action::AcceptSuggestion, Some(config)) = (doc.action, config) {
-        accept_refusal(tx.conn(), config, project, doc)?
+    } else if let (Action::AcceptSuggestion | Action::EditSuggestion | Action::DismissSuggestion, Some(config)) =
+        (doc.action, config)
+    {
+        suggestion_refusal(tx.conn(), config, project, doc)?
     } else {
         None
     };
@@ -140,23 +142,73 @@ fn dismiss_refusal(conn: &Connection, doc: &Decision) -> Result<Option<String>> 
     Ok(None)
 }
 
-/// Why an `accept_suggestion` cannot take effect (triage spec 4.2, 4.3):
+/// Why an `accept_suggestion`, `edit_suggestion` or `dismiss_suggestion` cannot take effect
+/// (triage spec 4.2, 4.3):
 ///
+/// - an accept or edit names no recorded suggestion, or one recorded after the owner acted (a
+///   later answer must not inherit the verdict); a Details edit with no suggestion names its item;
+/// - an edit of a label card carries no value for it;
 /// - a label card's item no longer has the value the suggestion saw (`current`): the owner
-///   accepted a card about facts that changed (stale);
-/// - apply all (`value.bulk`) on anything but an untriaged item's type, area or priority card,
-///   on a second opinion, or on a key that does not pass Bulk or is drifting now.
-fn accept_refusal(conn: &Connection, config: &ConfigSet, project: &str, doc: &Decision) -> Result<Option<String>> {
-    let bulk = doc.value.as_ref().and_then(|v| v.bulk) == Some(true);
+///   acted on a card about facts that changed (stale); an edit is as an accept, and dismissing a
+///   second opinion confirms the current label, so it must still be current;
+/// - apply all (`value.bulk`) on anything but an accept of an untriaged item's type, area or
+///   priority card, on a second opinion, or on a key that does not pass Bulk or is drifting now.
+fn suggestion_refusal(conn: &Connection, config: &ConfigSet, project: &str, doc: &Decision) -> Result<Option<String>> {
+    let value = doc.value.clone().unwrap_or_default();
+    let bulk = value.bulk == Some(true);
+    let dismiss = doc.action == Action::DismissSuggestion;
+    let edit = doc.action == Action::EditSuggestion;
+    if bulk && doc.action != Action::AcceptSuggestion {
+        return Ok(Some("apply all only accepts".to_string()));
+    }
+    let details = value.severity.is_some() || value.reach.is_some() || value.detectability.is_some();
     let found = match doc.target.suggestion.as_deref() {
         Some(id) => crate::truth::suggestions(conn, project)?.remove(id),
         None => None,
     };
     let Some(s) = found else {
-        return Ok(bulk.then(|| "apply all names no recorded suggestion".to_string()));
+        if dismiss {
+            // Phase-1 dismissals name closure suggestions a later run may have replaced.
+            return Ok(None);
+        }
+        if bulk {
+            return Ok(Some("apply all names no recorded suggestion".to_string()));
+        }
+        if edit && details && doc.target.suggestion.is_none() && doc.target.item.is_some() {
+            return Ok(None);
+        }
+        return Ok(Some(format!(
+            "{} names no recorded suggestion",
+            match doc.action {
+                Action::EditSuggestion => "the edit",
+                _ => "the accept",
+            }
+        )));
     };
     let label = layers::LABEL_DECISIONS.contains(&s.decision.as_str());
     let alias = s.body["alias"].as_str().unwrap_or(&s.item).to_string();
+    if !dismiss && s.at > crate::root::parse_time(&doc.created_at)? {
+        return Ok(Some(format!(
+            "{alias}'s {} suggestion was recorded after this decision was made; the card it was made on is gone",
+            s.decision
+        )));
+    }
+    if edit && label {
+        let has = match s.decision.as_str() {
+            "type" => value.type_.is_some(),
+            "area" => value.areas.as_ref().is_some_and(|a| !a.is_empty()),
+            _ => value.priority.is_some(),
+        };
+        if !has {
+            return Ok(Some(format!(
+                "an edit of {alias}'s {} card carries no {}",
+                s.decision, s.decision
+            )));
+        }
+    }
+    if dismiss && !(label && s.body["second_opinion"].is_object()) {
+        return Ok(None);
+    }
     if bulk {
         if !label {
             return Ok(Some(format!(
@@ -175,6 +227,9 @@ fn accept_refusal(conn: &Connection, config: &ConfigSet, project: &str, doc: &De
         return Ok(None);
     }
     let Some(recorded) = s.body.get("current") else {
+        if dismiss {
+            return Ok(None);
+        }
         return Ok(Some(format!(
             "{alias}'s {} suggestion was recorded before cards existed; it has no card to accept",
             s.decision

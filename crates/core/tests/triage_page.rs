@@ -82,6 +82,11 @@ fn untriage(tr: &Tracked, item: &str, minutes: i64) {
 /// An `evaluated` event for the type key, writing map [`MAP`] at T 1, its bars from n 120, ECE
 /// 0.05 and `accuracy`.
 fn evaluate_type(t: &TempRoot, minutes: i64, accuracy: f64) {
+    evaluate_type_at(t, minutes, accuracy, 0.05);
+}
+
+/// [`evaluate_type`] at ECE `ece`.
+fn evaluate_type_at(t: &TempRoot, minutes: i64, accuracy: f64, ece: f64) {
     let hash = Catalogue::embedded().question_hash("type", &[]).unwrap();
     let data = eval::EvaluatedData {
         project: "home".into(),
@@ -95,12 +100,12 @@ fn evaluate_type(t: &TempRoot, minutes: i64, accuracy: f64) {
         n: 120,
         n_tuning: 80,
         accuracy,
-        ece: 0.05,
+        ece,
         ece_interval: [0.03, 0.08],
         classwise_ece: BTreeMap::new(),
         false_alarm_rate: Some(0.04),
         exclusions: Vec::new(),
-        bars: eval::bars(120, 0.05, accuracy),
+        bars: eval::bars(120, ece, accuracy),
         unanswered: 0,
         by_source: BTreeMap::new(),
     };
@@ -639,4 +644,233 @@ fn a_details_edit_is_stored_shown_on_the_issue_and_owner_edit_truth() {
     // Undo is the generic one.
     assert_eq!(ingest(&tr.t, &undo("d-u", "d-sev"), 21), None);
     assert_eq!(issue(&tr.t, &a)["triage"]["severity"]["edited"], Value::Null);
+}
+
+// --- Gate round 1 (the deep gate's findings and the mutation finder's survivors) ------------
+
+/// An unrecorded suggestion id of the right shape.
+const NO_SUCH: &str = "sg-000000000000000000000000";
+
+#[test]
+fn an_accept_or_edit_naming_no_recorded_suggestion_refuses() {
+    let tr = tracked();
+    let m = ingest(&tr.t, &accept("d1", NO_SUCH, false, 20), 20).expect("refused");
+    assert!(m.contains("names no recorded suggestion"), "{m}");
+    let m = ingest(&tr.t, &accept("d2", NO_SUCH, true, 21), 21).expect("refused");
+    assert_eq!(m, "apply all names no recorded suggestion");
+}
+
+#[test]
+fn an_accept_made_before_its_suggestion_was_recorded_refuses() {
+    let tr = tracked();
+    let a = tr.items[0].0.clone();
+    untriage(&tr, &a, 5);
+    run(&tr, |_, _| None, |_, _| None);
+    let doc = suggestion_id(&tr.t, &a, "type");
+    // Made at minute 9; the run recorded its answers at 12.
+    let m = ingest(&tr.t, &accept("d-early", &doc, false, 9), 20).expect("refused");
+    assert!(m.contains("recorded after this decision"), "{m}");
+}
+
+#[test]
+fn a_run_does_not_re_answer_a_card_the_owner_acted_on_and_a_retry_still_repeats() {
+    let tr = tracked();
+    let a = tr.items[0].0.clone();
+    untriage(&tr, &a, 5);
+    launched(&tr.t, "T1", LaunchKind::Triage, &tr.items, 10);
+    let p = prepare(&tr.t, "T1", BACKEND, Stage::First, 11).unwrap();
+    let file = answer_with(&p, |_, d| (d == "type").then(|| type_probs("bug", 0.9)));
+    record(&tr.t, "T1", file.clone(), 12).unwrap();
+    let doc = suggestion_id(&tr.t, &a, "type");
+    assert_eq!(ingest(&tr.t, &accept("d-acc", &doc, false, 20), 20), None);
+    assert_eq!(issue(&tr.t, &a)["type"], "bug");
+    // A retry of the same file after the accept: the same suggestions, not a refusal.
+    record(&tr.t, "T1", file, 21).expect("an identical retry repeats");
+    // The issue changes under the run, which asks again and answers differently.
+    edit(&tr.t, &a, 22, |c| c["body"] = json!("a different body"));
+    let p = prepare(&tr.t, "T1", BACKEND, Stage::First, 23).unwrap();
+    record(
+        &tr.t,
+        "T1",
+        answer_with(&p, |_, d| (d == "type").then(|| type_probs("docs", 0.9))),
+        24,
+    )
+    .unwrap();
+    assert_eq!(
+        (
+            issue(&tr.t, &a)["type"].clone(),
+            issue(&tr.t, &a)["type_source"].clone()
+        ),
+        (json!("bug"), json!("suggestion")),
+        "the accept keeps the answer it was made on"
+    );
+}
+
+#[test]
+fn an_edit_is_checked_as_an_accept_and_never_bulk() {
+    let tr = tracked();
+    let a = tr.items[0].0.clone();
+    untriage(&tr, &a, 5);
+    run(&tr, |_, _| None, |_, _| None);
+    let doc = suggestion_id(&tr.t, &a, "type");
+    let edit_to = |id: &str, value: DecisionValue, minutes| {
+        on(
+            id,
+            Action::EditSuggestion,
+            Target {
+                suggestion: Some(doc.clone()),
+                ..Default::default()
+            },
+            Some(value),
+            minutes,
+        )
+    };
+    let docs_type = DecisionValue {
+        type_: Some("docs".into()),
+        ..Default::default()
+    };
+    let bulk = DecisionValue {
+        bulk: Some(true),
+        ..docs_type.clone()
+    };
+    assert_eq!(
+        ingest(&tr.t, &edit_to("d-b", bulk, 20), 20),
+        Some("apply all only accepts".to_string())
+    );
+    let wrong = DecisionValue {
+        priority: Some(Priority::P2),
+        ..Default::default()
+    };
+    let m = ingest(&tr.t, &edit_to("d-w", wrong, 21), 21).expect("refused");
+    assert!(m.contains("carries no type"), "{m}");
+    edit(&tr.t, &a, 22, |c| c["labels"] = json!(["todo"]));
+    let m = ingest(&tr.t, &edit_to("d-s", docs_type, 23), 23).expect("a stale edit refuses");
+    assert!(m.contains("stale"), "{m}");
+    assert_eq!(issue(&tr.t, &a)["type"], "todo");
+}
+
+#[test]
+fn an_area_edit_stores_a_set() {
+    let tr = tracked();
+    let a = tr.items[0].0.clone();
+    untriage(&tr, &a, 5);
+    run(&tr, |_, _| None, |_, _| None);
+    let e = on(
+        "d-area",
+        Action::EditSuggestion,
+        Target {
+            suggestion: Some(suggestion_id(&tr.t, &a, "area")),
+            ..Default::default()
+        },
+        Some(DecisionValue {
+            areas: Some(vec!["ui".into(), "kernel".into(), "kernel".into()]),
+            ..Default::default()
+        }),
+        20,
+    );
+    assert_eq!(ingest(&tr.t, &e, 20), None);
+    let i = issue(&tr.t, &a);
+    assert_eq!(
+        (i["areas"].clone(), i["areas_source"].clone()),
+        (json!(["kernel", "ui"]), json!("suggestion"))
+    );
+}
+
+#[test]
+fn a_details_edit_needs_no_suggestion() {
+    let tr = tracked();
+    let a = tr.items[0].0.clone();
+    let e = on(
+        "d-reach",
+        Action::EditSuggestion,
+        Target {
+            item: Some(a.clone()),
+            ..Default::default()
+        },
+        Some(DecisionValue {
+            reach: Some("most".into()),
+            ..Default::default()
+        }),
+        20,
+    );
+    assert_valid("page-decision", &serde_json::to_value(&e).unwrap());
+    assert_eq!(ingest(&tr.t, &e, 20), None);
+    assert_eq!(issue(&tr.t, &a)["triage"]["reach"]["edited"], "most");
+}
+
+#[test]
+fn dismissing_a_stale_second_opinion_refuses_and_records_no_truth() {
+    let tr = tracked();
+    let b = tr.items[1].0.clone();
+    run(
+        &tr,
+        |item, d| (d == "type" && item == tr.items[1].1).then(|| against_bug(0.05)),
+        |_, _| None,
+    );
+    let doc = suggestion_id(&tr.t, &b, "type");
+    edit(&tr.t, &b, 20, |c| c["labels"] = json!(["docs", "p1", "kernel"]));
+    let dismiss = on(
+        "d-dis",
+        Action::DismissSuggestion,
+        Target {
+            suggestion: Some(doc),
+            ..Default::default()
+        },
+        None,
+        21,
+    );
+    let m = ingest(&tr.t, &dismiss, 21).expect("refused");
+    assert!(m.contains("stale"), "{m}");
+    let records = tr.t.root.read(|l| truth::owner_records(l.conn(), "home")).unwrap();
+    assert!(!records.iter().any(|r| r.item == b && r.decision == "type"));
+}
+
+#[test]
+fn apply_all_refuses_a_labelled_item_s_agreeing_suggestion() {
+    let tr = bulk_fixture(0.9);
+    let c = tr.items[2].0.clone();
+    let m = ingest(&tr.t, &accept("d1", &suggestion_id(&tr.t, &c, "type"), true, 20), 20).expect("refused");
+    assert!(m.contains("only an untriaged item's card"), "{m}");
+}
+
+#[test]
+fn apply_all_refuses_a_key_whose_map_is_not_evaluated() {
+    let tr = tracked();
+    let a = tr.items[0].0.clone();
+    untriage(&tr, &a, 5);
+    evaluate_type_at(&tr.t, 6, 0.9, 0.2);
+    run(&tr, |_, d| (d == "type").then(|| type_probs("bug", 0.9)), |_, _| None);
+    assert_eq!(card(&docs(&tr.t), &a, "type").unwrap()["badge"], "unevaluated");
+    let m = ingest(&tr.t, &accept("d1", &suggestion_id(&tr.t, &a, "type"), true, 20), 20).expect("refused");
+    assert!(m.contains("(badge unevaluated)"), "{m}");
+}
+
+#[test]
+fn a_closed_item_has_no_label_card() {
+    let tr = tracked();
+    let a = tr.items[0].0.clone();
+    untriage(&tr, &a, 5);
+    run(&tr, |_, _| None, |_, _| None);
+    assert!(card(&docs(&tr.t), &a, "type").is_some());
+    edit(&tr.t, &a, 20, |c| c["state"] = json!("closed"));
+    assert!(card(&docs(&tr.t), &a, "type").is_none());
+}
+
+#[test]
+fn a_retry_after_the_item_s_value_moved_is_the_same_suggestion() {
+    let tr = tracked();
+    let a = tr.items[0].0.clone();
+    untriage(&tr, &a, 5);
+    launched(&tr.t, "T1", LaunchKind::Triage, &tr.items, 10);
+    let p = prepare(&tr.t, "T1", BACKEND, Stage::First, 11).unwrap();
+    record(&tr.t, "T1", answer_all(&p), 12).unwrap();
+    let p = prepare(&tr.t, "T1", BACKEND, Stage::Priority, 13).unwrap();
+    let file = answer_with(&p, |_, d| (d == "priority").then(|| priority_probs("p2", 0.85)));
+    record(&tr.t, "T1", file.clone(), 14).unwrap();
+    // The owner sets the priority by hand: the suggestion's `current` would now be p0.
+    let mut set = set_priority("d-set", &a, Priority::P0);
+    set.created_at = format_time(at(20));
+    assert_eq!(ingest(&tr.t, &set, 20), None);
+    let r = record(&tr.t, "T1", file, 21).expect("an identical retry repeats");
+    assert_eq!(r.recorded, 0);
 }

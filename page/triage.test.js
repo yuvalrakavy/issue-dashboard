@@ -51,6 +51,17 @@ test("second opinions come after untriaged cards and apply all never takes one",
   assert.deepEqual(D.applyAllFields([forged]), [], "apply all refuses a second opinion even when a card claims Bulk");
 });
 
+test("second opinions show priority, then type, then area, each by disagreement, whatever their age", () => {
+  const so = (kind, n, p, made) => tg(kind, n, { made_at: made, current: "x", second_opinion: { current: "x", p_current: p, false_alarm_rate: 0.1 } });
+  const r = D.triageCards([
+    so("area", 1, 0.01, "2026-10-21T10:00:00Z"),
+    so("type", 2, 0.15, "2026-10-21T10:00:00Z"),
+    so("type", 3, 0.02, "2026-10-22T10:00:00Z"),
+    so("priority", 4, 0.19, "2026-10-23T10:00:00Z"),
+  ], [issue(1), issue(2), issue(3), issue(4)], [], []);
+  assert.deepEqual(r.cards.map((c) => c.id), ["sg-priority4", "sg-type3", "sg-type2", "sg-area1"]);
+});
+
 test("accept names the card and component; apply all marks bulk; edit carries the value", () => {
   const card = D.triageCards(combined(1), [issue(1)], [], []).cards[0];
   assert.deepEqual(D.acceptCardFields(card, false), [
@@ -61,7 +72,7 @@ test("accept names the card and component; apply all marks bulk; edit carries th
   assert.deepEqual(D.editFields(card, card.parts[0], "feature").value, { type: "feature" });
   assert.deepEqual(D.editFields(card, card.parts[1], "p3").value, { priority: "p3" });
   const area = D.triageCards([tg("area", 2)], [issue(2)], [], []).cards[0];
-  assert.deepEqual(D.editFields(area, area.parts[0], ["ui", "kernel"]).value, { areas: ["ui", "kernel"] });
+  assert.deepEqual(D.editFields(area, area.parts[0], ["ui", "kernel", "kernel"]).value, { areas: ["kernel", "ui"] }, "an area set is a set");
 });
 
 test("an accepted part hides at once; the combined card's other part shows alone, labelled for it", () => {
@@ -84,13 +95,15 @@ test("a priority more than one level from the rubric adds a note", () => {
   assert.equal(D.rubricNote(tg("type", 1, { rubric_level: "p3" })), null);
 });
 
-test("a Details edit names the issue's suggestion for that decision, or cannot be made", () => {
+test("a Details edit names the issue's suggestion for that decision, or only the item", () => {
   const i = issue(1, { triage: { severity: { answer: "degraded", suggestion: "sg-sev1" }, reach: { answer: null, suggestion: null } } });
   assert.deepEqual(D.detailsEditFields(i, "severity", "wrong_result"), {
     action: "edit_suggestion", target: { suggestion: "sg-sev1", item: "I_1", alias: STORE + "#1" }, value: { severity: "wrong_result" },
   });
-  assert.equal(D.detailsEditFields(i, "reach", "most"), null);
-  assert.equal(D.detailsEditFields(issue(2), "severity", "degraded"), null);
+  assert.deepEqual(D.detailsEditFields(i, "reach", "most"), {
+    action: "edit_suggestion", target: { item: "I_1", alias: STORE + "#1" }, value: { reach: "most" },
+  });
+  assert.deepEqual(D.detailsEditFields(issue(2), "severity", "degraded").target, { item: "I_2", alias: STORE + "#2" });
 });
 
 test("a support question is a closing card that closes as not planned", () => {

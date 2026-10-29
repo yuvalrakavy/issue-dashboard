@@ -82,7 +82,11 @@ fn set_by(action: Action, decision: &str, answer: &Value, value: &DecisionValue)
     let edited = action == Action::EditSuggestion;
     match decision {
         "type" if edited => value.type_.clone().map(|t| vec![t]),
-        "area" if edited => value.areas.clone(),
+        "area" if edited => value.areas.clone().map(|mut a| {
+            a.sort();
+            a.dedup();
+            a
+        }),
         "priority" if edited => value.priority.map(|p| vec![priority_str(p).to_string()]),
         "type" | "area" | "priority" => Some(strings(answer)).filter(|s| !s.is_empty()),
         _ => None,
@@ -218,6 +222,7 @@ impl Effective {
             "area" => {
                 let mut a = self.areas.clone();
                 a.sort();
+                a.dedup();
                 json!(a)
             }
             _ => Value::Null,
