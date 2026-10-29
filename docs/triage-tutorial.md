@@ -1,242 +1,258 @@
-# Triage, as you will use it — a tutorial of the design
+# Triage, as you will use it
 
-This walks through the phase 2 triage design ([triage-spec.md](triage-spec.md)) from your side
-of the page. **Nothing here is built yet.** The issue numbers and figures are made up, but each
-one behaves exactly as the spec says. Section references such as (§4.1) point into the spec.
+A walk through triage from your side of the page: run it, read the cards, accept, edit or
+dismiss, measure a model, read the bars, and notice drift. The design is
+[triage-spec.md](triage-spec.md); section numbers such as (§4.1) point into it. The commands are
+the real ones (`issue-dashboard … --help` lists them); the issue numbers on the example cards are
+made up, but the evaluation figures in section 5 are the first real ones, measured on
+VillaRakavy's history.
+
+Throughout, `--root` is your tracker root; leave it out when `ISSUE_DASHBOARD_ROOT` is set.
 
 ---
 
 ## 1. What triage does for you
 
-Every morning a session reads the open issues that have changed and suggests a type, areas and a
-priority. It also suggests which issues look fixed, duplicated, overtaken or like support
-questions. It states a probability for each suggestion, and the dashboard checks those
-probabilities against your own history before it trusts them. **A suggestion changes nothing until
-you act on it.** It never writes to GitHub: that comes later, with the write engine.
+A session reads the open issues that are due and suggests a type, areas and a priority. It also
+suggests which issues look fixed, duplicated, overtaken or like support questions. It states a
+probability for each suggestion, and the dashboard checks those probabilities against your own
+history before it calls them trustworthy. **A suggestion changes nothing until you act on it, and
+nothing is written to GitHub**: an accepted type or area shows on the item as "not written to GitHub
+yet" until the write engine exists.
 
 ---
 
-## 2. A morning, step by step
+## 2. Running a triage
 
-**07:00. The timer asks.** The scheduled task `issue-dashboard-triage` runs on Haiku, because all
-it does is run one command:
+**On demand.** In the Inbox, **Run triage…** (yours alone; greyed out while a triage launch is
+live) opens the launch sheet:
+
+- *Scope*: **full** asks every decision; **closures** asks only the closure decisions (likely
+  fixed, duplicate, obsolete, support question). The old **Recommend closures…** button is the same
+  as scope *closures*.
+- *Model and effort*: the configured routing, Opus 5.5 at medium unless the project config says
+  otherwise (`[routing.triage]`). Change it and you are choosing a different *backend*: its cards
+  start unevaluated, and the sheet warns "This routing has no evaluation" with an **Evaluate…**
+  button.
+- A line saying how many open issues in view are due.
+
+**Every morning.** The scheduled task `issue-dashboard-triage` (Haiku, low effort, 06:00;
+`skills/issue-dashboard-triage/scheduled-task.md`) runs
 
 ```bash
 issue-dashboard triage-request --project VillaRakavy
 ```
 
-That records a request to launch a triage session, authored by `schedule`, at the routing in your
-config: Opus 5.5 medium. If a triage session is already running, the request is refused, so two
-never overlap (§5.2).
+which prints one of three results:
 
-**07:00:30. The dispatcher launches.** It treats the `schedule` request the same way it treats
-one of yours, and starts the session at exactly the model and effort the request names. A
-scheduled task can't pin its own model; the dispatcher can. That is why the timer only asks.
+| Result | Meaning |
+|---|---|
+| `requested` | a triage launch request was recorded, authored `schedule`, naming the items due |
+| `pending` | an earlier daily request has not been taken by a dispatcher yet; nothing new is recorded, and the task wakes the dispatcher for it again |
+| `nothing_to_triage` | no item has a question due; nothing is recorded |
 
-**The session checks itself.** Its first act is to compare its own model with the routing. If it
-somehow started on Sonnet, it stops without answering. Its answers would otherwise be filed under
-the wrong model and spoil that model's measurements.
+It is refused while a triage launch is live. The task never answers a question: a scheduled task
+cannot pin its model, so it only records the request and messages the dispatcher session, which
+reserves it and starts the session at the routing. (The task is defined but not registered; you
+register it from that file.)
 
-**It prepares the questions.** The CLI picks the items (§2.2):
+**What the session does.** It runs `prepare --session-model`, which refuses to continue unless the
+session really runs the launch's routing, so its answers are never filed under the wrong model. It
+gets blinded questions: when the question is "what priority?", the issue's current labels are not in
+the input. It checks closure candidates against the code, answers the label questions from the issue
+text alone, records probabilities with a one-line reason each, and then does priority as a second
+stage from its own severity, reach and detectability answers. The next sync shows the cards.
 
-- open issues never asked about under the current wording of a question;
-- issues with something new since they were last asked about (a comment, a commit, a label);
-- anything you asked about with **Triage…** in an item's `⋯` menu.
-
-Untriaged issues come first, and there are at most 40 (`max_triage_items`). For each item and
-question it writes a **blinded** input: when the question is "what priority is this?", the
-current priority label is removed, so the session can't just copy it (§1.1).
-
-**It answers.** For closures it reads the code: whether the commit really fixed the issue. For
-labels it uses the issue's text alone. For each question it gives a probability per answer, such
-as `bug 0.82 · todo 0.12 · decision 0.04 · docs 0.02`, with a one-line reason.
-
-**It records.** `record-suggestions` refuses any answer to a question that wasn't asked, or whose
-issue changed in the meantime. It applies the calibration map for that model and question
-(section 6), and stores both the raw and the corrected probability.
-
-**07:20. The next sync shows the cards.**
-
-**Any time: Run triage…** You don't have to wait for 07:00. The **Run triage…** button on the
-Inbox opens the launch sheet, where you pick the scope (*full*, or *closures* only) and see the
-routing, with a warning if that model hasn't been evaluated. It starts the same run through the
-dispatcher, and it is greyed out while a triage run is already going (§5.1). To triage a single
-issue, use **Triage…** in that item's `⋯` menu instead.
+**Which issues.** Open issues never asked under the current wording of a question, issues with
+something new since they were asked, and issues you asked about with **Request triage** in the item's
+`⋯` menu. Untriaged first, then the oldest triage; at most 40 per run (`max_triage_items`).
 
 ---
 
 ## 3. Reading a card
 
-Issue #512, *"Panel freezes after the broker reconnects"*, filed yesterday with no labels:
+Issue #512, *"Panel freezes after the broker reconnects"*, filed yesterday with no labels. It is in
+the Inbox under **Triage suggestions**:
 
-> **Set bug · p1** — *evaluated*
+> **Suggested · type · priority · 82% · evaluated**
+> The rubric gives p3.
 > "Freeze after reconnect; every panel on the floor; no workaround short of a restart."
-> Rubric: p1 ✓
-> [Accept] [Edit…] [Dismiss]
+> [Set bug · p1] [Edit…] [Dismiss]
 
-- **One card for both axes.** A brand-new issue gets type and priority together. If only one is
-  missing, the card has only that one (§4.1).
-- **The badge** tells you how far to trust it:
+- **One card for both** when an issue lacks type and priority; a single card when only one is
+  missing (§4.1).
+- **The percentage** is the calibrated confidence in the answer, after the correction described in
+  section 5.
+- **The badge** says how far to trust it:
 
   | Badge | Means |
   |---|---|
-  | *evaluated* | this model, on this exact question, passed the measurement on your history |
-  | *unevaluated* | not measured yet, or it failed |
-  | *uncalibrated* | no correction map yet; the probabilities are the model's own |
-  | *drifting* | it passed once, but recent accuracy has fallen; re-measure |
+  | *evaluated* | this backend, on this exact question, passed the Evaluated bar (section 5) |
+  | *not yet evaluated* | not measured yet, or it failed the bar |
+  | *uncalibrated* | no correction map for it; the probabilities are the model's own |
+  | *drifting* | it passed once, but your recent decisions agree less (section 6) |
 
-- **The rubric note.** Priority is asked after severity, reach and detectability, with spec
-  §6.7's rubric as input. If the suggested priority is more than one level from what the rubric
-  gives, the card says so ("Rubric says p2"). You see the disagreement instead of it being
-  averaged away.
-- **Details** (open the item) holds severity (*hang_or_data_loss*), reach (*most*),
-  detectability (*visible*) and the estimates: the code sites at a named commit, plus tier, blast
-  and effort. These have no cards. They feed the later ordering step, and you can edit them.
+- **The rubric note** ("The rubric gives p3.") appears when the suggested priority is more than one
+  level from what the rubric table gives for the session's severity and reach answers. You see the
+  disagreement instead of it being averaged away.
+- **"The reporter's own request"** marks a suggestion that repeats what the issue's author asked for.
+- **Details** (open the item) holds severity, reach and detectability, each editable by you (a
+  dash until something has answered), and the estimates (the code sites at the commit read, tier, blast, effort),
+  which are shown but have no editor and no card.
+
+### Second opinions
+
+Issue #447 is labelled **p3**. The session thinks p1, and after correction the probability of p3 is
+0.08. At 0.20 or below this is a confident disagreement, so you get:
+
+> **Second opinion · priority · 88% · evaluated**
+> Second opinion: p3 is 8% likely · 13% false alarms
+> [Change to p1] [Edit…] [Dismiss]
+
+A run shows at most 5, priority before type before area, strongest disagreement first. The card also
+shows how often this kind of second opinion has been wrong on held-out history (the *false-alarm
+rate*). When the session agrees with your label you see nothing; the agreement is recorded.
+**Dismissing** a second opinion means "my label is right" and counts as your confirmation.
 
 ---
 
-## 4. Acting on a card
+## 4. Accept, edit or dismiss
 
 | You do | What happens (§4.2) |
 |---|---|
-| **Accept** | The item's type becomes *bug*, marked as coming from a suggestion. Priority p1 has the same effect as setting it yourself. The item shows "not written to GitHub yet" |
-| **Edit…** → p2 | The same as accepting, with your value. The dashboard records that it suggested p1 and you chose p2, which counts toward measuring it |
+| **Accept** (the card's main button) | Type and areas become the item's value, marked as coming from a suggestion; a priority has the same effect as setting it yourself. Toast with **Undo** |
+| **Edit…** | Pick or type your value and save: the same as accepting, with your value. The dashboard keeps that the suggestion said p1 and you chose p2, which counts toward measuring it |
 | **Dismiss** | The card goes away until something new happens on the issue |
 | **Undo** | The usual undo |
 
-What wins when values conflict: **your override > an accepted suggestion > the GitHub label.**
+What wins when values conflict: **your override > an accepted suggestion > the GitHub label.** An
+accept, edit or dismissal is refused when the item changed since the suggestion was made; the card
+comes back and you look again.
+
+**Apply all · n.** A button over the cards appears only when every card it would take is for an
+untriaged item, on a question that passes the **Bulk** bar and is not drifting. It records one accept
+per card, each undoable. A bulk accept is never used as truth for measuring the model, because you
+did not read those cards one by one. It never takes second opinions or closure cards.
+
+**Closures** keep their phase-1 cards (*Check and close…*, *Close as duplicate…*, *Close as not
+planned…*). Your close, or a dismissal **with** a reason, becomes truth for measuring them; a
+dismissal without a reason counts as nothing, since it might only mean "not now". A support question
+from an outside author opens your close sheet prefilled as not planned; the reply is yours to write
+(drafted replies are phase 3).
 
 ---
 
-## 5. When you've already labelled something
+## 5. Measuring a model: eval
 
-Issue #447 is labelled **p3**. Today's triage thinks it's p1, with the calibrated probability of
-p3 at 0.08. That's below 0.2, a confident disagreement, so you get a **second opinion**:
+Every card's probability is a model's claim. An *eval* checks the claim against history and builds
+the correction.
 
-> **Second opinion: p1** (currently p3) — *evaluated*
-> "Data loss on an interrupted save; it was filed before the save path was shared."
-
-- At most **5** of these a run, priority before type before area, the strongest disagreements
-  first.
-- When the model **agrees** with your label you see nothing. The agreement is recorded quietly.
-- The card also shows how often this kind of second opinion turns out wrong (the eval's
-  *false-alarm rate*), so you can tell how much weight to give it.
-- **Dismissing** a second opinion means "my label is right". It's recorded as your confirmation,
-  and that also counts toward measuring the model.
-
----
-
-## 6. How the dashboard learns to trust it
-
-### Day one: everything starts cold
-
-No model has been measured yet, so every card says *unevaluated* (and *uncalibrated*), and
-**Apply all** doesn't appear (§3.5).
-
-### Evaluating
-
-Go to **Trends → Evaluate…** and pick a question, say `priority`. Or run:
+**Start it** from **Trends → Evaluate…** (or from the "no evaluation" warning on the launch sheet);
+the dispatcher starts a read-only session at the backend you are measuring. That session runs, per
+label decision (type, area, priority), the commands you can also run yourself:
 
 ```bash
-issue-dashboard eval prepare priority --backend claude/opus-5-5@medium
+issue-dashboard eval refresh-history --project VillaRakavy
+issue-dashboard eval prepare --project VillaRakavy --decision type \
+  --backend claude-opus-5-5@medium --out eval-type
+issue-dashboard eval score --project VillaRakavy --decision type \
+  --backend claude-opus-5-5@medium --answers <the tuning and held-out answers files>
+issue-dashboard eval status --project VillaRakavy
 ```
 
-1. **History.** `eval refresh-history` reads closed issues from the last two years, with every
-   label change and when it happened. This is separate from the page's 30-day window.
-2. **Truth.** For each issue, the answer is its latest label or your decision. Each one keeps
-   where it came from: set at filing, changed later on GitHub, part of a tagged review, or
-   accepted or edited by you on the page (§3.1).
-3. **Split.** Each issue's id decides, permanently, whether it is in the 40% used to fit the
-   correction or the 60% held out to test it. No issue is ever in both.
-4. **Asking.** An `eval` session (same model) answers up to 120 held-out issues from their text
-   alone, exactly as the morning run would.
-5. **Scoring.** For example:
+1. **History.** `refresh-history` reads closed issues back two years (`eval_history_days`) with
+   every label change and its time. It is resumable. It is separate from the page's 30-day window.
+2. **Truth.** For each issue the truth is its latest label, or your decision on the page. Each truth
+   keeps where it came from: set at filing, changed later on GitHub, part of a tagged review (section
+   7), or accepted or edited by you.
+3. **Split.** An issue's id decides, permanently, whether it is in the 40 % used to fit the correction
+   or the 60 % held out to test it. No issue is in both.
+4. **Asking.** The session answers up to 120 tuning and 120 held-out issues from their text alone,
+   exactly as the morning run would.
+5. **Scoring.** `eval score` fits the correction on the tuning set, freezes it, and scores the
+   held-out set.
 
-   ```text
-   priority · claude/opus-5-5@medium · question a3f9c21e0b4d
-   n=114  accuracy 81%  ECE 0.07 (90%: 0.04–0.11)  T=1.35
-   by source: filed 84% · github_later 74% · owner_edit 88%
-   bars: Evaluated ✓  Bulk ✗ (needs 85%)
-   ```
+### The numbers
 
-   - **ECE** answers "when it says 80%, is it right about 80% of the time?" Lower is better.
-   - **T** is the correction: here the model was a little overconfident, and every later
-     priority suggestion is softened by it.
+Accuracy is how often the top answer equals the truth. **ECE** answers "when it says 80 %, is it right
+about 80 % of the time?": the gap between stated confidence and actual accuracy, averaged over ten
+confidence bins (lower is better), with a 5th to 95th percentile interval from resampling. **T** is
+the correction: above 1 the model was overconfident and later suggestions are softened, below 1 it was
+underconfident and they are sharpened. The correction is a map with its own id; a suggestion keeps the
+map it was prepared under.
+
+### The bars
 
 | Bar | Needs | Unlocks |
 |---|---|---|
-| **Evaluated** | at least 100 held-out examples and ECE ≤ 0.10 | the *evaluated* badge |
-| **Bulk** | Evaluated, plus at least 85% accuracy | **Apply all** for that question |
+| **Evaluated** | at least **100** held-out examples and ECE ≤ 0.10 | the *evaluated* badge |
+| **Bulk** | Evaluated, plus accuracy ≥ 85 % | **Apply all** for that question |
 
-### The badge belongs to a model *and* a question
+The bar uses the point ECE, not the interval's upper end.
 
-Reword the area question in `decisions/area.toml` and only area goes back to *unevaluated*.
-Switch triage to another model and every card under it is *unevaluated* until you evaluate it.
-The launch sheet warns "this routing has no evaluation" (§5.3).
+### A worked example: VillaRakavy, 2026-10
 
-### Drift
+All three used `claude-opus-5-5@medium`:
 
-If the last 30 decisions you made on a question show accuracy more than 10 points below the
-evaluated figure, its cards say *drifting* and Apply all stops for it until a new evaluation
-passes.
+| Question | n held out | Accuracy | ECE [interval] | T | Evaluated | Bulk |
+|---|---|---|---|---|---|---|
+| type | 120 | 88.3 % | 0.061 [0.043, 0.114] | 0.55 | yes | yes |
+| priority | 120 | 50.8 % | 0.052 [0.034, 0.145] | 0.75 | yes | no |
+| area (Store) | 120 | 60.0 % | 0.015 [0.012, 0.026] | 0.90 | yes | no |
+| area (logmon-mcp) | 13 | 76.9 % | 0.062 [0.025, 0.133] | 0.45 | no: too few examples | no |
 
-### Trends
+- **type passes both.** 88 % accurate and its stated confidence is honest, so *Apply all* can take its
+  cards. A T of 0.55 says the raw answers were underconfident; the map sharpens them. Its interval's
+  upper end (0.114) is above 0.10, but the bar takes the point value (0.061).
+- **priority is trustworthy but not accurate.** Evaluated yes, Bulk no: when it says 60 % it is right
+  about 60 % of the time, and it is right about half the time overall. Read each priority card; a
+  priority is never applied in bulk. Its worst bins are p1 and p2 (classwise ECE 0.158 and 0.151).
+- **area in Store passes Evaluated at 60 % accuracy**, so its badge reads *evaluated*, while it cannot
+  be bulk-applied. **logmon-mcp has 13 examples**: too thin, so it stays *not yet evaluated*.
+- Every truth here came from labels. There were no owner truths yet, so the eval reports no accuracy
+  by your own decisions; as you accept and edit, it will.
 
-Per question: "priority: 41 of 44 accepted in the last 30 days, 2 edited, 1 dismissed",
-alongside the evaluated accuracy and the drift flag (§4.4).
-
----
-
-## 7. Apply all
-
-When **type** passes the Bulk bar and isn't drifting, an **Apply all (12)** button appears over
-the type cards for untriaged issues. It records one accept per card, so each one can be undone on
-its own. A bulk accept is never used as truth for measuring the model, because
-you didn't read those cards one by one. It never includes second opinions or closures (§4.3).
-
----
-
-## 8. Closures
-
-Unchanged from phase 1: "Check and close…", "Close as duplicate…", "Close as not planned…".
-These are now part of the same triage session (scope `closures`), and the old *Recommend
-closures* button still works. Your closes become truth for measuring them. A dismissal **with** a
-reason ("not fixed") counts as *no*. A dismissal without one counts as nothing, because it might
-just mean "not now".
-
-A support question from someone outside opens your close sheet with a drafted reply. An outside
-comment that tries to instruct an agent gets a warning on the item and in every brief.
+An eval's result is also keyed to the question's wording: reword `decisions/area.toml` and only area
+goes back to *not yet evaluated*. Switch triage to another model and every card under it is
+unevaluated until you evaluate that model.
 
 ---
 
-## 9. "Needs a stronger look"
+## 6. Drift
 
-If a priority, type, duplicate or likely-fixed suggestion comes out below 60% after correction,
-the Inbox lists it under **needs a stronger look**. Its button launches the strongest model at
-high effort, on just those questions. The new answer replaces the card (§2.5).
+For each question the dashboard follows the last 30 cards you read (accepted or edited, never bulk
+accepts) on that backend: the share where your final answer equals the suggestion's top answer. When
+that falls more than **10 points** below the evaluated accuracy, its cards say *drifting* and **Apply
+all** stops for it until a new eval passes. Fewer than 30 records, or no passing eval, means no drift
+flag. `eval status` prints each key's latest evaluation and its drift.
+
+Drift means the world the model was measured on has moved: new kinds of issue, a changed convention,
+or a model update. The remedy is to run the eval again.
 
 ---
 
-## 10. Tagging a review you did in bulk
+## 7. Tagging a review you did in bulk
 
-On 22–23 October you re-prioritised about 13 Store issues in one sitting. Those labels may make
-the model look better or worse than it is, so you can tag them:
+On 22 and 23 October you re-prioritised about 13 Store issues in one sitting. Those labels may make a
+model look better or worse than it is, so tag them:
 
 ```bash
-issue-dashboard truth tag --name oct-review --decision priority \
-  --from 2026-10-22T00:00Z --to 2026-10-24T00:00Z
+issue-dashboard truth tag --project VillaRakavy --name oct-review --decision priority \
+  --from 2026-10-22T00:00:00Z --to 2026-10-24T00:00:00Z
 ```
 
-That lists the 13 label changes and records nothing. Add `--yes` to tag them. From then on,
-`eval … --exclude bulk_review:oct-review` measures without them. To make that the default, add
-it to `eval_exclude` in the project config.
+That lists the label changes and records nothing. Add `--yes` to tag them. Then
+`eval prepare … --exclude bulk_review:oct-review` measures without them. To make that the default, put
+it in `eval_exclude` in the project config.
 
 ---
 
-## 11. What is not here yet
+## 8. What is not built yet
 
-- **Ordering (WSJF).** It will read severity, reach, detectability and the estimates from each
-  issue's `triage` record.
-- **Writing labels to GitHub.** Accepted decisions wait, marked "not written to GitHub yet",
-  until the write engine consumes them.
-- **Replies to support questions** are phase 3.
+- **"Needs a stronger look"** (§2.5): the Inbox item and its button. A `stronger_look` launch kind and
+  routing exist, but nothing creates the launches from low-confidence suggestions.
+- **Metrics on Trends** (§4.4): accepted, edited and dismissed counts per question. Use
+  `eval status` for the evaluation and drift of each key.
+- **The `instructs_agent` warning** on an item and in its briefs.
+- **Ordering (WSJF)**, **writing labels to GitHub**, and **replies to support questions**: later phases.
+  Accepted decisions wait, marked "not written to GitHub yet".

@@ -11,6 +11,9 @@ configured routing) for the items that are due, then wakes the dispatcher sessio
 reserves the launch and starts a session at that routing. That session's
 `prepare --session-model` refuses any other model.
 
+The session the dispatcher starts answers the questions; its method is the skill
+`issue-dashboard-triage-session`, which also carries the closing procedure.
+
 ## Inputs
 
 | Name | Value |
