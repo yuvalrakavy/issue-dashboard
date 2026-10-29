@@ -211,6 +211,12 @@
       "type": "integer",
       "minimum": 1
     },
+    "stronger_look_below": {
+      "description": "A priority, type, duplicate or likely_fixed answer whose calibrated top probability is below this needs a stronger look (triage spec 2.5); 0.6 when unset.",
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "maximum": 1
+    },
     "eval_history_days": {
       "description": "How many days eval refresh-history reads back (triage spec 3.2); 730 when unset.",
       "type": "integer",

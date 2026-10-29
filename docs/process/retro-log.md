@@ -167,3 +167,24 @@ Template:
 - unconsolidated: 8
 - improve: every "refused while X is live" guard gets a spec row "what ends X if nobody acts?"
   (findings 1 and 2 were both a live state with no exit but a dispatcher that never comes).
+
+## 2026-10-29 triage spec gaps: stronger look, metrics, instructs_agent, support reply (T2)
+- time: about 55 min from brief to the round-2 fix (implementation ~45%, tests and controls
+  ~20%, gates and fixes ~35%); friction ~10 min (the exclamation-mark hook on source written
+  from Bash, and one context compaction).
+- catches: self-review=3 (the `of` sum, the NotPlanned close and the Evaluated project filter
+  survived my own RED controls) gate=round 1: 3 S3 + 3 S2 (Codex), round 2: 1 S2 + 1 S1
+  user=0 post-merge=n/a. Biggest: the list ("Needs a stronger look") and the launch that
+  answers it read eligibility from two places, so the launch re-asked what the owner dismissed
+  and the list showed what no launch could answer.
+- DG=n/a IG=43 post-merge=n/a
+- friction: a test with an `if ... return` branch for "the scenario may not happen" was always
+  taking the early return; only the confirming reader noticed.
+- tier-call: right (T2).
+- delegation: mutation finder Sonnet medium (3 survivors, none a production bug); depth Codex
+  high (7 findings, 6 taken, 1 blocked by an owner ruling); confirming Sonnet medium (2 taken,
+  1 S1 left open).
+- unconsolidated: 9
+- improve: a list and the action that consumes it share ONE eligibility function, named in the
+  spec row; and a test never branches on whether its own scenario happened - it forces the
+  scenario and asserts it did.

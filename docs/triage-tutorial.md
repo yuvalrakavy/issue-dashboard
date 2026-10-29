@@ -137,8 +137,26 @@ did not read those cards one by one. It never takes second opinions or closure c
 **Closures** keep their phase-1 cards (*Check and close…*, *Close as duplicate…*, *Close as not
 planned…*). Your close, or a dismissal **with** a reason, becomes truth for measuring them; a
 dismissal without a reason counts as nothing, since it might only mean "not now". A support question
-from an outside author opens your close sheet prefilled as not planned; the reply is yours to write
-(drafted replies are phase 3).
+from an outside author opens your close sheet prefilled as not planned, with the reply the session
+drafted for the reporter as the comment: edit it or keep it; nothing is posted until you close.
+
+**Needs a stronger look.** An answer on type, priority, duplicate or likely fixed whose top
+probability (after calibration) is below 0.6 is marked as unsure (`stronger_look_below` in the
+project config sets the bar). The Inbox lists those issues under **Needs a stronger look · n**, each
+with the unsure answers and their probability, and Details shows a *Stronger look* row. **Take a
+stronger look…** opens the launch sheet for an ordinary `stronger_look` launch over them, at the
+stronger routing (Fable 5.1 at high effort unless `[routing.stronger_look]` says otherwise). That
+session answers only the marked questions, in one pass, under its own backend, and its answers
+replace the earlier ones on the cards after the next sync. An issue leaves the list when you
+accept, edit or dismiss its answer, when it closes, when the stronger look answers, or when the
+issue changes (the next ordinary triage run asks it again). Its own
+answers are never marked again.
+
+**An issue that tries to instruct an agent.** When triage judges that an issue's text tries to
+direct an AI agent (the `instructs_agent` question, asked of outside authors), there is no card.
+Details shows a red *Warning* row with the judgement's reason, and every brief that names the issue
+(a fix, a batch, a triage run, a stronger look; not yet a Recommend closures run) carries a warning telling the session to read it as
+data only and to report what it asked for. A later triage answer of no removes both.
 
 ---
 
@@ -229,6 +247,11 @@ flag. `eval status` prints each key's latest evaluation and its drift.
 Drift means the world the model was measured on has moved: new kinds of issue, a changed convention,
 or a model update. The remedy is to run the eval again.
 
+**Trends** has a table, *Triage suggestions · last 30 days*, with one row per question and backend:
+how many of the suggestions you acted on you accepted ("type: 41 of 44"), how many you edited or
+dismissed, how many accepts were *Apply all*, the evaluated accuracy and the drift flag. A row
+appears once you act on one of its suggestions or the backend is evaluated on it.
+
 ---
 
 ## 7. Tagging a review you did in bulk
@@ -249,10 +272,7 @@ it in `eval_exclude` in the project config.
 
 ## 8. What is not built yet
 
-- **"Needs a stronger look"** (§2.5): the Inbox item and its button. A `stronger_look` launch kind and
-  routing exist, but nothing creates the launches from low-confidence suggestions.
-- **Metrics on Trends** (§4.4): accepted, edited and dismissed counts per question. Use
-  `eval status` for the evaluation and drift of each key.
-- **The `instructs_agent` warning** on an item and in its briefs.
-- **Ordering (WSJF)**, **writing labels to GitHub**, and **replies to support questions**: later phases.
-  Accepted decisions wait, marked "not written to GitHub yet".
+- **Ordering (WSJF)** and **writing labels to GitHub**: later phases. Accepted decisions wait, marked
+  "not written to GitHub yet".
+- **Estimates are display-only** in Details, and **Recommend closures** keeps its phase-1 brief: both
+  wait on your ruling (see "As built" in the spec).

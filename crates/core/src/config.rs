@@ -202,7 +202,7 @@ pub struct TimeLimits {
 }
 
 /// `<root>/projects/<project>.toml`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Project {
     pub schema: u32,
@@ -251,6 +251,11 @@ pub struct Project {
     /// The most items one triage launch names (triage spec 2.2); 40 when unset.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_triage_items: Option<u32>,
+    /// A priority, type, duplicate or likely_fixed answer whose calibrated top probability is
+    /// below this needs a stronger look (triage spec 2.5); [`STRONGER_LOOK_BELOW`] when unset.
+    /// The schema keeps it in (0, 1].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stronger_look_below: Option<f64>,
     /// How many days `eval refresh-history` reads back (triage spec 3.2); 730 when unset.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub eval_history_days: Option<u32>,
@@ -265,6 +270,10 @@ pub struct Project {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub eval_exclude: Option<Vec<String>>,
 }
+
+// The one float, `stronger_look_below`, is schema-checked to (0, 1]: never NaN, so equality
+// is reflexive.
+impl Eq for Project {}
 
 /// `.issue-dashboard.toml` at the root of a repo you own.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -551,6 +560,9 @@ pub const READ_ONLY_RECIPE: &str = "read-only";
 
 /// How many items one triage launch names when the project does not say (triage spec 2.2).
 pub const MAX_TRIAGE_ITEMS: u32 = 40;
+
+/// `stronger_look_below` when the project does not say (triage spec 2.5).
+pub const STRONGER_LOOK_BELOW: f64 = 0.6;
 
 /// The routing of a launch kind when the project's `routing` table does not name it (triage
 /// spec 5.3): triage on Opus 5.5 at medium, a stronger look on the strongest model at high.

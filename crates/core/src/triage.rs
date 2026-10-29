@@ -28,7 +28,7 @@ use serde_json::{Value, json};
 use crate::canonical::{hash_value, sha256_hex};
 use crate::config::{ConfigSet, Labels};
 use crate::derive::INSIDE;
-use crate::docs::{Priority, Routing, TriageScope};
+use crate::docs::{LaunchKind, Priority, Routing, TriageScope};
 use crate::event::Kind;
 use crate::launch::{self, Launch, State};
 use crate::ledger::{self, Dedupe, Tx};
@@ -59,6 +59,10 @@ pub const DECISION_FILES: &[(&str, &str)] = decisions![
 
 /// The decisions whose answers are labels: blinded from every input (1.1).
 pub const LABEL_DECISIONS: [&str; 3] = ["type", "area", "priority"];
+
+/// The decisions an answer of which may need a stronger look (2.5): its calibrated top
+/// probability below `stronger_look_below`.
+pub const STRONGER_LOOK_DECISIONS: [&str; 4] = ["priority", "type", "duplicate", "likely_fixed"];
 
 /// How long a closure answer holds before it is asked again (2.2), unless the project says.
 pub const CLOSURE_RECHECK_DAYS: u32 = 14;
@@ -545,13 +549,17 @@ pub struct PrepareReport {
 }
 
 /// The scope a launch asks in (5.1): a triage launch's own scope (`full` when it names none),
-/// and `closures` for the phase-1 alias `recommend_closures`.
+/// and `closures` for the phase-1 alias `recommend_closures`. A `stronger_look` launch (2.5)
+/// may re-ask any decision of [`STRONGER_LOOK_DECISIONS`], priority among them: `full`.
 pub(crate) fn launch_scope(l: &Launch) -> Result<Scope> {
+    if l.request.kind == LaunchKind::StrongerLook {
+        return Ok(Scope::Full);
+    }
     match l.request.triage_scope() {
         Some(TriageScope::Full) => Ok(Scope::Full),
         Some(TriageScope::Closures) => Ok(Scope::Both),
         None => Err(Error::refused(format!(
-            "launch {} is a {} launch; only triage and recommend_closures launches answer questions",
+            "launch {} is a {} launch; only triage, recommend_closures and stronger_look launches answer questions",
             l.id,
             serde_json::to_value(l.request.kind)?.as_str().unwrap_or_default()
         ))),
@@ -762,6 +770,11 @@ fn due(
     Ok(closure && parse_time(now)? - parse_time(&a.time)? >= recheck)
 }
 
+/// Whether a recorded suggestion needs a stronger look (2.5): `record` marks it so.
+pub(crate) fn needs_stronger_look(suggestion: &Value) -> bool {
+    suggestion["needs_stronger_look"] == true
+}
+
 /// Whether `f` is a closure decision: re-asked after `closure_recheck_days` (2.2).
 fn is_closure(f: &QuestionFile) -> bool {
     f.scope == Scope::Both && f.kind == AnswerKind::Boolean && f.decision != "instructs_agent"
@@ -939,6 +952,14 @@ pub fn prepare_with(
              its answers would be measured as another backend's, so nothing is prepared"
         )));
     }
+    // A stronger look (2.5) re-asks the answers that need one, in one stage: a priority it
+    // re-asks reads the first stage's answers already recorded.
+    let stronger = l.request.kind == LaunchKind::StrongerLook;
+    if stage == Stage::Priority && stronger {
+        return Err(Error::refused(format!(
+            "launch {launch_id} is a stronger look; it asks every question in one stage, priority included"
+        )));
+    }
     if stage == Stage::Priority && scope != Scope::Full {
         return Err(Error::refused(format!(
             "launch {launch_id} asks closures only; it has no priority stage"
@@ -953,6 +974,12 @@ pub fn prepare_with(
     ));
     let now = tx.now().to_string();
     let asked = asked(tx.conn())?;
+    // A stronger look asks exactly what the issue documents list (2.5).
+    let marked = if stronger {
+        crate::suggest::stronger_look_open(tx.conn(), &project)?
+    } else {
+        BTreeMap::new()
+    };
     let by_owner = owner_asked(tx.conn(), &project)?;
 
     let mut questions = Vec::new();
@@ -979,27 +1006,40 @@ pub fn prepare_with(
         let areas = areas_of(&t);
         let mut asked_here = 0;
         for f in cat.decisions() {
-            let wanted = match stage {
-                Stage::First => f.decision != "priority" && (scope == Scope::Full || f.scope == Scope::Both),
-                Stage::Priority => f.decision == "priority",
+            let last = asked.get(&(id.clone(), f.decision.clone()));
+            let wanted = if stronger {
+                marked
+                    .get(id)
+                    .is_some_and(|v| v.iter().any(|m| m["decision"] == f.decision.as_str()))
+            } else {
+                match stage {
+                    Stage::First => f.decision != "priority" && (scope == Scope::Full || f.scope == Scope::Both),
+                    Stage::Priority => f.decision == "priority",
+                }
             };
             if !wanted || !applies(f, &o.source, &areas) {
                 continue;
             }
             let qhash = cat.question_hash(&f.decision, &areas)?;
-            if !due(
-                asked.get(&(id.clone(), f.decision.clone())),
-                &qhash,
-                o.seq,
-                is_closure(f),
-                recheck,
-                by_owner.get(id).map(String::as_str),
-                &now,
-            )? {
+            if !stronger
+                && !due(
+                    last,
+                    &qhash,
+                    o.seq,
+                    is_closure(f),
+                    recheck,
+                    by_owner.get(id).map(String::as_str),
+                    &now,
+                )?
+            {
                 continue;
             }
             let (input, ihash) = match live_input(config, cat, &asked, &o, &f.decision)? {
                 Ok(x) => x,
+                Err(why) if stronger => {
+                    skipped.push(json!({"item": alias, "why": format!("{}: {why}", f.decision)}));
+                    continue;
+                }
                 Err(why) => {
                     waiting.push(format!("{} ({why})", o.source.alias));
                     continue;
@@ -1030,7 +1070,12 @@ pub fn prepare_with(
             asked_here += 1;
         }
         if asked_here == 0 {
-            skipped.push(json!({"item": alias, "why": "nothing due"}));
+            let why = if stronger {
+                "nothing needs a stronger look"
+            } else {
+                "nothing due"
+            };
+            skipped.push(json!({"item": alias, "why": why}));
         }
     }
     if stage == Stage::Priority && questions.is_empty() && !waiting.is_empty() {

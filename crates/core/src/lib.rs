@@ -24,6 +24,7 @@ pub mod launch;
 pub mod layers;
 pub mod ledger;
 pub mod lock;
+pub mod metrics;
 pub mod observe;
 pub mod outcome;
 pub mod publish;

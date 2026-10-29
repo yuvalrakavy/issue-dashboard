@@ -365,7 +365,7 @@ pub struct ClosureTruth {
 }
 
 /// The number of an alias owner/repo#N.
-fn number_of(alias: &str) -> Option<u64> {
+pub(crate) fn number_of(alias: &str) -> Option<u64> {
     alias.rsplit_once('#')?.1.parse().ok()
 }
 

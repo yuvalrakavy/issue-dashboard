@@ -67,7 +67,10 @@ daily request no dispatcher has taken) or `nothing_to_triage`. It is what the sc
 `issue-dashboard-triage` (`skills/issue-dashboard-triage/`) runs each morning before it wakes the
 dispatcher. **Run triage…** on the Inbox does the same on demand, with a choice of scope, and
 **Evaluate…** on Trends measures a model. `eval status` lists each key's latest evaluation and
-drift. Triage and eval launches run in the `read-only` pool (one slot by default) and hold no issue.
+drift, and Trends shows each key's last 30 days (accepted of acted on, edited, dismissed). Answers a
+run was unsure of are listed under **Needs a stronger look** in the Inbox, whose button launches a
+`stronger_look` session at a stronger routing. Triage, stronger-look and eval launches run in the
+`read-only` pool (one slot by default) and hold no issue.
 
 The session's method is `skills/issue-dashboard-triage-session`. The design is
 `docs/triage-spec.md`, a walk through it from the owner's side is `docs/triage-tutorial.md`, and
