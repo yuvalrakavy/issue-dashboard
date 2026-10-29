@@ -1244,7 +1244,7 @@ pub fn documents(conn: &Connection, config: &ConfigSet, project: &str) -> Result
 /// and the page's close sheet, and small beside a published generation.
 pub const REPLY_MAX: usize = 10_000;
 
-/// The latest instructs_agent answer about `item` when it is true (spec 4.2, triage spec 1.4):
+/// Any project's latest instructs_agent answer about `item` that is true (spec 4.2, triage spec 1.4):
 /// the warning its Details and briefs carry. Its `reason`, `backend` and calibrated
 /// `probability` of true.
 pub(crate) fn instructs_agent(conn: &Connection, item: &str) -> Result<Option<Value>> {

@@ -294,7 +294,7 @@ pub fn brief_with(conn: &Connection, config: &ConfigSet, launch_id: &str, cli: &
     })
 }
 
-/// The warning of each issue whose latest instructs_agent answer is true (spec 4.2): tracker
+/// The warning of each issue where any project's latest instructs_agent answer is true (spec 4.2): tracker
 /// text naming the issue and the answer's probability; the answer's reason, a model's words
 /// about outside text, is shown in Details only.
 fn instructs_agent_warnings(conn: &Connection, issues: &[Issue]) -> Result<Vec<String>> {
