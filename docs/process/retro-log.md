@@ -112,3 +112,21 @@ Template:
   guarantee as a side effect?" (version bump, sequence advance, timestamp): the S3 was a
   protection that rode on the skipped write. And a fixture used for "every X" tests must
   populate every X (the fixture left six of seven collections empty).
+
+## 2026-10-29 triage phase 1/5: the seam (T2)
+- time: implement ~40%, tests and controls ~30%, gates and fixes ~30%; friction ~40 min (a
+  full-suite run per mutant before the owner stopped the sweep; the exclamation-mark shell hook
+  on Rust test edits, again).
+- catches: self-review=0 gate=round 1: 3 S3 + 4 S2 (Codex), round 2: 1 S2 + 1 S1 user=1 (the
+  owner ruled the commit-existence check in) post-merge=n/a. Biggest: stage two read stage-one
+  answers about facts older than its own question.
+- DG=n/a IG=46 post-merge=n/a
+- friction: the mutation sweep ran the whole suite per mutant despite the 2026-10-24 rule
+  (GUARDED by the owner's restatement; the brief now carries `-E 'test(...)'` per mutant).
+- tier-call: right (T2).
+- delegation: mutation finder Sonnet (stopped early; every survivor real); depth Codex (7
+  findings, all real); confirming Sonnet medium (2 items, both real, no S3).
+- unconsolidated: 6
+- improve: a fact derived from another recorded answer gets a spec row "about which observation
+  was that answer?" (F1 and F5 were both freshness of a dependency); and a lookup against an
+  external resolver gets a row "does it resolve more than the identity named?" (the oid check).
