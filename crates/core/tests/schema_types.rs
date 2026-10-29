@@ -15,6 +15,7 @@ use issue_dashboard_core::event::{Event, Kind};
 use issue_dashboard_core::launch::LaunchData;
 use issue_dashboard_core::observe::ObservedData;
 use issue_dashboard_core::outcome::Outcome;
+use issue_dashboard_core::triage::PreparedData;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -86,6 +87,7 @@ fn event_examples_have_the_identity_this_crate_computes_and_typed_data() {
         "event-suggested",
         "event-launch",
         "event-outcome",
+        "event-prepared",
         "event-exported",
         "event-session-seen",
         "event-session-gone",
@@ -100,6 +102,7 @@ fn event_examples_have_the_identity_this_crate_computes_and_typed_data() {
                 Kind::Outcome => round_trip::<Outcome>(&what, &event.data),
                 Kind::Decided => round_trip::<DecidedData>(&what, &event.data),
                 Kind::Observed => round_trip::<ObservedData>(&what, &event.data),
+                Kind::Prepared => round_trip::<PreparedData>(&what, &event.data),
                 _ => {}
             }
             checked += 1;

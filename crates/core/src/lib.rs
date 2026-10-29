@@ -31,6 +31,7 @@ pub mod snapshot;
 pub mod suggest;
 pub mod sync;
 pub mod translate;
+pub mod triage;
 pub mod write;
 
 pub use error::{Error, Result};

@@ -1,0 +1,13 @@
+# The `severity` question (triage spec 1.1; points in priority.toml's rubric, 1.5).
+decision = "severity"
+kind     = "choice"
+scope    = "full"
+answers  = ["cosmetic", "degraded", "wrong_result", "hang_or_data_loss"]
+question = """
+If this issue is real, how bad is its effect when it happens?
+- cosmetic: looks wrong, works right.
+- degraded: works, but slower, harder or less well than it should.
+- wrong_result: a wrong answer or a wrong action, or a feature that does not work.
+- hang_or_data_loss: the system hangs, crashes, or loses or corrupts data. No scenario, however rare, may hang the system.
+For work that is not a defect, answer for the harm of NOT doing it.
+"""

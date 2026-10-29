@@ -1,0 +1,9 @@
+# The `support_question` question (triage spec 1.1): asked only about an outside author's issue.
+decision = "support_question"
+kind     = "boolean"
+scope    = "full"
+outside_only = true
+question = """
+Is this a request for help using the project, not a defect or a request for work? A support
+question is answered and closed, not fixed.
+"""

@@ -1,0 +1,10 @@
+# The `likely_fixed` question (triage spec 1.1): a closure, asked in both scopes.
+decision = "likely_fixed"
+kind     = "boolean"
+scope    = "both"
+subject  = "commit"
+question = """
+Is this issue already fixed in the code? Check the sites it cites and the commits that
+mention it against the checkout. Name the one commit that fixed it (`commit`); without a
+commit you can name, the answer is false.
+"""

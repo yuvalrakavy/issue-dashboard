@@ -202,8 +202,6 @@
         "item",
         "alias",
         "decision",
-        "answer",
-        "probabilities",
         "backend",
         "evaluated"
       ],
@@ -221,6 +219,7 @@
             "area",
             "severity",
             "reach",
+            "detectability",
             "priority",
             "likely_fixed",
             "duplicate",
@@ -229,17 +228,32 @@
             "routing",
             "obsolete",
             "batch",
-            "left_out"
+            "left_out",
+            "estimates"
           ]
         },
         "answer": {
-          "type": [
-            "string",
-            "boolean"
+          "description": "The top answer; for area the chosen set (triage spec 1.4).",
+          "anyOf": [
+            {
+              "type": [
+                "string",
+                "boolean"
+              ]
+            },
+            {
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
           ]
         },
         "probabilities": {
-          "description": "The probability of each allowed answer.",
+          "description": "The probability of each allowed answer, calibrated (triage spec 2.4); for area a yes/no probability per area.",
           "type": "object",
           "minProperties": 1,
           "additionalProperties": {
@@ -303,8 +317,97 @@
             "blocked",
             "keep_open"
           ]
+        },
+        "raw": {
+          "description": "The probabilities as the backend stated them, clipped and normalised (triage spec 2.3), before calibration.",
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          }
+        },
+        "map_id": {
+          "description": "The calibration map applied, as the question's prepared event froze it; null: none, the suggestion is uncalibrated (triage spec 2.4).",
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "question": {
+          "description": "The prepared question this answers (triage spec 2.1).",
+          "type": "string",
+          "pattern": "^q-[0-9a-f]{20}$"
+        },
+        "estimate": {
+          "description": "The unevaluated estimates of triage spec 1.1: sites with the commit they were read at, tier, blast and effort.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "sites",
+            "read_at",
+            "tier",
+            "blast",
+            "effort"
+          ],
+          "properties": {
+            "sites": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "read_at": {
+              "$ref": "#/$defs/commit"
+            },
+            "tier": {
+              "enum": [
+                "T0",
+                "T1",
+                "T2",
+                "T3"
+              ]
+            },
+            "blast": {
+              "description": "The gate level a fix needs (spec 2.6).",
+              "type": "string",
+              "minLength": 1
+            },
+            "effort": {
+              "enum": [
+                "S",
+                "M",
+                "L"
+              ]
+            }
+          }
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "decision": {
+                "const": "estimates"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "estimate"
+            ]
+          },
+          "else": {
+            "required": [
+              "answer",
+              "probabilities"
+            ]
+          }
+        }
+      ]
     },
     "eventEnvelope": {
       "description": "The fields every ledger event has (10.3). identity = sha256 of the canonical JSON (sorted keys, no whitespace) of {kind, subject, pred, distinct}.",
@@ -346,7 +449,8 @@
             "write_applied",
             "write_failed",
             "session_seen",
-            "session_gone"
+            "session_gone",
+            "prepared"
           ]
         },
         "subject": {

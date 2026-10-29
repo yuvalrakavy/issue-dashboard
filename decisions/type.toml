@@ -1,0 +1,14 @@
+# The `type` question (triage spec 1.1). `prepare` and the triage skill both read this file;
+# any change to it changes type's question hash (1.3).
+decision = "type"
+kind     = "choice"
+scope    = "full"
+answers  = ["bug", "todo", "decision", "docs"]
+question = """
+What kind of work is this issue?
+- bug: the system does something wrong, or fails to do what it already claims to do.
+- todo: new work: a feature, an improvement, a refactor, a cleanup.
+- decision: a question that needs a decision before anyone can build; the issue asks what to do, not how.
+- docs: only documentation changes.
+Answer from the issue's own text: no label, sibling answer or GitHub page is part of the input.
+"""

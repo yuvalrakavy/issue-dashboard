@@ -1,0 +1,41 @@
+{
+  "seq": 14,
+  "time": "2026-10-29T08:20:00Z",
+  "kind": "suggested",
+  "subject": "I_kwDOAbCdEf5xYz34",
+  "pred": 0,
+  "distinct": {
+    "run_id": "triage-20261029",
+    "decision": "area",
+    "question": "q-1b2c3d4e5f60718293a4"
+  },
+  "identity": "e5f94b424df7dcc219e955109014bbf79c654e67720debd25d9de93a8a805d15",
+  "data": {
+    "project": "home",
+    "run_id": "triage-20261029",
+    "suggestion": {
+      "item": "I_kwDOAbCdEf5xYz34",
+      "alias": "example-org/server#405",
+      "decision": "area",
+      "answer": [
+        "kernel",
+        "sdl"
+      ],
+      "probabilities": {
+        "kernel": 0.82,
+        "sdl": 0.55,
+        "renderer": 0.04
+      },
+      "raw": {
+        "kernel": 0.82,
+        "sdl": 0.55,
+        "renderer": 0.04
+      },
+      "map_id": null,
+      "question": "q-1b2c3d4e5f60718293a4",
+      "backend": "",
+      "evaluated": false,
+      "reason": "the scheduler and its SDL bindings both change"
+    }
+  }
+}

@@ -1,0 +1,10 @@
+# The `area` question (triage spec 1.1, 1.4). The areas are the repo's, from its translation;
+# the repo's area list is part of the question hash (1.3).
+decision = "area"
+kind     = "areas"
+scope    = "full"
+question = """
+Which parts of the system does this issue belong to? For EACH area in the list, give the
+probability that the issue belongs to it, independently: an issue may belong to several.
+The set chosen is every area at 0.5 or above, or the top one if none is.
+"""

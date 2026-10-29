@@ -245,6 +245,9 @@ pub struct Project {
     pub demand_threshold: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gate_minutes_per_point: Option<u32>,
+    /// How many days a closure answer holds before triage asks it again (triage spec 2.2).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub closure_recheck_days: Option<u32>,
 }
 
 /// `.issue-dashboard.toml` at the root of a repo you own.
