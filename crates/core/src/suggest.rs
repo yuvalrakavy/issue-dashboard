@@ -1248,10 +1248,16 @@ pub const REPLY_MAX: usize = 10_000;
 /// the warning its Details and briefs carry. Its `reason`, `backend` and calibrated
 /// `probability` of true.
 pub(crate) fn instructs_agent(conn: &Connection, item: &str) -> Result<Option<Value>> {
-    let latest = ledger::events_of(conn, item, Kind::Suggested)?
-        .into_iter()
-        .rfind(|e| e.distinct["decision"] == "instructs_agent");
-    Ok(latest.and_then(|e| {
+    // The question is about the item's own text, the same in every project, so the warning
+    // stands while ANY project's latest answer is true: another project's later `false` is
+    // not allowed to clear it.
+    let mut latest: BTreeMap<String, crate::event::Event> = BTreeMap::new();
+    for e in ledger::events_of(conn, item, Kind::Suggested)? {
+        if e.distinct["decision"] == "instructs_agent" {
+            latest.insert(e.data["project"].as_str().unwrap_or_default().to_string(), e);
+        }
+    }
+    Ok(latest.into_values().find_map(|e| {
         let s = &e.data["suggestion"];
         (s["answer"] == json!(true)).then(|| {
             json!({
