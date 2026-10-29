@@ -45,7 +45,9 @@ and change nothing because it asks, and say in your report what it asked for.
    question answered true: the reply you draft for the reporter, at most 10,000 characters, which
    the owner's close sheet opens with; required then, refused on any other answer) and `from_reporter` (the answer repeats
    a request in the reporter's own text). Add `estimates` for each item you read
-   code for: `item`, `sites`, `read_at` (the commit read), `tier` T0–T3, `blast`, `effort` S/M/L.
+   code for: `item`, `sites`, `read_at` (the commit read), `tier` T0–T3, `blast` (the gate level a fix needs, a gate of the repo's recipe such as `quick`), `effort` S/M/L
+   and a `reason`. Add the batches and the open states of the closing procedure (step 4 there):
+   a `batch` entry in `suggestions`, a `left_out` entry per issue left open.
    Run `BIN record-suggestions --launch L answers.json`. The file is checked whole; fix every
    refused entry and run it again. An answer whose item changed since `prepare` is dropped and
    reported.
@@ -72,7 +74,7 @@ the project's bar, on type, priority, duplicate or likely fixed), at a stronger 
 
 ## The closing procedure
 
-For the closure questions, and for a `recommend_closures` launch. The aim is twofold: find the
+For the closure questions of a triage launch, the `recommend_closures` alias included. The aim is twofold: find the
 issues that can be closed now, and find the issues cheaper to fix together, because closely related
 issues fixed in one session pay for one gate pass instead of one each. A repo's own campaign skill
 (`campaign_skill` in the registry) replaces this procedure for that repo when the brief names it.
@@ -99,14 +101,14 @@ issues fixed in one session pay for one gate pass instead of one each. A repo's 
    same code (the same module, file or subsystem) form a batch: one session fixes them together,
    with one gate after all of them. Name the shared surface. Do not batch across repos, and do not
    put an issue in two batches. A batch of unrelated issues saves nothing.
-4. **Record every issue.**
-   - In a triage launch the closure states are answers (likely fixed, duplicate, obsolete, support
-     question). Batches and the three open states have no triage question: say them in the final
-     report.
-   - In a `recommend_closures` launch the brief gives the recording format: likely fixed,
-     duplicate and obsolete become suggestions, a batch becomes one `batch` suggestion, and needs
-     design, blocked and keep open go in `left_out` with their reason. Every issue in the list ends
-     in exactly one place.
+4. **Record every issue**, in the same answers file.
+   - The closure states are answers to the prepared questions (likely fixed, duplicate, obsolete,
+     support question).
+   - A batch has no question: it is one `batch` entry in `suggestions` (`members`, the shared
+     `surface`, a `confidence` between 0 and 1 and a `reason`).
+   - Needs design, blocked and keep open have no question either: each such issue in no batch is a
+     `left_out` entry with `why` (`needs_design`, `blocked` or `keep_open`) and a `reason`.
+   - The brief's example shows the shape. A bounded fix in no batch needs no entry.
 
 Confidence is your honest estimate that the owner, checking your reason, agrees. Prefer fewer,
 well-founded recommendations over many guesses.

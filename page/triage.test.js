@@ -106,6 +106,45 @@ test("a Details edit names the issue's suggestion for that decision, or only the
   assert.deepEqual(D.detailsEditFields(issue(2), "severity", "degraded").target, { item: "I_2", alias: STORE + "#2" });
 });
 
+test("an estimates edit names only the item and carries the fields the owner set, cleaned", () => {
+  const i = issue(1, { triage: { estimates: { tier: "T1", effort: "S", blast: "quick", sites: ["a.rs:1"], read_at: "abc1234", backend: "m@e", edited: null } } });
+  assert.deepEqual(D.estimatesEditFields(i, { tier: "T2" }), {
+    fields: { action: "edit_suggestion", target: { item: "I_1", alias: STORE + "#1" }, value: { estimates: { tier: "T2" } } },
+  });
+  assert.deepEqual(D.estimatesEditFields(i, { blast: "  the loader " }).fields.value, { estimates: { blast: "the loader" } });
+  assert.deepEqual(D.estimatesEditFields(i, { sites: " src/a.rs:1, src/b.rs:2\nsrc/c.rs:3 ,", read_at: " DEF5678 " }).fields.value, {
+    estimates: { sites: ["src/a.rs:1", "src/b.rs:2", "src/c.rs:3"], read_at: "def5678" },
+  });
+  assert.deepEqual(D.estimatesEditFields(issue(2), { effort: "L" }).fields.target, { item: "I_2", alias: STORE + "#2" });
+  for (const [form, error] of [
+    [{}, "Nothing to save."],
+    [{ tier: "T4" }, "Tier is one of T0, T1, T2, T3."],
+    [{ effort: "XL" }, "Effort is one of S, M, L."],
+    [{ blast: "  " }, "Blast is empty."],
+    [{ sites: "a.rs:1", read_at: "" }, "Sites need the commit they were read at."],
+    [{ sites: " , ", read_at: "abc1234" }, "Sites need the commit they were read at."],
+    [{ sites: "a.rs:1", read_at: "main" }, "The commit is 7 to 40 hex digits."],
+  ]) assert.deepEqual(D.estimatesEditFields(i, form), { error }, JSON.stringify(form));
+});
+
+test("the estimates shown are the owner's edit over the recorded ones", () => {
+  assert.equal(D.shownEstimates({}), null);
+  assert.deepEqual(D.shownEstimates({ estimates: { tier: "T1", effort: "S", blast: "b", sites: ["a"], read_at: "abc1234", backend: "m", edited: null } }),
+    { tier: "T1", effort: "S", blast: "b", sites: ["a"], read_at: "abc1234", edited: false });
+  assert.deepEqual(D.shownEstimates({ estimates: { tier: "T1", effort: "S", blast: "b", sites: ["a"], read_at: "abc1234", backend: "m", edited: { effort: "L" } } }),
+    { tier: "T1", effort: "L", blast: "b", sites: ["a"], read_at: "abc1234", edited: true });
+  assert.deepEqual(D.shownEstimates({ estimates: { tier: null, effort: null, blast: null, sites: null, read_at: null, backend: null, edited: { tier: "T0" } } }),
+    { tier: "T0", effort: null, blast: null, sites: null, read_at: null, edited: true });
+});
+
+test("the estimates editor starts from the full commit, so saving the sites keeps it", () => {
+  const full = "def5678901234567890123456789012345678901";
+  const f = D.estimatesFormValues({ tier: "T1", effort: "S", blast: "quick", sites: ["src/a.rs:1", "src/b.rs:2"], read_at: full, edited: false });
+  assert.deepEqual(f, { blast: "quick", sites: "src/a.rs:1, src/b.rs:2", read_at: full });
+  assert.equal(D.estimatesEditFields(issue(1), { sites: f.sites, read_at: f.read_at }).fields.value.estimates.read_at, full);
+  assert.deepEqual(D.estimatesFormValues(null), { blast: "", sites: "", read_at: "" });
+});
+
 test("a support question is a closing card that closes as not planned", () => {
   const s = tg("support_question", 1);
   assert.deepEqual(D.suggestionCards([s], [issue(1)], [], []).cards.map((c) => c.s.kind), ["support_question"]);
@@ -116,7 +155,8 @@ test("every decision the triage cards write fits the page-decision schema's keys
   const sc = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "schemas", "page-decision.schema.json"), "utf8"));
   const card = D.triageCards(combined(1), [issue(1)], [], []).cards[0];
   const i = issue(1, { triage: { severity: { suggestion: "sg-sev1" } } });
-  for (const f of [...D.applyAllFields([card]), D.editFields(card, card.parts[1], "p2"), D.detailsEditFields(i, "severity", "degraded")]) {
+  const estimates = D.estimatesEditFields(i, { tier: "T2", effort: "M" }).fields;
+  for (const f of [...D.applyAllFields([card]), D.editFields(card, card.parts[1], "p2"), D.detailsEditFields(i, "severity", "degraded"), estimates]) {
     const d = D.decisionDoc(f, who, now, () => 0.5);
     assert.ok(sc.properties.action.enum.includes(d.action), d.action);
     for (const k of Object.keys(d.target)) assert.ok(k in sc.properties.target.properties, "target has no " + k);
@@ -127,4 +167,20 @@ test("every decision the triage cards write fits the page-decision schema's keys
     }
     if (d.target.component) assert.ok(sc.properties.target.properties.component.enum.includes(d.target.component));
   }
+  // The estimates edit's own fields fit the shared definition the value refers to.
+  const common = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "schemas", "common.schema.json"), "utf8"));
+  assert.equal(sc.properties.value.properties.estimates.$ref, "common.schema.json#/$defs/estimatesEdit");
+  const def = common.$defs.estimatesEdit.properties;
+  for (const [k, v] of Object.entries(estimates.value.estimates)) {
+    assert.ok(def[k], "estimates has no " + k);
+    if (def[k].enum) assert.ok(def[k].enum.includes(v), k + " " + v);
+  }
+});
+
+test("the Details estimates editor fills its inputs from estimatesFormValues, so the commit field keeps the full commit", () => {
+  const html = fs.readFileSync(path.join(__dirname, "dashboard.html"), "utf8");
+  assert.match(html, /const f = D\.estimatesFormValues\(v\);/);
+  assert.match(html, /"Estimate blast", placeholder: "blast", value: f\.blast \}/);
+  assert.match(html, /"Estimate sites", placeholder: "file:line, file:line", value: f\.sites \}/);
+  assert.match(html, /"Estimate commit", class: "mono", placeholder: "commit", size: "9", value: f\.read_at \}/);
 });

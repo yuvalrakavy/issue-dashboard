@@ -188,3 +188,20 @@ Template:
 - improve: a list and the action that consumes it share ONE eligibility function, named in the
   spec row; and a test never branches on whether its own scenario happened - it forces the
   scenario and asserts it did.
+
+## 2026-10-29 triage rulings: editable estimates, alias on the triage brief, project scoping (T2)
+- time: about 50 min from brief to the PR (implementation ~45%, tests and controls ~20%, gates
+  and fixes ~35%); friction ~8 min (one context compaction, the temp-dir and pipe hooks).
+- catches: self-review=1 (the example estimate had no reason, so record-suggestions refused the
+  brief's own example) gate=round 1: 2 S2 + 2 S1 (Codex), round 2: 2 S1 user=0
+  post-merge=n/a. Biggest: the numbered steps ran the recording command before the step that
+  filled the rest of the file, so a session following them literally lost its batches.
+- DG=n/a IG=10 post-merge=n/a
+- friction: tests checked that the brief CONTAINED the record command, not WHERE it sat among
+  the steps.
+- tier-call: right (T2).
+- delegation: mutation finder Sonnet medium (1 survivor, killed); depth Codex high (4 findings,
+  all taken); confirming Sonnet medium (2 S1, one left open: no DOM test of the editor).
+- unconsolidated: 10
+- improve: a brief that is a numbered procedure gets an ORDER assertion for each command that
+  consumes what earlier steps produce, not only a presence check.

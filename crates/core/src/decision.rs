@@ -161,7 +161,8 @@ fn suggestion_refusal(conn: &Connection, config: &ConfigSet, project: &str, doc:
     if bulk && doc.action != Action::AcceptSuggestion {
         return Ok(Some("apply all only accepts".to_string()));
     }
-    let details = value.severity.is_some() || value.reach.is_some() || value.detectability.is_some();
+    let details =
+        value.severity.is_some() || value.reach.is_some() || value.detectability.is_some() || value.estimates.is_some();
     let found = match doc.target.suggestion.as_deref() {
         Some(id) => crate::truth::suggestions(conn, project)?.remove(id),
         None => None,

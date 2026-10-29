@@ -599,11 +599,16 @@ pub(crate) struct Asked {
     pub suggestion: Value,
 }
 
-/// The latest recorded answer to a prepared question, per (item, decision).
-pub(crate) fn asked(conn: &Connection) -> Result<BTreeMap<(String, String), Asked>> {
+/// `project`'s latest recorded answer to a prepared question, per (item, decision). Another
+/// project tracking the same item keeps its own answers: they never make a question of this
+/// project answered, nor feed this project's priority stage.
+pub(crate) fn asked(conn: &Connection, project: &str) -> Result<BTreeMap<(String, String), Asked>> {
     let questions = prepared_questions(conn)?;
     let mut out = BTreeMap::new();
     for e in ledger::events_by_kind(conn, Kind::Suggested)? {
+        if e.data["project"] != project {
+            continue;
+        }
         let s = &e.data["suggestion"];
         let Some((q, _)) = s["question"].as_str().and_then(|id| questions.get(id)) else {
             continue;
@@ -862,7 +867,7 @@ pub(crate) fn select_with(
             .closure_recheck_days
             .unwrap_or(CLOSURE_RECHECK_DAYS),
     ));
-    let asked = asked(conn)?;
+    let asked = asked(conn, project)?;
     let by_owner = owner_asked(conn, project)?;
     let layers = crate::layers::layers(conn, project)?;
     let mut out = Vec::new();
@@ -973,7 +978,9 @@ pub fn prepare_with(
             .unwrap_or(CLOSURE_RECHECK_DAYS),
     ));
     let now = tx.now().to_string();
-    let asked = asked(tx.conn())?;
+    // This project's answers only (S1): another project's stronger look or stage one never
+    // stands in for this project's.
+    let asked = asked(tx.conn(), &project)?;
     // A stronger look asks exactly what the issue documents list (2.5).
     let marked = if stronger {
         crate::suggest::stronger_look_open(tx.conn(), &project)?

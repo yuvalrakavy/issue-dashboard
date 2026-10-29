@@ -41,11 +41,14 @@ Every session watching the page with auto-replies armed is woken by every launch
 dispatcher should be the only one: a session that republishes the page stops its watch
 afterwards (`ArtifactComments` `watch` with `on: false`).
 
-Recommend closures runs a read-only session over the issues in view. It judges each repo's
-issues by the repo's own campaign skill (`campaign_skill` in the registry, a path in the
-repo's `local_path` checkout), or by the generic procedure in `docs/closing-recommendations.md`
-when the repo has none, and its recommendations reach the Inbox after the next sync. It is the
-closures scope of triage (below), and keeps this brief.
+Recommend closures runs a read-only session over the issues in view. It is the closures scope
+of triage (below), on the same brief: the session answers the prepared closure questions, which
+pass through calibration like any triage answer, and records the batches and the issues left
+open in the same file. It judges each repo's issues by the repo's own campaign skill
+(`campaign_skill` in the registry, a path in the repo's `local_path` checkout), or by the
+closing procedure of the `issue-dashboard-triage-session` skill when the repo has none. Its
+cards reach the Inbox after the next sync, and the daily closures run does not ask its answers
+again until they are due.
 
 ## Triage
 

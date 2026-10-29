@@ -120,7 +120,8 @@ pub struct RepoEntry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub docs: Option<Vec<String>>,
     /// The repo's own way to triage and batch closures, relative to `local_path`; a
-    /// recommender applies it (5.8). Without one it follows the generic procedure.
+    /// triage session applies it to closures (5.8). Without one it follows the closing
+    /// procedure of the triage-session skill.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub campaign_skill: Option<String>,
 }

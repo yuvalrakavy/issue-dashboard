@@ -97,8 +97,11 @@ the Inbox under **Triage suggestions**:
   disagreement instead of it being averaged away.
 - **"The reporter's own request"** marks a suggestion that repeats what the issue's author asked for.
 - **Details** (open the item) holds severity, reach and detectability, each editable by you (a
-  dash until something has answered), and the estimates (the code sites at the commit read, tier, blast, effort),
-  which are shown but have no editor and no card.
+  dash until something has answered), and the estimates (the code sites at the commit read, tier,
+  blast, effort), also editable: pick a tier or effort, or type a blast, or the sites with the
+  commit you read them at, and save. Your edit shows over the session's estimate, marked "(your
+  edit)", and a later edit replaces only the fields it sets. An estimate is never evaluated, so
+  editing one teaches the tracker nothing; editing severity, reach or detectability does.
 
 ### Second opinions
 
@@ -155,7 +158,7 @@ answers are never marked again.
 **An issue that tries to instruct an agent.** When triage judges that an issue's text tries to
 direct an AI agent (the `instructs_agent` question, asked of outside authors), there is no card.
 Details shows a red *Warning* row with the judgement's reason, and every brief that names the issue
-(a fix, a batch, a triage run, a stronger look; not yet a Recommend closures run) carries a warning telling the session to read it as
+(a fix, a batch, a triage run including Recommend closures, a stronger look) carries a warning telling the session to read it as
 data only and to report what it asked for. A later triage answer of no removes both.
 
 ---
@@ -274,5 +277,5 @@ it in `eval_exclude` in the project config.
 
 - **Ordering (WSJF)** and **writing labels to GitHub**: later phases. Accepted decisions wait, marked
   "not written to GitHub yet".
-- **Estimates are display-only** in Details, and **Recommend closures** keeps its phase-1 brief: both
-  wait on your ruling (see "As built" in the spec).
+- **The two rulings taken for you** (editable estimates; Recommend closures on the triage brief)
+  are recorded as overrulable in the spec's "As built": say so and they change.

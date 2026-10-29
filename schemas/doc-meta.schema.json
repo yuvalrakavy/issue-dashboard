@@ -237,7 +237,7 @@
             ]
           },
           "campaign_skill": {
-            "description": "Whether a recommender applies the repo's own campaign skill (5.8) rather than the generic procedure.",
+            "description": "Whether a triage session judges the repo's closures by its own campaign skill (5.8) rather than the closing procedure of the triage-session skill.",
             "type": "boolean"
           }
         }

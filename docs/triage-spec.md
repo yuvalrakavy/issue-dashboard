@@ -444,7 +444,7 @@ Where the code differs from this spec, the code is current. One row per divergen
 | 4.2 | An acted card hides and a run no longer re-answers it; the stale check covers accept, edit and a second opinion's dismissal | an accept must not change underfoot | #31 |
 | 4.3 | Apply all needs the card's own map's Bulk, the key's latest Bulk and no drift, for every part of a combined card | an unread error is the cost | #31 |
 | 4.5 | `doc-issue` also carries `type_source`, `areas_source`; a pre-phase suggestion has no `current` and no card | Details says "not written"; nothing to compare | #31 |
-| 4.1 | Estimates are display-only in Details (**open**: the table says editable) | 4.2 and 4.6 give the value three fields | #31 |
+| 4.1 | Estimates were display-only in Details; editable since "Rulings" below | 4.2 and 4.6 gave the value three fields | #31 |
 | 4.4 | Trends metrics and the `instructs_agent` warning are not built | later; built in "Spec gaps" below | #31 |
 
 ### 4/5 Launch (#32)
@@ -456,7 +456,7 @@ Where the code differs from this spec, the code is current. One row per divergen
 | 5.2 | `triage-request` also returns `pending`; an owner request unheard for 24 h stops counting as live; `launches --requested` | an unheard request blocked every run | #32 |
 | 5.3 | The strongest model is `claude-fable-5-1`; `[routing.<kind>]` overrides; the warning keys on any evaluation of the backend | defaults must exist | #32 |
 | 2.2 | "Untriaged" is the page's definition; read-only members are excluded; **Request triage** makes an item due | one definition | #32 |
-| 5.1 | `recommend_closures` keeps its phase-1 brief (**open**) | the scoped brief drops its batching, which tests pin | #32 |
+| 5.1 | `recommend_closures` kept its phase-1 brief; on the triage brief since "Rulings" below | the scoped brief dropped its batching, which tests pinned | #32 |
 | 2.5, 5.2 | No "needs a stronger look" item (built in "Spec gaps" below); the task is not registered, and whether it can message the dispatcher is unchecked | after approval | #32 |
 
 ### Spec gaps
@@ -474,10 +474,24 @@ What phases 1-5 left unbuilt. Every row is overrulable.
 | 4.4 | A closure suggestion approved through the close sheet counts as accepted: a `close` decision on its item within 14 days after it, with the matching reason (a duplicate naming the suggested issue), as closure truth reads it (3.1); a suggestion counts accepted once, and a close does not count for a suggestion the owner dismissed or edited before it | closure cards are approved by a close, not an accept | gaps |
 | 1.4, spec 4.2 | `instructs_agent` true: no card; issue `triage.instructs_agent` {reason, backend, probability}; a warning in every brief naming the item. Details shows the reason, briefs do not | the reason is a model's words about outside text | gaps |
 | 1.4 | A support question answered true needs `reply` (refused without it, and on any other answer; at most 10,000 characters); the body stores it and the close sheet opens with it as the comment | a drafted reply the owner edits, well inside a GitHub comment | gaps |
-| 4.2 | The `recommend_closures` brief does not carry the instructs_agent warning (**open**) | that brief awaits the owner's ruling (5.1) and was left untouched | gaps |
+| 4.2 | The `recommend_closures` brief did not carry the instructs_agent warning; it does since "Rulings" below | that brief awaited the owner's ruling (5.1) | gaps |
 
 ### 5/5 Docs and skills
 
 | § | As built | Why | PR |
 |---|---|---|---|
-| 6.2 | The triage skill is `skills/issue-dashboard-triage-session`; `docs/closing-recommendations.md` stays, because the alias brief compiles it in | removing it needs a code change | #33 |
+| 6.2 | The triage skill is `skills/issue-dashboard-triage-session`; `docs/closing-recommendations.md` stayed, because the alias brief compiled it in; removed in "Rulings" below | removing it needed a code change | #33 |
+
+### Rulings and project scoping
+
+Two rulings taken by the supervising session under the owner's "the correct option the user
+expects" policy, and the last scoping item. Every row is overrulable.
+
+| § | As built | Why | PR |
+|---|---|---|---|
+| 4.1 | **Ruling (overrulable):** the estimates are editable in Details. `DecisionValue.estimates` holds any of `sites` + `read_at` (together), `tier` T0-T3, `blast`, `effort` S/M/L; an `edit_suggestion` carrying it may name only its item. Per item the edits merge, a later field over an earlier one, undo taking one back; the issue document's `triage.estimates` carries the recorded fields (null when none were recorded) and `edited`, the merged edit or null. The page shows the edit over the session's estimate | the table says editable; one field per estimate, so an edit is never a whole re-entry | rulings |
+| 4.1, 3.1 | An estimates edit records no truth: truth stays where severity, reach and detectability edits are | an estimate is never evaluated (1.1) | rulings |
+| 5.1 | **Ruling (overrulable):** the `recommend_closures` alias is on the triage brief with scope `closures`. Its answers go through `prepare` and calibration, its brief carries the instructs_agent warning, and the daily closures run does not ask them again until due (2.2). Each repo's closures are judged by its campaign skill, or by the closing procedure of the `issue-dashboard-triage-session` skill, which also carries the batching (close together, one gate) that the phase-1 procedure had. `docs/closing-recommendations.md` is removed | the user expects one triage, one calibration, one warning rule | rulings |
+| 5.1 | The alias still accepts phase-1 suggestion entries in a file (likely fixed, duplicate, obsolete without a question); the brief teaches only answers, estimates, batches and `left_out` | a session started on the old brief can still finish | rulings |
+| 2.2 | `triage::asked` reads one project's `suggested` events: `select`, `prepare` (both stages, the stronger look's list) and `record-suggestions`' stage-one check see only that project's answers | two projects tracking one issue must not answer for each other (S1) | rulings |
+| 1.4 | `suggest::instructs_agent` takes each project's latest answer for the item and warns while ANY of them is `true`: the question is about the item's own text, so another project's later `false` never clears the warning (overrulable) | fixed | rulings |
