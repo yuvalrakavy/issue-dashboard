@@ -1339,6 +1339,40 @@ fn a_closure_s_commit_whose_lookup_fails_is_refused_not_trusted() {
     assert!(events(&tr.t, Kind::Suggested).is_empty());
 }
 
+/// GitHub serving every commit lookup with `answer`.
+fn commit_answer(answer: Value) -> Replay {
+    Replay::load(&fixtures().join("replay"))
+        .unwrap()
+        .with_hook(Box::new(move |req: &Request, recorded| match (req.name, recorded) {
+            ("commit", _) => Ok(answer.clone()),
+            (_, Some(r)) => Ok(r),
+            (name, None) => Err(Error::GitHub(format!("no recording for {name}"))),
+        }))
+}
+
+/// `object(expression:)` resolves any revision: a ref named like the hash resolves to another
+/// commit, which is not the commit the answer names.
+#[test]
+fn a_closure_s_commit_that_resolves_to_another_commit_is_refused() {
+    let (tr, file) = likely_fixed_on(STORE_COMMIT);
+    let other = json!({"data": {"repository": {"object": {"__typename": "Commit", "oid": "1".repeat(40)}}}});
+    let m = refused(record_via(&tr.t, "R1", file, 4, &commit_answer(other)));
+    assert!(m.contains(&format!("{STORE_COMMIT} is no commit of {STORE}")), "{m}");
+}
+
+/// An answer that carries errors is a failed lookup, even with a null object beside them.
+#[test]
+fn a_closure_s_commit_lookup_answered_with_errors_is_a_failure_not_a_miss() {
+    let (tr, file) = likely_fixed_on(STORE_COMMIT);
+    let partial = json!({"data": {"repository": {"object": null}},
+        "errors": [{"type": "RATE_LIMITED", "message": "API rate limit exceeded"}]});
+    let m = refused(record_via(&tr.t, "R1", file, 4, &commit_answer(partial)));
+    assert!(
+        m.contains("could not be checked (GitHub answered: API rate limit exceeded)"),
+        "{m}"
+    );
+}
+
 #[test]
 fn an_estimate_needs_a_reason_a_blast_level_and_one_entry_per_item() {
     let tr = tracked();

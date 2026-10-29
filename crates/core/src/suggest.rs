@@ -320,13 +320,18 @@ pub fn check_commits(gh: &dyn GitHub, wanted: &BTreeSet<(String, String)>) -> Co
                 };
                 match gh.graphql(&req) {
                     Err(e) => Err(e.to_string()),
-                    Ok(doc) => match doc["data"]["repository"].get("object") {
-                        Some(Value::Null) => Ok(false),
-                        Some(o) => Ok(o["__typename"] == "Commit"),
-                        None => Err(match doc["errors"][0]["message"].as_str() {
-                            Some(m) => format!("GitHub answered: {m}"),
-                            None => "GitHub's answer holds no repository".to_string(),
-                        }),
+                    // Errors win over a null object: a partial answer is a failed lookup.
+                    Ok(doc) => match (
+                        doc["errors"][0]["message"].as_str(),
+                        doc["data"]["repository"].get("object"),
+                    ) {
+                        (Some(m), _) => Err(format!("GitHub answered: {m}")),
+                        (None, Some(Value::Null)) => Ok(false),
+                        // The expression resolves any revision; a ref named like the hash
+                        // resolves to another commit, so the oid must be the one named.
+                        (None, Some(o)) => Ok(o["__typename"] == "Commit"
+                            && o["oid"].as_str().is_some_and(|oid| oid.starts_with(sha.as_str()))),
+                        (None, None) => Err("GitHub's answer holds no repository".to_string()),
                     },
                 }
             }
