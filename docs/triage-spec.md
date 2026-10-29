@@ -463,4 +463,4 @@ Where the code differs from this spec, the code is current. One row per divergen
 
 | § | As built | Why | PR |
 |---|---|---|---|
-| 6.2 | The triage skill is `skills/issue-dashboard-triage-session`; `docs/closing-recommendations.md` stays, because the alias brief compiles it in | removing it needs a code change | 5/5 |
+| 6.2 | The triage skill is `skills/issue-dashboard-triage-session`; `docs/closing-recommendations.md` stays, because the alias brief compiles it in | removing it needs a code change | #33 |
