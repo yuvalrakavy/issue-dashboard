@@ -69,6 +69,10 @@ pub struct Answer {
     /// The answer repeats a request in the reporter's own text (triage spec 4.1: marked).
     #[serde(default)]
     pub from_reporter: bool,
+    /// The drafted reply to the reporter, for support_question answered true: the owner's close
+    /// sheet opens with it (triage spec 1.4's support_question row).
+    #[serde(default)]
+    pub reply: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, serde::Serialize)]
@@ -364,6 +368,10 @@ pub fn record(
     let (l, _) = triage::answering_launch(tx.conn(), launch_id)?;
     let backend = triage::backend(&l.request.routing);
     let project = l.request.project.clone();
+    let stronger_below = config
+        .project(&project)?
+        .stronger_look_below
+        .unwrap_or(crate::config::STRONGER_LOOK_BELOW);
     let mut c = Check {
         conn: tx.conn(),
         launch: &l,
@@ -389,11 +397,20 @@ pub fn record(
         )),
         _ => {}
     }
+    // A stronger look answers the questions it was prepared and nothing else (2.5).
+    if l.request.kind == LaunchKind::StrongerLook
+        && !(input.suggestions.is_empty() && input.left_out.is_empty() && input.estimates.is_empty())
+    {
+        c.fail(format!(
+            "launch {launch_id} is a stronger look; it answers its prepared questions only, with no suggestions, left_out or estimates"
+        ));
+    }
     answers(
         &mut c,
         config,
         &project,
         &backend,
+        stronger_below,
         &input.answers,
         &mut seen,
         &mut pending,
@@ -633,6 +650,7 @@ fn answers(
     config: &ConfigSet,
     project: &str,
     backend: &str,
+    stronger_below: f64,
     answers: &[Answer],
     seen: &mut HashSet<(String, String)>,
     pending: &mut Vec<Pending>,
@@ -742,6 +760,15 @@ fn answers(
         if a.from_reporter {
             body["from_reporter"] = json!(true);
         }
+        // An answer the backend was unsure of needs a stronger look (2.5): marked unless it is
+        // the stronger look's own.
+        let top = calibrated.values().copied().fold(0.0_f64, f64::max);
+        if c.launch.request.kind != LaunchKind::StrongerLook
+            && triage::STRONGER_LOOK_DECISIONS.contains(&q.decision.as_str())
+            && top < stronger_below
+        {
+            body["needs_stronger_look"] = json!(true);
+        }
         if q.decision == "priority" {
             body["rubric_level"] = live.get("rubric_level").cloned().unwrap_or(Value::Null);
         }
@@ -762,6 +789,16 @@ fn answers(
         }
         // A closure answered true names its subject (1.4).
         let yes = answer == json!(true);
+        // A support question answered true carries the reply drafted for the reporter.
+        let reply = a.reply.as_deref().map(str::trim).filter(|r| !r.is_empty());
+        match (q.decision == "support_question" && yes, reply) {
+            (true, Some(r)) => body["reply"] = json!(r),
+            (true, None) => c.fail(format!(
+                "{what}: a support question answered true needs its drafted reply"
+            )),
+            (false, Some(_)) => c.fail(format!("{what}: only a support question answered true takes a reply")),
+            (false, None) => {}
+        }
         match (f.subject, yes) {
             (Some(Subject::Commit), true) => match a.commit.as_deref() {
                 None => c.fail(format!("{what}: likely_fixed needs the fixing commit")),
@@ -1199,23 +1236,81 @@ pub fn documents(conn: &Connection, config: &ConfigSet, project: &str) -> Result
     Ok(out)
 }
 
+/// The latest instructs_agent answer about `item` when it is true (spec 4.2, triage spec 1.4):
+/// the warning its Details and briefs carry. Its `reason`, `backend` and calibrated
+/// `probability` of true.
+pub(crate) fn instructs_agent(conn: &Connection, item: &str) -> Result<Option<Value>> {
+    let latest = ledger::events_of(conn, item, Kind::Suggested)?
+        .into_iter()
+        .rfind(|e| e.distinct["decision"] == "instructs_agent");
+    Ok(latest.and_then(|e| {
+        let s = &e.data["suggestion"];
+        (s["answer"] == json!(true)).then(|| {
+            json!({
+                "reason": s["reason"].as_str().unwrap_or_default(),
+                "backend": s["backend"],
+                "probability": s["probabilities"]["true"],
+            })
+        })
+    }))
+}
+
 /// The `triage` of each item's issue document (4.5): its latest severity, reach and
 /// detectability answers, each {answer, probabilities, backend, badge, suggestion, edited},
-/// `edited` the owner's Details edit (null: none); and its latest estimates.
+/// `edited` the owner's Details edit (null: none); its latest estimates; `stronger_look`, the
+/// latest answers that need a stronger look (2.5) while the item is open and the owner has not
+/// accepted, edited or dismissed them; and `instructs_agent`, the warning (spec 4.2).
 pub fn triage_details(conn: &Connection, project: &str, layers: &layers::Layers) -> Result<BTreeMap<String, Value>> {
     let badges = Badges::load(conn, project)?;
     let mut latest: BTreeMap<(String, String), crate::event::Event> = BTreeMap::new();
     for e in ledger::events_by_kind(conn, Kind::Suggested)? {
         let decision = e.distinct["decision"].as_str().unwrap_or_default().to_string();
         if e.data["project"] == project
-            && (layers::DETAIL_DECISIONS.contains(&decision.as_str()) || decision == "estimates")
+            && (layers::DETAIL_DECISIONS.contains(&decision.as_str())
+                || decision == "estimates"
+                || decision == "instructs_agent"
+                || triage::STRONGER_LOOK_DECISIONS.contains(&decision.as_str()))
         {
             latest.insert((e.subject.clone(), decision), e);
         }
     }
+    let dismissed: BTreeSet<String> = crate::decision::effective(conn, project)?
+        .into_iter()
+        .filter(|d| d.action == Action::DismissSuggestion)
+        .filter_map(|d| d.target.suggestion)
+        .collect();
     let mut out: BTreeMap<String, Value> = BTreeMap::new();
     for ((item, decision), e) in &latest {
         let s = &e.data["suggestion"];
+        let run = e.distinct["run_id"].as_str().unwrap_or_default();
+        if decision == "instructs_agent" {
+            if let Some(w) = instructs_agent(conn, item)? {
+                out.entry(item.clone()).or_insert_with(|| json!({}))["instructs_agent"] = w;
+            }
+            continue;
+        }
+        if triage::STRONGER_LOOK_DECISIONS.contains(&decision.as_str()) {
+            let id = doc_id(run, decision, item);
+            let open = observed(conn, item)?.is_some_and(|(_, open, _)| open);
+            if triage::needs_stronger_look(s) && open && !layers.acted.contains(&id) && !dismissed.contains(&id) {
+                let entry = out.entry(item.clone()).or_insert_with(|| json!({}));
+                let list = entry
+                    .as_object_mut()
+                    .expect("an object")
+                    .entry("stronger_look")
+                    .or_insert_with(|| json!([]));
+                list.as_array_mut().expect("an array").push(json!({
+                    "decision": decision,
+                    "answer": s["answer"],
+                    "confidence": s["probabilities"].as_object().map_or(0.0, |p| {
+                        p.values().filter_map(Value::as_f64).fold(0.0_f64, f64::max)
+                    }),
+                    "backend": s["backend"],
+                    "suggestion": id,
+                }));
+            }
+            continue;
+        }
         let entry = out.entry(item.clone()).or_insert_with(|| json!({}));
         if decision == "estimates" {
             let mut est = s["estimate"].clone();
@@ -1223,7 +1318,6 @@ pub fn triage_details(conn: &Connection, project: &str, layers: &layers::Layers)
             entry["estimates"] = est;
             continue;
         }
-        let run = e.distinct["run_id"].as_str().unwrap_or_default();
         let edited = layers.details.get(item).and_then(|d| d.get(decision)).cloned();
         entry[decision.as_str()] = json!({
             "answer": s["answer"],

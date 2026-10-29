@@ -1,0 +1,15 @@
+{
+  "id": "mt-0123456789abcdef01234567",
+  "project": "home",
+  "kind": "triage_key",
+  "period_days": 30,
+  "backend": "claude-opus-5-5@medium",
+  "decision": "type",
+  "question_hash": "3f2a9c",
+  "accepted": 41,
+  "bulk": 6,
+  "edited": 2,
+  "dismissed": 1,
+  "evaluated_accuracy": 0.86,
+  "drifting": false
+}

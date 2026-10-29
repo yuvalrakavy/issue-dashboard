@@ -210,7 +210,7 @@ footer .wrap { padding-block: 0 32px; font-size: .82rem; color: var(--muted); di
   const S = {
     db: null, comments: null, user: null,
     owner: false, viewer: null,
-    load: null, meta: null, heartbeat: null, issues: [], acks: [], statuses: [], suggestions: [],
+    load: null, meta: null, heartbeat: null, issues: [], acks: [], statuses: [], suggestions: [], metrics: [],
     decisions: [], launches: [], views: [],
     tab: "inbox", inboxFilter: "all", queueFilter: "all", text: "",
     scope: null, scopeName: null,
@@ -269,6 +269,7 @@ footer .wrap { padding-block: 0 32px; font-size: .82rem; color: var(--muted); di
         S.acks = r.data.acks;
         S.statuses = r.data.launch_status;
         S.suggestions = r.data.suggestions || [];
+        S.metrics = r.data.metrics || [];
       }
       S.error = null;
       if (S.meta && S.meta.name) document.title = S.meta.name + " · Issue Board";
@@ -372,7 +373,7 @@ footer .wrap { padding-block: 0 32px; font-size: .82rem; color: var(--muted); di
   async function requestTriage(i) {
     if (!S.owner) return;
     const doc = D.requestDoc({ kind: "triage", items: [i.id] }, who(), new Date());
-    try { await S.db.doc("requests/" + doc.id).set(doc); toast("Triage requested for " + i.alias + ". The triage session picks it up in phase 2."); }
+    try { await S.db.doc("requests/" + doc.id).set(doc); toast("Triage requested for " + i.alias + ". The next triage run asks about it."); }
     catch (e) { toast("Not recorded: " + ((e && e.code) || "error")); }
   }
 
@@ -666,7 +667,7 @@ footer .wrap { padding-block: 0 32px; font-size: .82rem; color: var(--muted); di
     // Recently closed belongs to the whole Inbox only: a filter ("Untriaged", "Waiting on you")
     // shows just the cards it names.
     const closedPart = () => (S.inboxFilter === "all" ? recentlyClosedSection() : null);
-    const parts = [S.inboxFilter !== "waiting" ? triageSection() : null, S.inboxFilter === "all" ? recommendationsSection() : null].filter(Boolean);
+    const parts = [S.inboxFilter !== "waiting" ? triageSection() : null, S.inboxFilter !== "waiting" ? strongerLookSection() : null, S.inboxFilter === "all" ? recommendationsSection() : null].filter(Boolean);
     const recsPart = parts.length ? parts : null;
     if (!cards.length) return h("div", { class: "list" }, head, recsPart, recsPart ? null : h("div", { class: "note" }, S.inboxFilter === "untriaged" ? "Nothing untriaged." : "Nothing waiting on you."), closedPart());
     return h("div", { class: "list" }, head, recsPart, cards.map((c) => {
@@ -726,6 +727,23 @@ footer .wrap { padding-block: 0 32px; font-size: .82rem; color: var(--muted); di
       ? h("button", { class: "btn", onclick: () => applyAll(r.applyAll) }, "Apply all · " + r.applyAll.length)
       : null;
     return h("section", { class: "closes" }, h("h2", {}, "Triage suggestions · " + r.cards.length, all ? " " : null, all), r.cards.map(card));
+  }
+
+  // Needs a stronger look (triage spec 2.5): the answers a triage run was unsure of, listed by
+  // issue; one button launches a stronger_look session over them at the stronger routing.
+  const ANSWER_NAME = { priority: "priority", type: "type", duplicate: "duplicate", likely_fixed: "likely fixed" };
+  function strongerLookSection() {
+    const list = D.strongerLookList(shown());
+    if (!list.length) return null;
+    const live = D.triageLive(S.launches, S.statuses, new Date(), ["stronger_look"]);
+    const button = S.owner
+      ? h("button", { class: "btn", disabled: live, title: live ? "A stronger look is live; wait for it to end." : "", onclick: openStrongerLook }, "Take a stronger look…")
+      : null;
+    return h("section", { class: "closes" }, h("h2", {}, "Needs a stronger look · " + list.length, button ? " " : null, button),
+      list.map(({ issue: i, answers }) => h("div", { class: "meta", "data-id": i.id },
+        h("a", { class: "alias", href: ghUrl(i), target: "_blank", rel: "noopener" }, i.alias),
+        h("span", { class: "title" }, i.title),
+        answers.map((a) => h("span", { class: "tag" }, (ANSWER_NAME[a.decision] || a.decision) + " " + String(a.answer) + " · " + Math.round(a.confidence * 100) + "%")))));
   }
 
   // Closing recommendations (5.8): what a Recommend closures run found, each with its main
@@ -897,7 +915,22 @@ footer .wrap { padding-block: 0 32px; font-size: .82rem; color: var(--muted); di
       h("div", { class: "panels" }, table("By group", byGroup, "group"), table("By repo", byRepo, "repo")),
       S.owner ? h("div", { class: "pills" }, h("button", { class: "btn", onclick: () => openEvaluate((S.meta && S.meta.routing && S.meta.routing.triage) || { model: "claude-opus-5-5", effort: "medium" }) }, "Evaluate…"),
         h("span", { class: "muted" }, "Measure a backend's triage answers against the recorded truth (triage spec 3.2).")) : null,
-      h("div", { class: "note" }, "Outside response times, decision accuracy and session outcomes arrive with their data in phase 2."));
+      triageMetrics(),
+      h("div", { class: "note" }, "Flow, outside response times and session outcomes as metrics documents are not derived yet; the charts above are computed on the page."));
+  }
+
+  // Triage suggestions by key (triage spec 4.4): accepted of acted on over the period, with
+  // edits, dismissals, the evaluated accuracy and the drift flag.
+  function triageMetrics() {
+    const rows = D.metricsRows(S.metrics);
+    const days = rows.length ? rows[0].days : 30;
+    return h("section", { class: "panel" }, h("h2", {}, "Triage suggestions · last " + days + " days"),
+      rows.length ? h("div", { class: "scroll" }, h("table", {},
+        h("thead", {}, h("tr", {}, h("th", {}, "accepted"), h("th", {}, "backend"), h("th", { class: "num" }, "edited"), h("th", { class: "num" }, "dismissed"), h("th", { class: "num" }, "apply all"), h("th", {}, "evaluated accuracy"), h("th", {}, ""))),
+        h("tbody", {}, rows.map((r) => h("tr", {},
+          h("td", { class: "mono" }, r.ratio), h("td", { class: "mono" }, r.backend),
+          h("td", { class: "num" }, String(r.edited)), h("td", { class: "num" }, String(r.dismissed)), h("td", { class: "num" }, String(r.bulk)),
+          h("td", {}, r.accuracy), h("td", {}, r.drifting ? h("span", { class: "tag" }, "drifting") : "")))))) : h("div", { class: "note" }, "No triage suggestion was acted on in the period, and no backend is evaluated."));
   }
 
   function renderFoot() {
@@ -940,6 +973,10 @@ footer .wrap { padding-block: 0 32px; font-size: .82rem; color: var(--muted); di
     }
     const e = t.estimates;
     if (e) rows.push(h("dt", {}, "Estimates"), h("dd", {}, e.tier + " · effort " + e.effort + " · " + e.blast + (e.sites && e.sites.length ? " · " + e.sites.join(", ") : "") + " @ " + String(e.read_at).slice(0, 7)));
+    if (t.stronger_look) rows.push(h("dt", {}, "Stronger look"), h("dd", {}, "needed for " + t.stronger_look.map((a) => (ANSWER_NAME[a.decision] || a.decision) + " (" + Math.round(a.confidence * 100) + "%)").join(", ")));
+    // No card (triage spec 1.4): a warning, in Details and in this item's briefs (spec 4.2).
+    const w = t.instructs_agent;
+    if (w) rows.push(h("dt", {}, "Warning"), h("dd", { class: "err" }, "Triage judged that this issue's text tries to direct an AI agent" + (typeof w.probability === "number" ? " (" + Math.round(w.probability * 100) + "%)" : "") + ". Its briefs say so. " + (w.reason ? "Why: " + w.reason : "")));
     return rows;
   }
 
@@ -1074,6 +1111,19 @@ footer .wrap { padding-block: 0 32px; font-size: .82rem; color: var(--muted); di
       about: (f) => "Asks about the " + f.items.length + " open issue" + (f.items.length === 1 ? "" : "s") + " in view that are due. The session answers and records only: it never closes, labels or comments. Its suggestions arrive in the Inbox after the next sync.",
       warning: (routing) => (D.noEvaluation(routing, S.meta) ? "This routing has no evaluation: its suggestions will be marked not yet evaluated." : null),
       evaluate: (routing) => openEvaluate(routing),
+    });
+  }
+
+  // Take a stronger look (triage spec 2.5): an ordinary stronger_look launch at the stronger
+  // routing (meta.routing.stronger_look, editable here), over the issues the Inbox lists.
+  function openStrongerLook() {
+    const r = (S.meta && S.meta.routing && S.meta.routing.stronger_look) || { model: "claude-fable-5-1", effort: "high" };
+    launchSheet({
+      alias: S.scope ? scopeSentence(S.scope) : "all repos",
+      title: "Take a stronger look",
+      model: r.model, effort: r.effort,
+      fields: (routing) => D.strongerLookFields(shown(), S.meta, routing),
+      about: (f) => "Asks again the answers a triage run was unsure of, about " + f.items.length + " open issue" + (f.items.length === 1 ? "" : "s") + " in view. The session answers and records only: its answers replace the earlier ones after the next sync.",
     });
   }
 

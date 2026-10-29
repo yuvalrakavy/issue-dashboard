@@ -468,6 +468,15 @@
               "type": "null"
             }
           ]
+        },
+        "reply": {
+          "description": "A support_question answered true: the reply drafted for the reporter, which the owner's close sheet opens with (triage spec 1.4).",
+          "type": "string",
+          "minLength": 1
+        },
+        "needs_stronger_look": {
+          "description": "A priority, type, duplicate or likely_fixed answer whose calibrated top probability was below stronger_look_below when recorded (triage spec 2.5); a stronger look's own answer never is.",
+          "const": true
         }
       },
       "allOf": [

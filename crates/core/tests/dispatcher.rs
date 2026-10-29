@@ -563,7 +563,7 @@ fn suggestions_are_refused_for_a_launch_that_is_not_a_recommender() {
         json!({"suggestions": [{"kind": "obsolete", "item": alias, "confidence": 0.5, "reason": "r"}]}),
     ));
     assert!(
-        m.contains("a fix launch; only triage and recommend_closures launches"),
+        m.contains("a fix launch; only triage, recommend_closures and stronger_look launches answer questions"),
         "{m}"
     );
 }

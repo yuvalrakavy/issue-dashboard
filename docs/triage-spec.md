@@ -445,7 +445,7 @@ Where the code differs from this spec, the code is current. One row per divergen
 | 4.3 | Apply all needs the card's own map's Bulk, the key's latest Bulk and no drift, for every part of a combined card | an unread error is the cost | #31 |
 | 4.5 | `doc-issue` also carries `type_source`, `areas_source`; a pre-phase suggestion has no `current` and no card | Details says "not written"; nothing to compare | #31 |
 | 4.1 | Estimates are display-only in Details (**open**: the table says editable) | 4.2 and 4.6 give the value three fields | #31 |
-| 4.4 | Trends metrics and the `instructs_agent` warning are not built | later | #31 |
+| 4.4 | Trends metrics and the `instructs_agent` warning are not built | later; built in "Spec gaps" below | #31 |
 
 ### 4/5 Launch (#32)
 
@@ -457,7 +457,22 @@ Where the code differs from this spec, the code is current. One row per divergen
 | 5.3 | The strongest model is `claude-fable-5-1`; `[routing.<kind>]` overrides; the warning keys on any evaluation of the backend | defaults must exist | #32 |
 | 2.2 | "Untriaged" is the page's definition; read-only members are excluded; **Request triage** makes an item due | one definition | #32 |
 | 5.1 | `recommend_closures` keeps its phase-1 brief (**open**) | the scoped brief drops its batching, which tests pin | #32 |
-| 2.5, 5.2 | No "needs a stronger look" item; the task is not registered, and whether it can message the dispatcher is unchecked | after approval | #32 |
+| 2.5, 5.2 | No "needs a stronger look" item (built in "Spec gaps" below); the task is not registered, and whether it can message the dispatcher is unchecked | after approval | #32 |
+
+### Spec gaps
+
+What phases 1-5 left unbuilt. Every row is overrulable.
+
+| § | As built | Why | PR |
+|---|---|---|---|
+| 2.5 | An answer is marked `needs_stronger_look` when its calibrated top probability is strictly below `stronger_look_below` (project config, default 0.6), a boolean closure included; a stronger look's own answers are never marked | the contract table's reading; no loop of stronger looks | gaps |
+| 2.5 | The list is the issue document's `triage.stronger_look`: the latest marked answers of an open item that the owner has not accepted, edited or dismissed | the Inbox and Details read one field | gaps |
+| 2.5 | A stronger look prepares in one stage (priority included, from the recorded stage-one answers); `--stage priority` is refused; it records answers only, no suggestions, `left_out` or estimates | "answers only those questions" | gaps |
+| 2.5 | `stronger_look` is not added to the CLI's `read_only()` list; the page still sends the `read-only` recipe | 5.1's pinned "unchanged" | gaps |
+| 4.4 | A metrics document per (backend, decision, question hash), `kind: "triage_key"`, beside the Trends shape in one `oneOf` schema; apply all's accepts count in `accepted` and apart as `bulk`; a key shows when the window holds a decision on one of its suggestions or the project holds an evaluation of it; a suggestion with no prepared question is not counted | "41 of 44" needs its base; `bulk` keeps bulk accepts visible | gaps |
+| 4.4 | Accuracy is the key's latest passing evaluation's | the drift baseline (3.5) | gaps |
+| 1.4, spec 4.2 | `instructs_agent` true: no card; issue `triage.instructs_agent` {reason, backend, probability}; a warning in every brief naming the item. Details shows the reason, briefs do not | the reason is a model's words about outside text | gaps |
+| 1.4 | A support question answered true needs `reply` (refused without it, and on any other answer); the body stores it and the close sheet opens with it as the comment | a drafted reply the owner edits | gaps |
 
 ### 5/5 Docs and skills
 

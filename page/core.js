@@ -647,10 +647,12 @@
 
   // What the close sheet opens with for a suggestion: the owner's Close is the approval.
   // A duplicate in another repo cannot be closed as one by number, so it closes as not planned
-  // with the other issue named in the comment.
+  // with the other issue named in the comment. A support question opens with the reply the
+  // triage session drafted for the reporter (triage spec 1.4), which the owner edits or keeps.
   function closePrefill(s) {
     if (s.kind === "likely_fixed") return { reason: "completed", comment: "Closed from the issue dashboard: fixed by " + s.commit + "." };
-    if (s.kind === "obsolete" || s.kind === "support_question") return { reason: "not_planned" };
+    if (s.kind === "support_question") return s.reply ? { reason: "not_planned", comment: s.reply } : { reason: "not_planned" };
+    if (s.kind === "obsolete") return { reason: "not_planned" };
     if (s.kind === "duplicate") {
       const other = String(s.related_alias || "");
       if (other && repoOf(other) === repoOf(s.alias)) return { reason: "duplicate", duplicateOf: other.split("#")[1] };
@@ -812,7 +814,7 @@
   }
 
   // Triage launches (triage spec 5.1). `recommend_closures` is the alias of scope `closures`.
-  const TRIAGE_KINDS = ["triage", "recommend_closures"];
+  const TRIAGE_KIND_LIST = ["triage", "recommend_closures"];
   const READ_ONLY_KINDS = ["triage", "recommend_closures", "stronger_look", "eval"];
   const MAX_TRIAGE_ITEMS = 40;
   const UNHEARD_REQUEST_HOURS = 24;
@@ -823,8 +825,10 @@
   // reported yet and that was sent. As in launchStates, the tracker's `requested` does not
   // outrank the page's record of a refused send: that launch never reached a dispatcher. Nor
   // does a page launch still `requested` a day after the page wrote it: the tracker stops
-  // counting it then (launch.rs UNHEARD_REQUEST_HOURS), and so does the button.
-  function triageLive(launches, statuses, now) {
+  // counting it then (launch.rs UNHEARD_REQUEST_HOURS), and so does the button. `kinds`
+  // (default the triage kinds) asks the same of other read-only kinds: ["stronger_look"].
+  function triageLive(launches, statuses, now, kinds) {
+    const TRIAGE_KINDS = kinds || TRIAGE_KIND_LIST;
     const status = new Map((statuses || []).map((s) => [s.launch, s]));
     const notSent = new Set((launches || []).filter((l) => l.not_sent).map((l) => l.not_sent.launch));
     const written = new Map((launches || []).filter((l) => l.created_at).map((l) => [l.id, Date.parse(l.created_at)]));
@@ -863,6 +867,52 @@
     };
   }
 
+  // Needs a stronger look (triage spec 2.5): the open issues in view whose issue document lists
+  // answers that need one (triage.stronger_look), oldest alias first, with those answers.
+  function strongerLookList(issues) {
+    return (issues || [])
+      .filter((i) => i.state === "open" && i.triage && Array.isArray(i.triage.stronger_look) && i.triage.stronger_look.length)
+      .map((i) => ({ issue: i, answers: i.triage.stronger_look }))
+      .sort((a, b) => (a.issue.alias < b.issue.alias ? -1 : a.issue.alias > b.issue.alias ? 1 : 0));
+  }
+
+  // The launch the list's button writes: an ordinary stronger_look launch over its issues at the
+  // stronger routing, capped at meta.max_triage_items, in the read-only pool.
+  function strongerLookFields(issues, meta, routing) {
+    const max = (meta && meta.max_triage_items) || MAX_TRIAGE_ITEMS;
+    const items = strongerLookList(issues).slice(0, max).map((x) => x.issue);
+    if (!items.length) return { error: "No open issue in view needs a stronger look." };
+    return {
+      fields: {
+        kind: "stronger_look",
+        items: items.map((i) => i.id),
+        aliases: items.map((i) => i.alias),
+        routing,
+        recipe: READ_ONLY_RECIPE,
+      },
+    };
+  }
+
+  // Trends' triage rows (triage spec 4.4): one per key document, "type: 41 of 44" accepted of
+  // acted on in the period, with edits, dismissals, bulk accepts, the evaluated accuracy and the
+  // drift flag. Other metrics documents (the Trends tab's own) are not rows.
+  function metricsRows(metrics) {
+    return (metrics || [])
+      .filter((m) => m.kind === "triage_key")
+      .map((m) => ({
+        decision: m.decision,
+        backend: m.backend,
+        ratio: m.decision + ": " + m.accepted + " of " + m.of,
+        edited: m.edited,
+        dismissed: m.dismissed,
+        bulk: m.bulk,
+        accuracy: typeof m.evaluated_accuracy === "number" ? Math.round(m.evaluated_accuracy * 100) + "%" : "not evaluated",
+        drifting: m.drifting === true,
+        days: m.period_days,
+      }))
+      .sort((a, b) => (a.decision + "|" + a.backend < b.decision + "|" + b.backend ? -1 : 1));
+  }
+
   // Evaluate… (triage spec 5.1, 3.2): an eval names no items; its routing is the backend measured.
   function evalLaunchFields(routing) {
     return { fields: { kind: "eval", items: [], aliases: [], recipe: READ_ONLY_RECIPE, routing } };
@@ -882,6 +932,7 @@
     sessionLines, inProgress, ownerNotice,
     dismissedSuggestions, suggestionCards, dismissSuggestionFields, closePrefill, fixLaunchFields, recommendFields, READ_ONLY_RECIPE,
     triageLive, fixLaunchStates, triageLaunchFields, evalLaunchFields, noEvaluation,
+    strongerLookList, strongerLookFields, metricsRows,
     actedSuggestions, answerText, triageCards, acceptFields, acceptCardFields, editFields, applyAllFields, detailsEditFields, rubricNote, secondOpinionNote,
   };
   root.IssueDashboard = api;

@@ -2,7 +2,8 @@
 //! transaction of the ledger, and written as `<root>/outbox/<project>/<seq>.json`.
 //!
 //! Phase 1 derives `meta`, `issues`, `acks`, `launch_status` and `suggestions` (a
-//! recommender's, [`suggest`]); `plans`, `forks` and `metrics` are written empty until the
+//! recommender's, [`suggest`]); `metrics` holds one document per triage key
+//! ([`crate::metrics`], triage spec 4.4); `plans` and `forks` are written empty until the
 //! steps that produce them exist. Every
 //! document is checked against its schema before the file is written.
 
@@ -705,7 +706,7 @@ pub fn derive(
         suggestions: suggest::documents(conn, config, project)?,
         plans: Vec::new(),
         forks: Vec::new(),
-        metrics: Vec::new(),
+        metrics: crate::metrics::documents(conn, project, taken_at)?,
     };
     validate(&out)?;
     Ok(out)
@@ -719,6 +720,7 @@ pub fn validate(out: &Outbox) -> Result<()> {
         ("doc-acks", &out.acks),
         ("doc-launch-status", &out.launch_status),
         ("doc-suggestion", &out.suggestions),
+        ("doc-metrics", &out.metrics),
     ] {
         for d in docs {
             schema::validate(stem, &format!("{stem} {}", d["id"]), d)?;
