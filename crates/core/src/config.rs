@@ -248,6 +248,19 @@ pub struct Project {
     /// How many days a closure answer holds before triage asks it again (triage spec 2.2).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub closure_recheck_days: Option<u32>,
+    /// How many days `eval refresh-history` reads back (triage spec 3.2); 730 when unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub eval_history_days: Option<u32>,
+    /// The most tuning items a replay asks about (3.2); 120 when unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub eval_tuning: Option<u32>,
+    /// The most held-out items a replay asks about (3.4); 120 when unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub eval_sample: Option<u32>,
+    /// Truth provenances every evaluation drops unless told otherwise (3.5), e.g.
+    /// `bulk_review:oct-22`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub eval_exclude: Option<Vec<String>>,
 }
 
 /// `.issue-dashboard.toml` at the root of a repo you own.

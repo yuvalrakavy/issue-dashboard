@@ -682,7 +682,7 @@ fn answers(
             "alias": o.source.alias,
             "decision": q.decision,
             "answer": answer,
-            "probabilities": triage::calibrate(&raw, q.map_id.as_deref())?,
+            "probabilities": triage::calibrate(conn, f.kind, &raw, q.map_id.as_deref())?,
             "raw": raw,
             "map_id": q.map_id,
             "question": q.id,
@@ -744,7 +744,7 @@ fn alias_of(conn: &Connection, id: &str) -> Result<Option<String>> {
 const CARDS: [&str; 5] = ["likely_fixed", "duplicate", "obsolete", "batch", "left_out"];
 
 /// The document id of the suggestion of `decision` about `subject` in run `run`.
-fn doc_id(run: &str, decision: &str, subject: &str) -> String {
+pub(crate) fn doc_id(run: &str, decision: &str, subject: &str) -> String {
     format!("sg-{}", &sha256_hex(&format!("{run}|{decision}|{subject}"))[..24])
 }
 

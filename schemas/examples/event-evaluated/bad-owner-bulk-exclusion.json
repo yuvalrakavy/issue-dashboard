@@ -1,0 +1,43 @@
+{
+  "seq": 40,
+  "time": "2026-10-29T09:00:00Z",
+  "kind": "evaluated",
+  "subject": "home/claude-opus-5-5@medium/type/3c9e1a7b2d4f",
+  "pred": 0,
+  "distinct": {
+    "manifest": "b5a3dd893f8f536e18f23e49076c5e87cc77a7a1b083bf488e72b882471a4a02",
+    "answers": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "identity": "0000000000000000000000000000000000000000000000000000000000000000",
+  "data": {
+    "project": "home",
+    "backend": "claude-opus-5-5@medium",
+    "decision": "type",
+    "question_hash": "3c9e1a7b2d4f",
+    "mode": "replay",
+    "map_id": "0f3a9c2e7b1d4a5c",
+    "uncalibratable": false,
+    "t": 1.35,
+    "n": 112,
+    "n_tuning": 80,
+    "accuracy": 0.875,
+    "ece": 0.062,
+    "ece_interval": [
+      0.041,
+      0.098
+    ],
+    "classwise_ece": {
+      "bug": 0.05,
+      "todo": 0.07
+    },
+    "false_alarm_rate": 0.04,
+    "exclusions": [
+      "owner_bulk"
+    ],
+    "bars": {
+      "evaluated": true,
+      "bulk": true
+    },
+    "unanswered": 0
+  }
+}

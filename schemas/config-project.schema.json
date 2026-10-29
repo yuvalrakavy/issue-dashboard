@@ -205,6 +205,30 @@
       "description": "How many days a closure answer (likely_fixed, duplicate, obsolete) holds before triage asks it again (triage spec 2.2); 14 when unset.",
       "type": "integer",
       "minimum": 1
+    },
+    "eval_history_days": {
+      "description": "How many days eval refresh-history reads back (triage spec 3.2); 730 when unset.",
+      "type": "integer",
+      "minimum": 1
+    },
+    "eval_tuning": {
+      "description": "The most tuning items a replay evaluation asks about (triage spec 3.2); 120 when unset.",
+      "type": "integer",
+      "minimum": 1
+    },
+    "eval_sample": {
+      "description": "The most held-out items a replay evaluation asks about (triage spec 3.4); 120 when unset.",
+      "type": "integer",
+      "minimum": 1
+    },
+    "eval_exclude": {
+      "description": "Truth provenances every evaluation drops by default (triage spec 3.5): filed, github_later, owner_accept, owner_edit or bulk_review:<name>.",
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^(filed|github_later|owner_accept|owner_edit|bulk_review:[A-Za-z0-9._-]+)$"
+      }
     }
   }
 }

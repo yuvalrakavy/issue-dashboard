@@ -1,0 +1,21 @@
+{
+  "seq": 30,
+  "time": "2026-10-29T08:30:00Z",
+  "kind": "truth_tag",
+  "subject": "LE_lADOAbCdEf5xYz34zwAAAAF",
+  "pred": 0,
+  "distinct": {
+    "name": "store-priority-2026-10-22"
+  },
+  "identity": "5d4177b1b79b001f8352be4f33c697760e9ca956f9f14053f5a9b0c6bbd3e2e3",
+  "data": {
+    "project": "home",
+    "name": "store-priority-2026-10-22",
+    "decision": "priority",
+    "item": "I_kwDOAbCdEf5xYz34",
+    "alias": "example-org/server#405",
+    "label": "p1",
+    "added": true,
+    "at": "2026-10-22T14:02:11Z"
+  }
+}

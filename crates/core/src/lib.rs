@@ -14,8 +14,10 @@ pub mod decision;
 pub mod derive;
 pub mod docs;
 pub mod error;
+pub mod eval;
 pub mod event;
 pub mod github;
+pub mod history;
 pub mod ingest;
 pub mod launch;
 pub mod ledger;
@@ -32,6 +34,7 @@ pub mod suggest;
 pub mod sync;
 pub mod translate;
 pub mod triage;
+pub mod truth;
 pub mod write;
 
 pub use error::{Error, Result};

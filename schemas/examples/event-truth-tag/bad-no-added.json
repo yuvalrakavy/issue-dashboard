@@ -1,0 +1,20 @@
+{
+  "seq": 30,
+  "time": "2026-10-29T08:30:00Z",
+  "kind": "truth_tag",
+  "subject": "LE_lADOAbCdEf5xYz34zwAAAAF",
+  "pred": 0,
+  "distinct": {
+    "name": "store-priority-2026-10-22"
+  },
+  "identity": "0000000000000000000000000000000000000000000000000000000000000000",
+  "data": {
+    "project": "home",
+    "name": "store-priority-2026-10-22",
+    "decision": "priority",
+    "item": "I_kwDOAbCdEf5xYz34",
+    "alias": "example-org/server#405",
+    "label": "p1",
+    "at": "2026-10-22T14:02:11Z"
+  }
+}
