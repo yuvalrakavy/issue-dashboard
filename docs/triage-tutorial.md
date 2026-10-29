@@ -96,8 +96,8 @@ the Inbox under **Triage suggestions**:
   level from what the rubric table gives for the session's severity and reach answers. You see the
   disagreement instead of it being averaged away.
 - **"The reporter's own request"** marks a suggestion that repeats what the issue's author asked for.
-- **Details** (open the item) holds severity, reach and detectability, each editable once the issue
-  has a suggestion for it, and the estimates (the code sites at the commit read, tier, blast, effort),
+- **Details** (open the item) holds severity, reach and detectability, each editable by you (a
+  dash until something has answered), and the estimates (the code sites at the commit read, tier, blast, effort),
   which are shown but have no editor and no card.
 
 ### Second opinions
@@ -107,7 +107,7 @@ Issue #447 is labelled **p3**. The session thinks p1, and after correction the p
 
 > **Second opinion · priority · 88% · evaluated**
 > Second opinion: p3 is 8% likely · 13% false alarms
-> [Set p1] [Edit…] [Dismiss]
+> [Change to p1] [Edit…] [Dismiss]
 
 A run shows at most 5, priority before type before area, strongest disagreement first. The card also
 shows how often this kind of second opinion has been wrong on held-out history (the *false-alarm
@@ -137,7 +137,8 @@ did not read those cards one by one. It never takes second opinions or closure c
 **Closures** keep their phase-1 cards (*Check and close…*, *Close as duplicate…*, *Close as not
 planned…*). Your close, or a dismissal **with** a reason, becomes truth for measuring them; a
 dismissal without a reason counts as nothing, since it might only mean "not now". A support question
-from an outside author opens your close sheet with a drafted reply.
+from an outside author opens your close sheet prefilled as not planned; the reply is yours to write
+(drafted replies are phase 3).
 
 ---
 
