@@ -149,3 +149,21 @@ Template:
 - improve: an identity of a stored artifact (history file, manifest, tag) gets a spec row "which
   request parameters must match to reuse it?" (F2, F3, F4, F5 were all reuse under a different
   key); and a fold over an ordered log gets a row "latest, or a set?" per decision kind (F1).
+
+## 2026-10-29 triage phase 4/5: launch (T2)
+- time: implement ~45%, tests and controls ~20%, gates and fixes ~35%; about 65 min from brief
+  to the round-2 fix commit; friction ~15 min (the exclamation-mark hook on test and page
+  edits, Python eating Rust string continuations in brief.rs, two context compactions).
+- catches: self-review=1 (the --launch reserve path skipped the author check until its RED
+  control) gate=round 1: 4 S3 + 3 S2 (Codex), round 2: 1 S2 + 1 S1 user=0 post-merge=n/a.
+  Biggest: a launch that is `requested` but that no dispatcher will ever take (an unwoken daily
+  request, a page send that failed) counted as live and stopped triage for good.
+- DG=n/a IG=53 post-merge=n/a
+- friction: the mutation finder spent its budget on build time (one worktree, ~14 min for 10
+  mutants); the vacuous-scenario hunt and the schema rows went unreached.
+- tier-call: right (T2).
+- delegation: mutation finder Sonnet medium (9 survivors, none a production bug); depth Codex
+  high (11 findings, 7 taken); confirming Sonnet medium (2 taken, 1 declined with evidence).
+- unconsolidated: 8
+- improve: every "refused while X is live" guard gets a spec row "what ends X if nobody acts?"
+  (findings 1 and 2 were both a live state with no exit but a dispatcher that never comes).
