@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/yuvalrakavy/issue-dashboard/schemas/event-suggested.schema.json",
   "title": "Ledger event: suggested",
-  "description": "The triage session recorded a suggestion; identity is triage run id + item + decision kind.",
+  "description": "The triage session recorded a suggestion; identity is triage run id + item + decision kind, and the prepared question an answer answers.",
   "allOf": [
     {
       "$ref": "common.schema.json#/$defs/eventEnvelope"
@@ -30,6 +30,10 @@
         "decision": {
           "type": "string",
           "minLength": 1
+        },
+        "question": {
+          "type": "string",
+          "pattern": "^q-[0-9a-f]{20}$"
         }
       }
     },

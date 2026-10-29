@@ -48,6 +48,9 @@
     },
     {
       "$ref": "event-write-failed.schema.json"
+    },
+    {
+      "$ref": "event-prepared.schema.json"
     }
   ]
 }

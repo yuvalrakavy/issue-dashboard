@@ -1,0 +1,10 @@
+# The `detectability` question (triage spec 1.1); `silent` raises the rubric one level (1.5).
+decision = "detectability"
+kind     = "choice"
+scope    = "full"
+answers  = ["silent", "visible"]
+question = """
+When this issue happens, does anyone notice?
+- silent: the failure produces no error and no visible sign; a wrong result looks right.
+- visible: an error, a crash, a log line or an obviously wrong screen shows it.
+"""

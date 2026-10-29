@@ -25,6 +25,7 @@ use issue_dashboard_core::root::{Options, parse_time};
 use issue_dashboard_core::sessions::SessionList;
 use issue_dashboard_core::suggest;
 use issue_dashboard_core::sync;
+use issue_dashboard_core::triage;
 use issue_dashboard_core::write::{GhIssues, IssueWriter};
 use issue_dashboard_core::{Error, Kind, Root, ledger};
 use serde_json::{Value, json};
@@ -107,8 +108,23 @@ enum Command {
         #[arg(long)]
         launch: String,
     },
-    /// Record a recommender's suggestions (5.8) from a JSON file; the whole file is refused
-    /// if any entry is.
+    /// Prepare a triage launch's blinded questions (triage spec 2.1) into a JSON file, and
+    /// record the `prepared` event that freezes them.
+    Prepare {
+        #[arg(long)]
+        launch: String,
+        /// The calling session's model and effort, as model@effort; refused unless it is the
+        /// launch's routing.
+        #[arg(long)]
+        session_model: String,
+        #[arg(long)]
+        out: PathBuf,
+        /// `priority` prepares stage 2 from the recorded stage-1 answers.
+        #[arg(long, value_enum, default_value = "first")]
+        stage: StageArg,
+    },
+    /// Record a launch's answers, estimates and suggestions (5.8, triage spec 2.1) from a JSON
+    /// file; the whole file is refused if any entry is.
     RecordSuggestions {
         #[arg(long)]
         launch: String,
@@ -216,6 +232,12 @@ enum EndStateArg {
     Landed,
     Stopped,
     Failed,
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum StageArg {
+    First,
+    Priority,
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -433,6 +455,7 @@ fn run(cli: Cli) -> anyhow::Result<Value> {
         Command::Unconfirm { .. } => "unconfirm",
         Command::RecordOutcome(_) => "record-outcome",
         Command::Brief { .. } => "brief",
+        Command::Prepare { .. } => "prepare",
         Command::RecordSuggestions { .. } => "record-suggestions",
         Command::Launches { .. } => "launches",
         Command::Cycle { .. } => "cycle",
@@ -555,13 +578,38 @@ fn run(cli: Cli) -> anyhow::Result<Value> {
             let cli = format!("{} --root {}", shell_word(&std::env::current_exe()?), shell_word(&dir));
             serde_json::to_value(root.read(|l| brief::brief_with(l.conn(), &config, &launch, &cli))?)?
         }
+        Command::Prepare {
+            launch,
+            session_model,
+            out,
+            stage,
+        } => {
+            let stage = match stage {
+                StageArg::First => triage::Stage::First,
+                StageArg::Priority => triage::Stage::Priority,
+            };
+            let prepared = root.mutate_with_clock(now, |tx| {
+                let config = ConfigSet::load(&dir)?;
+                triage::prepare(tx, &config, &launch, &session_model, stage)
+            })?;
+            // Written after the commit: a file never names questions the ledger does not hold.
+            std::fs::write(&out, serde_json::to_string_pretty(&prepared.file)? + "\n")
+                .with_context(|| out.display().to_string())?;
+            serde_json::to_value(prepared.report)?
+        }
         Command::RecordSuggestions { launch, file } => {
             let text = std::fs::read_to_string(&file).with_context(|| file.display().to_string())?;
             let input: suggest::Input = serde_json::from_str(&text)
                 .map_err(|e| Error::refused(format!("{}: not a suggestions file: {e}", file.display())))?;
+            // A closure's commit is looked up read-only before the ledger is locked (spec 1.4).
+            let wanted = root.read(|l| suggest::commits_named(l.conn(), &input))?;
+            let commits = match wanted.is_empty() {
+                true => suggest::Commits::default(),
+                false => suggest::check_commits(github()?.as_ref(), &wanted),
+            };
             serde_json::to_value(root.mutate_with_clock(now, |tx| {
                 let config = ConfigSet::load(&dir)?;
-                suggest::record(tx, &config, &launch, &input)
+                suggest::record(tx, &config, &launch, &input, &commits)
             })?)?
         }
         Command::Launches { live } => {

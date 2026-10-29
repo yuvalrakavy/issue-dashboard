@@ -1,0 +1,8 @@
+# The `obsolete` question (triage spec 1.1): a closure, asked in both scopes.
+decision = "obsolete"
+kind     = "boolean"
+scope    = "both"
+question = """
+Has this issue been overtaken: the code, the design or the need it names no longer exists,
+so there is nothing left to do? Say in the reason what overtook it.
+"""

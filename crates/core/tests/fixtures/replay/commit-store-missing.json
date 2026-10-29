@@ -1,0 +1,15 @@
+{
+  "name": "commit",
+  "variables": {
+    "owner": "yuvalrakavy",
+    "name": "Store",
+    "rev": "0000000deadbeef"
+  },
+  "response": {
+    "data": {
+      "repository": {
+        "object": null
+      }
+    }
+  }
+}

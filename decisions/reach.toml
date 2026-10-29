@@ -1,0 +1,14 @@
+# The `reach` question (triage spec 1.1; points in priority.toml's rubric, 1.5). Spec 6.7's
+# likelihood is folded into reach.
+decision = "reach"
+kind     = "choice"
+scope    = "full"
+answers  = ["one_corner", "one_subsystem", "most", "all"]
+question = """
+How much of the project does this issue touch, and how often will people meet it?
+- one_corner: one rarely used path.
+- one_subsystem: one subsystem, or a path many people use now and then.
+- most: most of the project, or a path nearly everyone uses.
+- all: everything, every time.
+The input's outside demand (distinct outside people who commented or reacted) is evidence of reach.
+"""

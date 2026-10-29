@@ -40,6 +40,7 @@ pub const SCHEMAS: &[(&str, &str)] = schemas![
     "event-observed",
     "event-outbox",
     "event-outcome",
+    "event-prepared",
     "event-request",
     "event-suggested",
     "event-view-saved",

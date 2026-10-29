@@ -1,0 +1,27 @@
+# The `priority` question and the rubric table (triage spec 1.1, 1.5). Priority is asked in
+# stage 2 (2.1), from severity, reach and detectability as recorded, so their files are part
+# of its question hash (1.3), as is this rubric.
+decision = "priority"
+kind     = "choice"
+scope    = "full"
+answers  = ["p0", "p1", "p2", "p3"]
+reads    = ["severity", "reach", "detectability"]
+question = """
+What priority should this issue have?
+- p0: drop everything.
+- p1: next, ahead of all routine work.
+- p2: routine work, in its turn.
+- p3: someday, or when it is on the way.
+The input holds the recorded severity, reach and detectability answers with their
+probabilities, the rubric table and the level the rubric gives. Depart from the rubric only
+for a reason you can state.
+"""
+
+# points = severity points x reach points; the first level whose `at_least` the points reach,
+# else `otherwise`; `silent` raises the result `silent_raises` levels (never above p0).
+[rubric]
+severity  = { cosmetic = 1, degraded = 3, wrong_result = 8, hang_or_data_loss = 13 }
+reach     = { one_corner = 1, one_subsystem = 2, most = 3, all = 5 }
+levels    = [{ at_least = 26, level = "p0" }, { at_least = 9, level = "p1" }, { at_least = 3, level = "p2" }]
+otherwise = "p3"
+silent_raises = 1

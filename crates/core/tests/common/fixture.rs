@@ -11,6 +11,7 @@ use chrono::{DateTime, Duration, Utc};
 use issue_dashboard_core::github::{GitHub, Replay, Request};
 use issue_dashboard_core::ingest::Pages;
 use issue_dashboard_core::root::{Options, parse_time};
+use issue_dashboard_core::suggest;
 use issue_dashboard_core::{Error, Result, Root};
 use serde_json::{Value, json};
 
@@ -194,4 +195,28 @@ pub fn root_of(t: &TempRoot) -> &Root {
 /// Calls a [`GitHub`] through a reference, for passing a `Replay` where a trait object is needed.
 pub fn dyn_gh(r: &Replay) -> &dyn GitHub {
     r
+}
+
+/// A recorded Store commit, and one Store does not have (`commit-store-*.json`).
+pub const STORE_COMMIT: &str = "c96bdcb";
+pub const MISSING_COMMIT: &str = "0000000deadbeef";
+
+/// GitHub for `record-suggestions`: the recorded commit lookups, and a commit no recording
+/// names found, in the recorded shape (the fixtures' made-up hashes are not real commits).
+pub fn commit_lookup() -> Replay {
+    Replay::load(&fixtures().join("replay")).unwrap().with_hook(Box::new(
+        |req: &Request, recorded: Option<Value>| match (req.name, recorded) {
+            (_, Some(r)) => Ok(r),
+            ("commit", None) => Ok(json!({
+                "data": {"repository": {"object": {"__typename": "Commit", "oid": req.variables["rev"]}}}
+            })),
+            (name, None) => Err(Error::GitHub(format!("no recording for {name}"))),
+        },
+    ))
+}
+
+/// What GitHub holds of the commits `input` names: the lookup `record-suggestions` runs first.
+pub fn commits_for(t: &TempRoot, input: &suggest::Input, gh: &dyn GitHub) -> suggest::Commits {
+    let wanted = t.root.read(|l| suggest::commits_named(l.conn(), input)).unwrap();
+    suggest::check_commits(gh, &wanted)
 }
