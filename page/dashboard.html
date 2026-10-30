@@ -44,6 +44,7 @@ h1, h2, h3 { text-wrap: balance; margin: 0; }
 .strip .wrap { padding-block: 14px 12px; display: grid; gap: 10px; }
 .titlerow { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
 .titlerow h1 { font-size: 1.35rem; font-weight: 700; }
+.find { flex: 1 1 14rem; max-width: 22rem; min-height: 30px; padding: 2px 12px; border: 1px solid var(--line); border-radius: 999px; background: var(--panel-2); color: inherit; font: inherit; font-size: .88rem; }
 .chip { display: inline-flex; align-items: center; gap: 6px; min-height: 30px; padding: 2px 10px; border: 1px solid var(--line); border-radius: 999px; background: var(--panel-2); font-size: .88rem; cursor: pointer; }
 .chip.on { border-color: var(--accent); background: var(--accent-soft); }
 .fresh { font-size: .9rem; color: var(--muted); background: none; border: 0; padding: 0; text-align: left; cursor: pointer; min-height: 28px; }
@@ -167,6 +168,7 @@ footer .wrap { padding-block: 0 32px; font-size: .82rem; color: var(--muted); di
     <div class="titlerow">
       <h1 id="name">Issue board</h1>
       <span id="scope"></span>
+      <input id="filter" class="find" type="search" placeholder="Find #416 or title  ( / )" aria-label="Find an issue by number or title" autocomplete="off">
     </div>
     <div class="freshrow"><button class="fresh" id="fresh" aria-expanded="false">Loading the latest snapshot…</button><button class="btn quiet" id="syncnow" hidden>Sync now</button></div>
     <div class="repotimes" id="repotimes" hidden></div>
@@ -427,7 +429,7 @@ footer .wrap { padding-block: 0 32px; font-size: .82rem; color: var(--muted); di
     if (S.load && S.load.status === "partial") kids.push(h("div", { class: "err" }, "Partial snapshot: " + (S.load.why || "a collection came back short") + ". Reload the page in a minute."));
     if (!S.load && !S.error) kids.push(h("div", { class: "note" }, "Loading the latest snapshot…"));
     else if (S.load && S.load.status === "empty") kids.push(h("div", { class: "note" }, "No snapshot yet: the sync job has not published one to this page."));
-    else if (S.load) kids.push(S.tab === "inbox" ? renderInbox() : S.tab === "queue" ? renderQueue() : renderTrends());
+    else if (S.load) kids.push(S.text.trim() ? renderSearch() : S.tab === "inbox" ? renderInbox() : S.tab === "queue" ? renderQueue() : renderTrends());
     view.replaceChildren(...kids);
     renderFoot();
     // The menu opens rightward from its button; near the right edge it opens leftward instead.
@@ -503,6 +505,9 @@ footer .wrap { padding-block: 0 32px; font-size: .82rem; color: var(--muted); di
 
   function go(tab, filter) {
     S.tab = tab;
+    // A tab shows that tab: picking one ends a search.
+    S.text = "";
+    $("filter").value = "";
     if (tab === "inbox") S.inboxFilter = filter;
     if (tab === "queue") S.queueFilter = filter;
     S.sel = 0;
@@ -816,26 +821,11 @@ footer .wrap { padding-block: 0 32px; font-size: .82rem; color: var(--muted); di
     const list = shown();
     const q = D.queue(list, D.inbox(list));
     const f = S.queueFilter;
-    const text = S.text.toLowerCase();
     const keep = (i) =>
-      (f === "all" || (f === "p0" && i.priority && i.priority.value === "p0") || (f === "over" && i.limit_breached) || (f === "pr" && i.kind === "pull_request") || (f === "progress" && D.inProgress(i)) || i.type === f) &&
-      (!text || (i.title + " " + i.alias).toLowerCase().includes(text));
+      f === "all" || (f === "p0" && i.priority && i.priority.value === "p0") || (f === "over" && i.limit_breached) || (f === "pr" && i.kind === "pull_request") || (f === "progress" && D.inProgress(i)) || i.type === f;
     const pill = (k, label) => h("button", { class: "chip" + (f === k ? " on" : ""), onclick: () => { S.queueFilter = k; S.sel = 0; render(); } }, label);
-    const search = h("input", { id: "filter", type: "search", placeholder: "Filter by title or number  ( / )", value: S.text, "aria-label": "Filter", oninput: (e) => { S.text = e.target.value; renderKeepFocus(); } });
-    const head = h("div", { class: "pills" }, pill("all", "All"), pill("p0", "p0"), pill("over", "Over time limit"), pill("progress", "In progress"), pill("bug", "Bugs"), pill("todo", "Todo"), pill("decision", "Decisions"), pill("docs", "Docs"), pill("pr", "Pull requests"), search);
-    const row = (i) => {
-      const line = decisionLine(i);
-      const st = fixStates[i.id];
-      const launchable = S.owner && i.kind === "issue" && (!st || st.state === "not_sent");
-      const noRecipe = launchable ? D.fixLaunchFields([i], repoInfo(D.repoOf(i.alias)), null).error : null;
-      return h("div", { class: "row", tabindex: "0", "data-nav": "1", "data-gh": ghUrl(i), "data-id": i.id },
-        h("div", { class: "main" },
-          h("div", { class: "head" }, h("a", { class: "alias", href: ghUrl(i), target: "_blank", rel: "noopener" }, i.alias), h("span", { class: "title" }, i.title)),
-          itemMeta(i, states), sessionsBlock(i, false), line, picker(i)),
-        h("div", { class: "actions" },
-          launchable ? h("button", { class: "btn primary", "data-main": "1", disabled: !!noRecipe, title: noRecipe || null, onclick: () => openLaunch([i]) }, "Launch…") : h("a", { class: "btn", "data-main": "1", href: ghUrl(i), target: "_blank", rel: "noopener" }, "Open ↗"),
-          moreMenu(i, ownerExtras(i))));
-    };
+    const head = h("div", { class: "pills" }, pill("all", "All"), pill("p0", "p0"), pill("over", "Over time limit"), pill("progress", "In progress"), pill("bug", "Bugs"), pill("todo", "Todo"), pill("decision", "Decisions"), pill("docs", "Docs"), pill("pr", "Pull requests"));
+    const row = (i) => queueRow(i, states, fixStates);
     const sections = [];
     for (const l of q.levels) {
       const items = l.items.filter(keep);
@@ -850,11 +840,45 @@ footer .wrap { padding-block: 0 32px; font-size: .82rem; color: var(--muted); di
       sections.length ? sections : h("div", { class: "note" }, "Nothing matches."));
   }
 
-  function renderKeepFocus() {
-    const pos = $("filter") ? $("filter").selectionStart : null;
-    render();
-    const f = $("filter");
-    if (f) { f.focus(); if (pos != null) f.setSelectionRange(pos, pos); }
+  // One Queue row; search results use it too, so a Launch from either is the same launch.
+  function queueRow(i, states, fixStates, tags) {
+    const line = decisionLine(i);
+    const st = fixStates[i.id];
+    const launchable = S.owner && i.kind === "issue" && i.state === "open" && (!st || st.state === "not_sent");
+    const noRecipe = launchable ? D.fixLaunchFields([i], repoInfo(D.repoOf(i.alias)), null).error : null;
+    return h("div", { class: "row", tabindex: "0", "data-nav": "1", "data-gh": ghUrl(i), "data-id": i.id },
+      h("div", { class: "main" },
+        h("div", { class: "head" }, h("a", { class: "alias", href: ghUrl(i), target: "_blank", rel: "noopener" }, i.alias), h("span", { class: "title" }, i.title), tags || null),
+        itemMeta(i, states), sessionsBlock(i, false), line, picker(i)),
+      h("div", { class: "actions" },
+        launchable ? h("button", { class: "btn primary", "data-main": "1", disabled: !!noRecipe, title: noRecipe || null, onclick: () => openLaunch([i]) }, "Launch…") : h("a", { class: "btn", "data-main": "1", href: ghUrl(i), target: "_blank", rel: "noopener" }, "Open ↗"),
+        // Priority, triage and Close are for open issues; a closed one reaches a row only from search.
+        moreMenu(i, i.state === "open" ? ownerExtras(i) : [])));
+  }
+
+  // The search box's results, in place of the tab while it has text. It searches every
+  // issue the page holds, whatever the tab, its filter or the Show scope.
+  function renderSearch() {
+    const states = D.launchStates(S.launches, S.statuses);
+    const fixStates = D.fixLaunchStates(S.launches, S.statuses);
+    const repos = ((S.meta && S.meta.repos) || []).map((r) => r.repo);
+    const r = D.search(S.issues, S.text, repos);
+    const clear = h("button", { class: "btn quiet", onclick: () => { S.text = ""; $("filter").value = ""; S.sel = 0; render(); } }, "Clear ✕");
+    const what = r.kind === "number" ? "#" + r.number : "“" + S.text.trim() + "”";
+    const head = h("div", { class: "pills" }, h("span", { class: "muted" }, r.items.length + (r.items.length === 1 ? " result" : " results") + " for " + what), clear);
+    if (!r.items.length) {
+      const gh = r.kind === "number" && r.repo ? h("a", { class: "btn", href: "https://github.com/" + r.repo + "/issues/" + r.number, target: "_blank", rel: "noopener" }, "Open on GitHub ↗") : null;
+      return h("div", { class: "list" }, head, h("div", { class: "note" }, (r.kind === "number" ? what + " is not on the board." : "Nothing matches " + what + "."), " ", gh));
+    }
+    // A closed issue's state already shows in its meta line; these say what else hides it.
+    const tags = (i) => [
+      D.dismissed(i, S.decisions, S.acks) ? h("span", { class: "tag" }, "dismissed") : null,
+      !D.inScope(D.repoOf(i.alias), S.scope, groups()) ? h("span", { class: "tag" }, "outside Show") : null,
+    ];
+    // Each row costs a scan of the decisions, and one letter can match every issue: show the first ones.
+    const cap = 50;
+    const more = r.items.length > cap ? h("div", { class: "note" }, (r.items.length - cap) + " more: add a word or a number to narrow it.") : null;
+    return h("div", { class: "list" }, head, h("section", { class: "level" }, r.items.slice(0, cap).map((i) => queueRow(i, states, fixStates, tags(i)))), more);
   }
 
   function renderTrends() {
@@ -938,7 +962,7 @@ footer .wrap { padding-block: 0 32px; font-size: .82rem; color: var(--muted); di
     if (S.load && S.load.generation) parts.push(h("span", {}, "Snapshot " + S.load.generation + (S.meta ? " · taken " + fmtDay(S.meta.taken_at) + " " + fmtTime(S.meta.taken_at) : "")));
     parts.push(h("span", {}, S.owner ? "You own this page: your actions are recorded." : "Read only: actions are recorded by the page's owner."));
     if (S.owner && S.viewer) parts.push(h("span", {}, "Your page user id: ", h("span", { class: "mono", style: "user-select:all" }, S.viewer)));
-    parts.push(h("span", {}, "Keys: j/k move · a main action · o open on GitHub · u undo · / filter"));
+    parts.push(h("span", {}, "Keys: j/k move · a main action · o open on GitHub · u undo · / find"));
     $("foot").replaceChildren(...parts);
   }
 
@@ -1240,6 +1264,12 @@ footer .wrap { padding-block: 0 32px; font-size: .82rem; color: var(--muted); di
     r.hidden = !r.hidden;
     $("fresh").setAttribute("aria-expanded", String(!r.hidden));
   });
+  // The search box lives in the strip, outside what render() replaces, so it keeps focus.
+  $("filter").addEventListener("input", (e) => { S.text = e.target.value; S.sel = 0; render(); });
+  $("filter").addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && e.target.value) { e.target.value = ""; S.text = ""; S.sel = 0; render(); e.stopPropagation(); e.preventDefault(); }
+    else if (e.key === "Enter") { const first = document.querySelector("#view [data-nav]"); if (first) { first.focus(); e.preventDefault(); } }
+  });
   document.addEventListener("keydown", (e) => {
     if (dlg.open || e.metaKey || e.ctrlKey || e.altKey) return;
     if (e.target.matches("input, select, textarea")) { if (e.key === "Escape") e.target.blur(); return; }
@@ -1262,9 +1292,9 @@ footer .wrap { padding-block: 0 32px; font-size: .82rem; color: var(--muted); di
       const b = [...cur.querySelectorAll("button")].find((x) => x.textContent === "Undo");
       if (b) { b.click(); e.preventDefault(); }
     } else if (e.key === "/") {
-      if (S.tab !== "queue") go("queue", S.queueFilter);
-      const f = $("filter");
-      if (f) { f.focus(); e.preventDefault(); }
+      $("filter").focus();
+      $("filter").select();
+      e.preventDefault();
     } else if (e.key === "Escape" && S.menu) { S.menu = null; render(); }
   });
 

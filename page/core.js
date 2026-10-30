@@ -140,6 +140,34 @@
     return { selected, options };
   }
 
+  // The search box: a query that is only a number (`416`, `#416`, `Store#416`,
+  // `owner/Store#416`) matches the issue number exactly, narrowed to the repo it names;
+  // any other text matches when every word is in the title or alias. It searches every
+  // issue the page holds, closed ones included; open ones come first. `repo` is the full
+  // name a repo prefix resolves to among `repos`, for a GitHub link when nothing is found.
+  function search(issues, query, repos) {
+    const q = String(query || "").trim();
+    // A repo and `#` with no number yet (`#`, `Store#`) is a number query still being typed.
+    if (!q || /^[^\s#]*\s*#$/.test(q)) return { kind: "empty", items: [] };
+    const openFirst = (list) => list.filter(isOpen).concat(list.filter((i) => !isOpen(i)));
+    const m = /^(?:([^\s#]*)\s*#\s*)?(\d+)$/.exec(q);
+    if (m) {
+      const number = Number(m[2]);
+      const prefix = (m[1] || "").toLowerCase();
+      const names = (r) => (prefix.includes("/") ? r.toLowerCase() === prefix : r.split("/").pop().toLowerCase() === prefix);
+      const fits = (r) => !prefix || names(r);
+      const items = (issues || []).filter((i) => Number(String(i.alias).split("#")[1]) === number && fits(repoOf(i.alias)));
+      const known = prefix ? (repos || []).filter(names) : [];
+      return { kind: "number", number, repo: known.length === 1 ? known[0] : null, items: openFirst(items) };
+    }
+    const words = q.toLowerCase().split(/\s+/);
+    const items = (issues || []).filter((i) => {
+      const hay = (String(i.title || "") + " " + String(i.alias)).toLowerCase();
+      return words.every((w) => hay.includes(w));
+    });
+    return { kind: "text", items: openFirst(items) };
+  }
+
   function showChoice(value) {
     if (value === "all") return { kind: "all" };
     const m = /^(repo|group):(.+)$/.exec(String(value));
@@ -995,7 +1023,7 @@
 
   const api = {
     PRIORITIES, COLLECTIONS, LIST_LIMIT, CLOSE_REASONS, ACK_DAYS,
-    loadGeneration, follower, ackHorizon, threadDoc, repoOf, inScope, showOptions, showChoice, tiles, inbox, queue, decisionStates, synced, syncedRepo, nextRunMinutes,
+    loadGeneration, follower, ackHorizon, threadDoc, repoOf, inScope, showOptions, showChoice, search, tiles, inbox, queue, decisionStates, synced, syncedRepo, nextRunMinutes,
     trends, launchStates, newId, decisionDoc, launchDoc, notSentDoc, viewDoc, requestDoc, syncFields, syncNote, launch,
     closable, closeComment, closeFields, describeClose, pendingClose, dismissed, recentlyClosed, dismissFields,
     sessionLines, inProgress, ownerNotice,
