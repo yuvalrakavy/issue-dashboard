@@ -232,9 +232,9 @@ Template:
   friction ~10 min (a synthetic keydown on `document` threw in the fixture, a test artifact; the
   Playwright screenshot root).
 - catches: self-review=1 (`41` matched #410 as a substring before the exact-number rule)
-  gate=reader: 2 S2 + 1 S1 user=0 post-merge=1 (the republish found the triage page, #31-#35,
+  gate=reader: 1 S2 + 2 S1 user=0 post-merge=1 (the republish found the triage page, #31-#35,
   had never been published; v10 put it live with the search box).
-- DG=n/a IG=7 post-merge=0
+- DG=n/a IG=5 post-merge=0
 - tier-call: right (T1: one page feature on an existing harness).
 - delegation: one reader, Sonnet medium (found the closed-row actions, which no test drove).
 - unconsolidated: 12
