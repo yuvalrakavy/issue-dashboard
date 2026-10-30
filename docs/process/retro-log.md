@@ -240,3 +240,15 @@ Template:
 - unconsolidated: 12
 - improve: a merged page PR is not live until republished, so the merge step for a `page/`
   change names the republish, and the publish checks that the live `core.js` hash equals `main`'s.
+
+## Consolidated through 2026-10-30
+All 12 entries (first consolidation). Added `docs/process/hazards.md` (the 12 "improve" rows as
+three families: end states, freshness and keys, one source; read when writing a memo or spec,
+and handed to the depth reader), `scripts/mutate.py` (author-written negative controls: one
+targeted test command per mutant, the identity run first, a time budget; replaces the Sonnet
+mutation agent, which found no production bug in eight runs), the `/issues-dashboard` trigger
+"right after merging a `page/` PR", and `CLAUDE.md` (harness traps and the two pointers).
+Always-loaded bytes: +1374 (`CLAUDE.md`, new) and +~200 (the skill description), against -145
+retired (the user-level skill's mutation red-flag row, a duplicate of its deep-gate text):
+net about +1.4 KB, over the ratchet. Accepted by the owner. Next retro: retire it by moving
+the harness traps to a hook message or the build-brief template.
