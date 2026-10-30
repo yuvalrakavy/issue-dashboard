@@ -53,8 +53,14 @@ which prints one of three results:
 
 It is refused while a triage launch is live. The task never answers a question: a scheduled task
 cannot pin its model, so it only records the request and messages the dispatcher session, which
-reserves it and starts the session at the routing. (The task is defined but not registered; you
-register it from that file.)
+reserves it at the routing. The dispatcher cannot start that session itself: the app refuses a
+session start from a turn another session triggered, so it leaves a card in the dispatcher session,
+and the triage runs once you start the card. Until then the launch holds the read-only slot.
+
+You register the task from that file. Registering does not save a model or a permission mode, so
+set both in the app's settings for the task afterwards: Haiku at low effort, and a permission mode
+that runs its `issue-dashboard` and session-tool calls without asking (auto). Without a mode, the
+06:00 run stops at its first prompt and records nothing until you answer it.
 
 **What the session does.** It runs `prepare --session-model`, which refuses to continue unless the
 session really runs the launch's routing, so its answers are never filed under the wrong model. It
