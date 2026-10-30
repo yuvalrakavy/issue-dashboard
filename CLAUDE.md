@@ -21,4 +21,5 @@ Spec: `docs/` (chapter 10 governs all state). Process: `docs/process/` — appen
 - cargo, git, gh and pushes in this tree run unsandboxed: the sandbox cannot write the
   worktree or the cargo lock. Never run `cargo fmt`.
 - A merged `page/` change is not live until the page is republished: run `/issues-dashboard`
-  right after the merge (its step 4 finds a stale page and asks the dispatcher to republish).
+  right after the merge (its step 4 finds a stale page and asks the dispatcher to republish;
+  the 06:00 triage task runs the same check daily).

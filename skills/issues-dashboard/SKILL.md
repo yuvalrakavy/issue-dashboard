@@ -63,11 +63,10 @@ does not stop the others.
    Either way, `BIN --root ROOT launches --requested` lists a daily request no dispatcher has
    taken: report each row (a launch waiting on a dispatcher that is missing or too low).
 4. **Page build.** `Artifact` `read` with `url: PAGE`, `paths: ["index.html", "core.js"]` and
-   `out_dir: WORK/page` (the files go to disk, not into the conversation). Current when
-   `WORK/page/core.js` is byte-identical to `REPO/page/core.js` and `REPO/page/dashboard.html`
-   appears verbatim inside `WORK/page/index.html` (the app wraps the page in its own skeleton):
-   `python3 -I -c 'import sys; a, b = (open(p).read() for p in sys.argv[1:]); print(a in b)' REPO/page/dashboard.html WORK/page/index.html`.
-   Stale: the dispatcher republishes it (step 6).
+   `out_dir: WORK/page` (the files go to disk, not into the conversation), then
+   `python3 -I REPO/scripts/page-current.py WORK/page`: `current`, or `stale: …` when the saved
+   page is not `main`'s `page/core.js` and `page/dashboard.html`.
+   Stale: the dispatcher republishes it (step 6). The daily triage task runs the same check.
 
 ## The dispatcher
 
