@@ -48,7 +48,7 @@ does not stop the others.
    less than three `sync_interval_minutes` ago. Otherwise report its status and summary.
    The sync run is the configuration check: it loads every layer and reads every repo.
 3a. **Daily triage (optional).** The scheduled task `issue-dashboard-triage` (defined in
-   `REPO/skills/issue-dashboard-triage/scheduled-task.md`: Haiku, low effort, 06:00 daily) runs
+   `REPO/skills/issue-dashboard-triage/scheduled-task.md`: Haiku, 06:00 daily) runs
    `triage-request`, which records a `schedule`-authored triage launch request, and wakes the
    dispatcher; the dispatcher reserves it at the project's triage routing and, since a turn another
    session triggered may not start a session, leaves a card the owner starts.
@@ -56,7 +56,8 @@ does not stop the others.
    latest run succeeded. If it does not exist, report `not registered` and say the owner can
    register it from that file; this is not a failure, and the setup never registers it itself.
    Registering saves no model or permission mode (the task tools have no field for either): say
-   the owner sets both in the app's settings for the task, Haiku at low effort and auto, or the
+   the owner sets both in the app's settings for the task, Haiku and auto or bypass (the app has no effort
+   setting for a task, so it runs at medium), or the
    run stops at its first permission prompt.
    Either way, `BIN --root ROOT launches --requested` lists a daily request no dispatcher has
    taken: report each row (a launch waiting on a dispatcher that is missing or too low).

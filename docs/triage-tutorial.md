@@ -36,7 +36,7 @@ live) opens the launch sheet:
   button.
 - A line saying how many open issues in view are due.
 
-**Every morning.** The scheduled task `issue-dashboard-triage` (Haiku, low effort, 06:00;
+**Every morning.** The scheduled task `issue-dashboard-triage` (Haiku, 06:00;
 `skills/issue-dashboard-triage/scheduled-task.md`) runs
 
 ```bash
@@ -58,8 +58,9 @@ session start from a turn another session triggered, so it leaves a card in the 
 and the triage runs once you start the card. Until then the launch holds the read-only slot.
 
 You register the task from that file. Registering does not save a model or a permission mode, so
-set both in the app's settings for the task afterwards: Haiku at low effort, and a permission mode
-that runs its `issue-dashboard` and session-tool calls without asking (auto). Without a mode, the
+set both in the app's settings for the task afterwards: Haiku (the app has no effort setting for a
+task, so it runs at medium), and a permission mode
+that runs its `issue-dashboard` and session-tool calls without asking (auto, or bypass as the owner runs it). Without one, the
 06:00 run stops at its first prompt and records nothing until you answer it.
 
 **What the session does.** It runs `prepare --session-model`, which refuses to continue unless the
