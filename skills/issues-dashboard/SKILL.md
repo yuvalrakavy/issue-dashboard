@@ -56,7 +56,7 @@ does not stop the others.
    latest run succeeded. If it does not exist, report `not registered` and say the owner can
    register it from that file; this is not a failure, and the setup never registers it itself.
    Registering saves no model or permission mode (the task tools have no field for either): say
-   the owner sets both in the app's settings for the task, Haiku and auto (the app has no effort
+   the owner sets both in the app's settings for the task, Haiku and auto or bypass (the app has no effort
    setting for a task, so it runs at medium), or the
    run stops at its first permission prompt.
    Either way, `BIN --root ROOT launches --requested` lists a daily request no dispatcher has
