@@ -1,6 +1,6 @@
 ---
 name: issues-dashboard
-description: Use when the owner types /issues-dashboard, or asks to set up, check or restart the issue dashboard for a project (spec 7.3) — finds the project's page, checks the binary, the tracker root, the scheduled sync and the published page, and makes sure exactly one suitable dispatcher session runs, starting one only if none does. Safe to run any time; when everything is in place it only reports.
+description: Use when the owner types /issues-dashboard, or asks to set up, check or restart the issue dashboard for a project (spec 7.3) — finds the project's page, checks the binary, the tracker root, the scheduled sync and the published page, and makes sure exactly one suitable dispatcher session runs, starting one only if none does. Also use right after merging any PR that changes `page/`: a merged page is not live until the dispatcher republishes it, and step 4 is the check that notices. Safe to run any time; when everything is in place it only reports.
 ---
 
 # /issues-dashboard
@@ -11,8 +11,9 @@ the dashboard page itself: the dispatcher does, so the dispatcher is the page's 
 with comment auto-replies (spec 7.3).
 
 Run it once after installing, and again after the app restarts, after the dispatcher session
-was archived, after a repo update changed the page or the binary, or when a Launch on the page
-goes unanswered. A second run finds what the first one set up.
+was archived, after a repo update changed the page or the binary (above all right after
+merging a `page/` PR: on 2026-10-30 five merged page PRs had sat unpublished for a day), or when
+a Launch on the page goes unanswered. A second run finds what the first one set up.
 
 ## Inputs
 
