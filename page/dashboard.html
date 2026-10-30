@@ -852,7 +852,8 @@ footer .wrap { padding-block: 0 32px; font-size: .82rem; color: var(--muted); di
         itemMeta(i, states), sessionsBlock(i, false), line, picker(i)),
       h("div", { class: "actions" },
         launchable ? h("button", { class: "btn primary", "data-main": "1", disabled: !!noRecipe, title: noRecipe || null, onclick: () => openLaunch([i]) }, "Launch…") : h("a", { class: "btn", "data-main": "1", href: ghUrl(i), target: "_blank", rel: "noopener" }, "Open ↗"),
-        moreMenu(i, ownerExtras(i))));
+        // Priority, triage and Close are for open issues; a closed one reaches a row only from search.
+        moreMenu(i, i.state === "open" ? ownerExtras(i) : [])));
   }
 
   // The search box's results, in place of the tab while it has text. It searches every
@@ -874,7 +875,10 @@ footer .wrap { padding-block: 0 32px; font-size: .82rem; color: var(--muted); di
       D.dismissed(i, S.decisions, S.acks) ? h("span", { class: "tag" }, "dismissed") : null,
       !D.inScope(D.repoOf(i.alias), S.scope, groups()) ? h("span", { class: "tag" }, "outside Show") : null,
     ];
-    return h("div", { class: "list" }, head, h("section", { class: "level" }, r.items.map((i) => queueRow(i, states, fixStates, tags(i)))));
+    // Each row costs a scan of the decisions, and one letter can match every issue: show the first ones.
+    const cap = 50;
+    const more = r.items.length > cap ? h("div", { class: "note" }, (r.items.length - cap) + " more: add a word or a number to narrow it.") : null;
+    return h("div", { class: "list" }, head, h("section", { class: "level" }, r.items.slice(0, cap).map((i) => queueRow(i, states, fixStates, tags(i)))), more);
   }
 
   function renderTrends() {

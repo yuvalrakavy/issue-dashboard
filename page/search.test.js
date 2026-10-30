@@ -30,6 +30,18 @@ test("#N is the same as N, and spaces around it are ignored", () => {
   assert.deepEqual(aliases(D.search(issues, " #41 ", repos)), ["yuvalrakavy/Store#41"]);
 });
 
+test("spaces around the # still make an exact number query", () => {
+  assert.deepEqual(aliases(D.search(issues, "Store #41", repos)), ["yuvalrakavy/Store#41"]);
+  assert.deepEqual(aliases(D.search(issues, "# 41", repos)), ["yuvalrakavy/Store#41"]);
+  assert.deepEqual(aliases(D.search(issues, "store # 416", repos)), ["yuvalrakavy/Store#416"]);
+});
+
+test("a # with no number yet is no search", () => {
+  assert.deepEqual(D.search(issues, "#", repos), { kind: "empty", items: [] });
+  assert.deepEqual(D.search(issues, "Store#", repos), { kind: "empty", items: [] });
+  assert.deepEqual(D.search(issues, "Store #", repos), { kind: "empty", items: [] });
+});
+
 test("a number with no repo finds it in every repo, open ones first", () => {
   assert.deepEqual(aliases(D.search(issues, "416", repos)), ["rhaiscript/rhai#416", "yuvalrakavy/Store#416"]);
 });

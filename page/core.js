@@ -147,9 +147,10 @@
   // name a repo prefix resolves to among `repos`, for a GitHub link when nothing is found.
   function search(issues, query, repos) {
     const q = String(query || "").trim();
-    if (!q) return { kind: "empty", items: [] };
+    // A repo and `#` with no number yet (`#`, `Store#`) is a number query still being typed.
+    if (!q || /^[^\s#]*\s*#$/.test(q)) return { kind: "empty", items: [] };
     const openFirst = (list) => list.filter(isOpen).concat(list.filter((i) => !isOpen(i)));
-    const m = /^(?:([^\s#]*)#)?(\d+)$/.exec(q);
+    const m = /^(?:([^\s#]*)\s*#\s*)?(\d+)$/.exec(q);
     if (m) {
       const number = Number(m[2]);
       const prefix = (m[1] || "").toLowerCase();
