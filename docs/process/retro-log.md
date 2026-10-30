@@ -205,3 +205,24 @@ Template:
 - unconsolidated: 10
 - improve: a brief that is a numbered procedure gets an ORDER assertion for each command that
   consumes what earlier steps produce, not only a presence check.
+
+## 2026-10-29 packed generations (T1)
+- time: diagnosis ~20% (runs over 5 minutes traced to per-entry batch cost, not bytes), implement
+  ~35%, tests and controls ~25%, gate and fixes ~20%; friction ~15 min (sandbox cannot write the
+  issue-dashboard worktree: cargo lock, a python write).
+- catches: self-review=2 (a count mutant masked by the length check; a gap miscounted in the
+  "why") gate=round 1: 1 S3 + 2 S2 + S1s, round 2: 0 user=0 post-merge=2 S1 issue texts were
+  wrong when filed and corrected the same hour (#28 named the wrong page check, #29 claimed a
+  reach that serde already escapes).
+- DG=n/a IG=19 post-merge=0 (switch-over verified on live data: 3 parts, 550442 units, parses
+  to 170 issues)
+- friction: a merge after another PR landed on `main` touched `crates/cli/src/main.rs`; tested
+  the merged tree before merging (green), no conflict.
+- tier-call: right (T1: one new format, an approved memo, a rollout order).
+- delegation: depth Opus high (the S3 was the rollout case: a quiet tracker never re-publishes);
+  confirming Sonnet medium (clean).
+- unconsolidated: 11
+- improve: a format change gets a memo row "what happens to data already written in the old
+  format when nothing changes?" (the S3: the skip-unchanged optimisation from 2026-10-24 froze
+  the old format in place); and an issue filed from a gate finding quotes the finding's
+  `file:line` and is checked against the code before filing, not written from the summary.
