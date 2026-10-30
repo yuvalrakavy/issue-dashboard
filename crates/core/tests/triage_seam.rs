@@ -10,12 +10,11 @@ use std::fs;
 
 use chrono::Duration;
 use common::fixture::*;
-use common::*;
-use issue_dashboard_core::config::{ConfigSet, READ_ONLY_RECIPE};
-use issue_dashboard_core::cycle;
-use issue_dashboard_core::docs::{LaunchKind, LaunchRequest, Priority};
-use issue_dashboard_core::event::{Event, Kind};
-use issue_dashboard_core::github::{GitHub, Replay, Request};
+use common::triage::*;
+use issue_dashboard_core::config::ConfigSet;
+use issue_dashboard_core::docs::{LaunchKind, Priority};
+use issue_dashboard_core::event::Kind;
+use issue_dashboard_core::github::{Replay, Request};
 use issue_dashboard_core::launch::{self, Via};
 use issue_dashboard_core::observe::{self, Observation, ObservedData};
 use issue_dashboard_core::root::parse_time;
@@ -24,12 +23,9 @@ use issue_dashboard_core::translate::Translation;
 use issue_dashboard_core::triage::{
     self, AnswerKind, Catalogue, Comment, DECISION_FILES, LabelEvent, PreparedData, Source, Stage,
 };
-use issue_dashboard_core::{Error, Result, ledger};
+use issue_dashboard_core::{Error, ledger};
 use serde_json::{Value, json};
 
-const D1: &str = "local_dispatcher_1";
-/// The fixture launches' routing (`launch_doc`), as a backend.
-const BACKEND: &str = "claude-opus-5-5@medium";
 const STORE_AREAS: [&str; 11] = [
     "admin-ui",
     "behaviors",
@@ -57,199 +53,6 @@ const FIRST_STAGE: [&str; 8] = [
 const CLOSURES: [&str; 3] = ["duplicate", "likely_fixed", "obsolete"];
 /// A day in fixture minutes.
 const DAY: i64 = 24 * 60;
-
-fn cap(recipe: &str) -> Result<u32> {
-    match recipe {
-        READ_ONLY_RECIPE => Ok(1),
-        other => Err(Error::refused(format!("no recipe {other}"))),
-    }
-}
-
-fn refused<T: std::fmt::Debug>(r: Result<T>) -> String {
-    match r {
-        Err(Error::Refused(m)) => m,
-        other => panic!("expected a refusal, got {other:?}"),
-    }
-}
-
-/// A fixture root after one cycle, and three of its open Store issues, each re-observed as
-/// written by the owner with the labels `bug`, `p1`, `kernel`, `upstream`.
-struct Tracked {
-    t: TempRoot,
-    items: Vec<(String, String)>,
-}
-
-fn tracked() -> Tracked {
-    let t = fixture_root();
-    let r = cycle::cycle(&t.root, &gh(), "home", &no_pages(), &move || at(0), PAGE).unwrap();
-    let d: Value = serde_json::from_str(&fs::read_to_string(&r.outbox).unwrap()).unwrap();
-    let items: Vec<(String, String)> = d["issues"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter(|i| {
-            i["alias"].as_str().unwrap().starts_with(&format!("{STORE}#"))
-                && i["state"] == "open"
-                && i["kind"] == "issue"
-        })
-        .take(3)
-        .map(|i| {
-            (
-                i["id"].as_str().unwrap().to_string(),
-                i["alias"].as_str().unwrap().to_string(),
-            )
-        })
-        .collect();
-    assert_eq!(items.len(), 3, "the fixture tracks open Store issues");
-    for (id, _) in &items {
-        edit(&t, id, 1, |c| {
-            c["author"] = json!("yuvalrakavy");
-            c["author_association"] = json!("OWNER");
-            c["labels"] = json!(["bug", "p1", "kernel", "upstream"]);
-        });
-    }
-    Tracked { t, items }
-}
-
-/// Records a fresher observation of `id` at fixture minute `minutes`, its content as `f`
-/// leaves it: what a later read of an edited issue leaves in the ledger.
-fn edit(t: &TempRoot, id: &str, minutes: i64, f: impl FnOnce(&mut Value)) {
-    t.root
-        .mutate(at(minutes), |tx| {
-            let e = ledger::latest(tx.conn(), id, Kind::Observed)?.expect("an observed issue");
-            let data: ObservedData = serde_json::from_value(e.data)?;
-            let mut content = data.content.clone();
-            f(&mut content);
-            observe::record(
-                tx,
-                &Observation {
-                    node_id: id.to_string(),
-                    item: data.item,
-                    alias: data.alias.clone(),
-                    updated_at: parse_time(&data.updated_at)? + Duration::seconds(1),
-                    read_at: parse_time(&data.read_at)? + Duration::seconds(1),
-                    read_id: format!("read-{minutes}"),
-                    content,
-                },
-            )
-        })
-        .unwrap();
-}
-
-fn launch_of(id: &str, kind: LaunchKind, items: &[(String, String)]) -> LaunchRequest {
-    let mut d = launch_doc(id, "home", &[], READ_ONLY_RECIPE);
-    d.kind = kind;
-    d.items = items.iter().map(|(i, _)| i.clone()).collect();
-    d.aliases = items.iter().map(|(_, a)| a.clone()).collect();
-    d
-}
-
-/// Requests and reserves a launch, then frees the read-only slot (its session ran), so the
-/// next launch of a test can reserve too.
-fn launched(t: &TempRoot, id: &str, kind: LaunchKind, items: &[(String, String)], minutes: i64) {
-    let doc = launch_of(id, kind, items);
-    t.root
-        .mutate(at(minutes), |tx| {
-            launch::request(tx, &doc, Via::Reserve)?;
-            let token = match launch::reserve(tx, id, D1, &cap)? {
-                launch::Reservation::Reserved { token, .. } => token,
-                other => panic!("expected a reservation, got {other:?}"),
-            };
-            launch::started(tx, &token, &format!("local_{id}"))?;
-            launch::ended(tx, &token, launch::EndState::Landed)
-        })
-        .unwrap();
-}
-
-fn prepare(t: &TempRoot, launch: &str, model: &str, stage: Stage, minutes: i64) -> Result<triage::Prepared> {
-    let c = ConfigSet::load(t.path()).unwrap();
-    t.root
-        .mutate(at(minutes), |tx| triage::prepare(tx, &c, launch, model, stage))
-}
-
-fn record(t: &TempRoot, launch: &str, input: Value, minutes: i64) -> Result<suggest::Report> {
-    record_via(t, launch, input, minutes, &commit_lookup())
-}
-
-/// [`record`], with the commits looked up through `gh`, as `record-suggestions` does.
-fn record_via(t: &TempRoot, launch: &str, input: Value, minutes: i64, gh: &dyn GitHub) -> Result<suggest::Report> {
-    let input: suggest::Input = serde_json::from_value(input).unwrap();
-    let commits = commits_for(t, &input, gh);
-    record_with(t, launch, &input, minutes, &commits)
-}
-
-fn record_with(
-    t: &TempRoot,
-    launch: &str,
-    input: &suggest::Input,
-    minutes: i64,
-    commits: &suggest::Commits,
-) -> Result<suggest::Report> {
-    let c = ConfigSet::load(t.path()).unwrap();
-    t.root
-        .mutate(at(minutes), |tx| suggest::record(tx, &c, launch, input, commits))
-}
-
-fn events(t: &TempRoot, kind: Kind) -> Vec<Event> {
-    t.root.read(|l| ledger::events_by_kind(l.conn(), kind)).unwrap()
-}
-
-fn questions(p: &triage::Prepared) -> &Vec<Value> {
-    p.file["questions"].as_array().unwrap()
-}
-
-/// The decisions a prepared file asks about `alias`, sorted.
-fn asked_about(p: &triage::Prepared, alias: &str) -> Vec<String> {
-    let mut d: Vec<String> = questions(p)
-        .iter()
-        .filter(|q| q["item"] == alias)
-        .map(|q| q["decision"].as_str().unwrap().to_string())
-        .collect();
-    d.sort();
-    d
-}
-
-/// An answer to every question of `p`: the first allowed answer at 0.7 (the rest share 0.3),
-/// a closure false at 0.8, the first area at 0.8 and every other at 0.1.
-fn answer_all(p: &triage::Prepared) -> Value {
-    let answers: Vec<Value> = questions(p)
-        .iter()
-        .map(|q| {
-            let allowed: Vec<&str> = q["answers"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .map(|a| a.as_str().unwrap())
-                .collect();
-            let probabilities: BTreeMap<&str, f64> = match q["kind"].as_str().unwrap() {
-                "boolean" => [("true", 0.2), ("false", 0.8)].into(),
-                "areas" => allowed
-                    .iter()
-                    .enumerate()
-                    .map(|(i, a)| (*a, if i == 0 { 0.8 } else { 0.1 }))
-                    .collect(),
-                _ => {
-                    let rest = 0.3 / (allowed.len() - 1) as f64;
-                    allowed
-                        .iter()
-                        .enumerate()
-                        .map(|(i, a)| (*a, if i == 0 { 0.7 } else { rest }))
-                        .collect()
-                }
-            };
-            json!({"question": q["id"], "probabilities": probabilities, "reason": "from the body"})
-        })
-        .collect();
-    json!({"backend": BACKEND, "answers": answers})
-}
-
-fn suggestion_of<'a>(evs: &'a [Event], item: &str, decision: &str) -> &'a Value {
-    &evs.iter()
-        .rev()
-        .find(|e| e.subject == item && e.distinct["decision"] == decision)
-        .unwrap_or_else(|| panic!("no {decision} suggestion for {item}"))
-        .data["suggestion"]
-}
 
 // --- Question files and the hash (1.2, 1.3) ------------------------------------------------
 
@@ -937,7 +740,10 @@ fn a_closure_answered_true_names_its_subject_and_becomes_a_card_and_false_does_n
     }
     let rep = record(&tr.t, "R1", file, 4).unwrap();
     assert_eq!(rep.recorded, 3);
-    let docs = tr.t.root.read(|l| suggest::documents(l.conn(), "home")).unwrap();
+    let docs =
+        tr.t.root
+            .read(|l| suggest::documents(l.conn(), &ConfigSet::load(tr.t.path()).unwrap(), "home"))
+            .unwrap();
     let mut kinds: Vec<&str> = docs.iter().map(|d| d["kind"].as_str().unwrap()).collect();
     kinds.sort();
     assert_eq!(kinds, ["duplicate", "likely_fixed"], "obsolete was answered false");
@@ -955,17 +761,22 @@ fn a_closure_answered_true_names_its_subject_and_becomes_a_card_and_false_does_n
 }
 
 #[test]
-fn label_decisions_make_no_card_until_the_page_shows_them() {
+fn an_agreeing_label_is_no_card_and_a_confident_disagreement_a_second_opinion() {
+    // Triage phase 3 (spec 4.1) replaced phase 1's "no label card": the item is labelled bug and
+    // kernel; answer_all says bug at 0.7 (agreeing: no card) and kernel at 0.1 (a second opinion).
     let tr = tracked();
     launched(&tr.t, "T1", LaunchKind::Triage, &tr.items[..1], 2);
     let p = prepare(&tr.t, "T1", BACKEND, Stage::First, 3).unwrap();
     record(&tr.t, "T1", answer_all(&p), 4).unwrap();
-    let docs = tr.t.root.read(|l| suggest::documents(l.conn(), "home")).unwrap();
-    assert_eq!(
-        docs,
-        Vec::<Value>::new(),
-        "every closure was answered false; no label decision is a card yet"
-    );
+    let docs =
+        tr.t.root
+            .read(|l| suggest::documents(l.conn(), &ConfigSet::load(tr.t.path()).unwrap(), "home"))
+            .unwrap();
+    let kinds: Vec<&str> = docs.iter().map(|d| d["kind"].as_str().unwrap()).collect();
+    assert_eq!(kinds, ["area"], "every closure was answered false and type agrees");
+    assert_eq!(docs[0]["second_opinion"]["current"], json!(["kernel"]));
+    assert_eq!(docs[0]["second_opinion"]["flagged"], json!(["kernel"]));
+    assert_eq!(docs[0]["action_label"], "Change to admin-ui");
 }
 
 #[test]
@@ -1295,7 +1106,10 @@ fn a_closure_s_commit_that_github_finds_makes_the_card() {
     let (tr, file) = likely_fixed_on(STORE_COMMIT);
     let gh = Replay::load(&fixtures().join("replay")).unwrap();
     record_via(&tr.t, "R1", file, 4, &gh).unwrap();
-    let docs = tr.t.root.read(|l| suggest::documents(l.conn(), "home")).unwrap();
+    let docs =
+        tr.t.root
+            .read(|l| suggest::documents(l.conn(), &ConfigSet::load(tr.t.path()).unwrap(), "home"))
+            .unwrap();
     assert_eq!(docs.len(), 1, "{docs:?}");
     assert_eq!(
         (docs[0]["kind"].as_str(), docs[0]["commit"].as_str()),

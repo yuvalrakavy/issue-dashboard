@@ -1,0 +1,20 @@
+{
+  "id": "L_20261029_060000_5f3a9c21",
+  "project": "home",
+  "author": "schedule",
+  "created_at": "2026-10-29T06:00:00Z",
+  "kind": "triage",
+  "scope": "full",
+  "items": [
+    "I_kwDOAbCdEf5xYz12"
+  ],
+  "aliases": [
+    "example-org/server#403"
+  ],
+  "recipe": "read-only",
+  "routing": {
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "reason": "the tracker's default routing (triage spec 5.3)"
+  }
+}

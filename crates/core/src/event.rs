@@ -37,6 +37,10 @@ pub enum Kind {
     /// A triage launch's questions were prepared (triage spec 2.1): each question's hashes,
     /// the observation it was built from and the calibration map in force, frozen.
     Prepared,
+    /// A key was evaluated (triage spec 3.5): its metrics, bars and the calibration map it wrote.
+    Evaluated,
+    /// A label event was tagged as part of a named bulk review (triage spec 3.3).
+    TruthTag,
 }
 
 impl Kind {
@@ -60,6 +64,8 @@ impl Kind {
             Kind::SessionSeen => "session_seen",
             Kind::SessionGone => "session_gone",
             Kind::Prepared => "prepared",
+            Kind::Evaluated => "evaluated",
+            Kind::TruthTag => "truth_tag",
         }
     }
 

@@ -25,7 +25,8 @@ use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::docs::LaunchRequest;
+use crate::config::{ConfigSet, READ_ONLY_RECIPE};
+use crate::docs::{LaunchKind, LaunchRequest, TriageScope};
 use crate::event::{Event, Kind};
 use crate::ledger::{self, Dedupe, Tx};
 use crate::root::parse_time;
@@ -63,7 +64,13 @@ pub enum EndState {
 pub enum Via {
     Ingest,
     Reserve,
+    /// `triage-request`, the daily run's request (triage spec 5.2).
+    Schedule,
 }
+
+/// The author of the launch request `triage-request` records: not a page user, so never the
+/// owner. The dispatcher reserves it for a `triage` launch only (triage spec 5.2, 4.6).
+pub const SCHEDULE_AUTHOR: &str = "schedule";
 
 /// The `data` of a `launch` event. Its schema is `schemas/event-launch.schema.json`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -86,6 +93,9 @@ pub struct LaunchData {
     pub decision: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub via: Option<Via>,
+    /// A triage launch's scope, on its `requested` transition (triage spec 4.6).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<TriageScope>,
 }
 
 impl LaunchData {
@@ -100,6 +110,7 @@ impl LaunchData {
             project: None,
             decision: None,
             via: None,
+            scope: None,
         }
     }
 
@@ -381,7 +392,22 @@ pub fn request(tx: &mut Tx<'_>, doc: &LaunchRequest, via: Via) -> Result<Moved> 
             doc.id
         )));
     }
-    if doc.items.is_empty() {
+    let kind = serde_json::to_value(doc.kind)?;
+    let kind = kind.as_str().unwrap_or_default();
+    if doc.scope.is_some() && doc.kind != LaunchKind::Triage {
+        return Err(Error::refused(format!(
+            "launch {}: a {kind} launch takes no scope; only triage does",
+            doc.id
+        )));
+    }
+    if doc.kind.read_only() && doc.recipe != READ_ONLY_RECIPE {
+        return Err(Error::refused(format!(
+            "launch {}: a {kind} launch runs in the {READ_ONLY_RECIPE} pool, not {}",
+            doc.id, doc.recipe
+        )));
+    }
+    // An eval chooses its own sample (triage spec 3.2); every other launch names its items.
+    if doc.items.is_empty() && doc.kind != LaunchKind::Eval {
         return Err(Error::refused(format!("launch {} names no items", doc.id)));
     }
     if doc.items.len() != doc.aliases.len() {
@@ -400,12 +426,69 @@ pub fn request(tx: &mut Tx<'_>, doc: &LaunchRequest, via: Via) -> Result<Moved> 
     data.request = Some(doc.clone());
     data.project = Some(doc.project.clone());
     data.via = Some(via);
+    data.scope = doc.triage_scope().filter(|_| doc.kind == LaunchKind::Triage);
     record(tx, &doc.id, data)?;
     Ok(Moved {
         launch: doc.id.clone(),
         state: State::Requested,
         repeat: false,
     })
+}
+
+/// Whether the dispatcher may act on launch document `doc` (7.3 step 1, triage spec 5.2): one
+/// the project's owner wrote, or the daily run's `schedule` request of a `triage` launch.
+pub fn check_author(config: &ConfigSet, doc: &LaunchRequest) -> Result<()> {
+    let owner = &config.project(&doc.project)?.owner_id;
+    if &doc.author == owner {
+        return Ok(());
+    }
+    if doc.author == SCHEDULE_AUTHOR {
+        if doc.kind == LaunchKind::Triage {
+            return Ok(());
+        }
+        let kind = serde_json::to_value(doc.kind)?;
+        return Err(Error::refused(format!(
+            "launch {}: author {SCHEDULE_AUTHOR} requests triage launches only, not {}",
+            doc.id,
+            kind.as_str().unwrap_or_default()
+        )));
+    }
+    Err(Error::refused(format!(
+        "launch {}: author {} is not project {}'s owner_id",
+        doc.id, doc.author, doc.project
+    )))
+}
+
+/// How long an owner's triage request no dispatcher has taken counts as live. The dispatcher
+/// hears a page launch within minutes; one unheard for a day was never sent (a refused send's
+/// `not_sent` record is not ingested), and counting it live would stop every later triage run.
+/// A `schedule` request does not age: the daily run wakes the dispatcher for it again.
+pub const UNHEARD_REQUEST_HOURS: i64 = 24;
+
+/// A triage launch of `project` (the `recommend_closures` alias included) that is live at
+/// `now`: not yet ended, released or withdrawn, and not an owner request unheard for
+/// [`UNHEARD_REQUEST_HOURS`] (triage spec 5.1, 5.2).
+pub fn live_triage(conn: &Connection, project: &str, now: &str) -> Result<Option<Launch>> {
+    let now = parse_time(now)?;
+    for l in all(conn)? {
+        if l.request.project != project
+            || l.request.triage_scope().is_none()
+            || !matches!(
+                l.state,
+                State::Requested | State::Queued | State::Reserved | State::Unconfirmed | State::Started
+            )
+        {
+            continue;
+        }
+        if l.state == State::Requested
+            && l.request.author != SCHEDULE_AUTHOR
+            && now - parse_time(&l.request.created_at)? >= Duration::hours(UNHEARD_REQUEST_HOURS)
+        {
+            continue;
+        }
+        return Ok(Some(l));
+    }
+    Ok(None)
 }
 
 /// An item of `l` held by another launch, with that launch. A launch whose kind holds no

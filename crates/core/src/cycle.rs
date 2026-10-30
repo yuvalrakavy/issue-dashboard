@@ -56,7 +56,7 @@ fn begin(
         let config = ConfigSet::load(root.dir())?;
         config.record(tx)?;
         let owner = config.project(project)?.owner_id.clone();
-        let report = ingest::ingest(tx, project, &owner, pages)?;
+        let report = ingest::ingest(tx, &config, project, &owner, pages)?;
         let seen = match list {
             Some(l) => sessions::ingest(tx, l)?,
             None => sessions::Report::default(),

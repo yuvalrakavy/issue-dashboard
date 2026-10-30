@@ -131,6 +131,81 @@ Template:
   was that answer?" (F1 and F5 were both freshness of a dependency); and a lookup against an
   external resolver gets a row "does it resolve more than the identity named?" (the oid check).
 
+## 2026-10-29 triage phase 2/5: eval (T2)
+- time: implement ~45%, tests and controls ~25%, gates and fixes ~20%, real eval ~10%; friction
+  ~25 min (the exclamation-mark shell hook on every Rust test edit and probe, again; two fixture
+  controls that stayed green because the fixture's shares coincided).
+- catches: self-review=2 (fixtures whose bins/renderers made the guard unobservable)
+  gate=round 1: 7 S3 + 2 S2 (Codex), round 2: 5 S1 user=0 post-merge=n/a. Biggest: the
+  single-choice truth fold took the alphabetically first label instead of the latest one.
+- DG=n/a IG=81 post-merge=n/a
+- friction: a percentile golden stayed green under round-to-floor at seed 7 (adjacent resamples
+  equal); the control found it and a seed scan picked one that tells them apart.
+- tier-call: right (T2).
+- delegation: mutation finder Sonnet medium (~9 min, 8 survivors, none a production bug); depth
+  Codex high (9 findings, all real); confirming Sonnet medium (0 S2+); answering agents Opus 5.5
+  medium (6 x 40 questions ~70 s, then 1 for the one swapped question).
+- unconsolidated: 7
+- improve: an identity of a stored artifact (history file, manifest, tag) gets a spec row "which
+  request parameters must match to reuse it?" (F2, F3, F4, F5 were all reuse under a different
+  key); and a fold over an ordered log gets a row "latest, or a set?" per decision kind (F1).
+
+## 2026-10-29 triage phase 4/5: launch (T2)
+- time: implement ~45%, tests and controls ~20%, gates and fixes ~35%; about 65 min from brief
+  to the round-2 fix commit; friction ~15 min (the exclamation-mark hook on test and page
+  edits, Python eating Rust string continuations in brief.rs, two context compactions).
+- catches: self-review=1 (the --launch reserve path skipped the author check until its RED
+  control) gate=round 1: 4 S3 + 3 S2 (Codex), round 2: 1 S2 + 1 S1 user=0 post-merge=n/a.
+  Biggest: a launch that is `requested` but that no dispatcher will ever take (an unwoken daily
+  request, a page send that failed) counted as live and stopped triage for good.
+- DG=n/a IG=53 post-merge=n/a
+- friction: the mutation finder spent its budget on build time (one worktree, ~14 min for 10
+  mutants); the vacuous-scenario hunt and the schema rows went unreached.
+- tier-call: right (T2).
+- delegation: mutation finder Sonnet medium (9 survivors, none a production bug); depth Codex
+  high (11 findings, 7 taken); confirming Sonnet medium (2 taken, 1 declined with evidence).
+- unconsolidated: 8
+- improve: every "refused while X is live" guard gets a spec row "what ends X if nobody acts?"
+  (findings 1 and 2 were both a live state with no exit but a dispatcher that never comes).
+
+## 2026-10-29 triage spec gaps: stronger look, metrics, instructs_agent, support reply (T2)
+- time: about 55 min from brief to the round-2 fix (implementation ~45%, tests and controls
+  ~20%, gates and fixes ~35%); friction ~10 min (the exclamation-mark hook on source written
+  from Bash, and one context compaction).
+- catches: self-review=3 (the `of` sum, the NotPlanned close and the Evaluated project filter
+  survived my own RED controls) gate=round 1: 3 S3 + 3 S2 (Codex), round 2: 1 S2 + 1 S1
+  user=0 post-merge=n/a. Biggest: the list ("Needs a stronger look") and the launch that
+  answers it read eligibility from two places, so the launch re-asked what the owner dismissed
+  and the list showed what no launch could answer.
+- DG=n/a IG=43 post-merge=n/a
+- friction: a test with an `if ... return` branch for "the scenario may not happen" was always
+  taking the early return; only the confirming reader noticed.
+- tier-call: right (T2).
+- delegation: mutation finder Sonnet medium (3 survivors, none a production bug); depth Codex
+  high (7 findings, 6 taken, 1 blocked by an owner ruling); confirming Sonnet medium (2 taken,
+  1 S1 left open).
+- unconsolidated: 9
+- improve: a list and the action that consumes it share ONE eligibility function, named in the
+  spec row; and a test never branches on whether its own scenario happened - it forces the
+  scenario and asserts it did.
+
+## 2026-10-29 triage rulings: editable estimates, alias on the triage brief, project scoping (T2)
+- time: about 50 min from brief to the PR (implementation ~45%, tests and controls ~20%, gates
+  and fixes ~35%); friction ~8 min (one context compaction, the temp-dir and pipe hooks).
+- catches: self-review=1 (the example estimate had no reason, so record-suggestions refused the
+  brief's own example) gate=round 1: 2 S2 + 2 S1 (Codex), round 2: 2 S1 user=0
+  post-merge=n/a. Biggest: the numbered steps ran the recording command before the step that
+  filled the rest of the file, so a session following them literally lost its batches.
+- DG=n/a IG=10 post-merge=n/a
+- friction: tests checked that the brief CONTAINED the record command, not WHERE it sat among
+  the steps.
+- tier-call: right (T2).
+- delegation: mutation finder Sonnet medium (1 survivor, killed); depth Codex high (4 findings,
+  all taken); confirming Sonnet medium (2 S1, one left open: no DOM test of the editor).
+- unconsolidated: 10
+- improve: a brief that is a numbered procedure gets an ORDER assertion for each command that
+  consumes what earlier steps produce, not only a presence check.
+
 ## 2026-10-29 packed generations (T1)
 - time: diagnosis ~20% (runs over 5 minutes traced to per-entry batch cost, not bytes), implement
   ~35%, tests and controls ~25%, gate and fixes ~20%; friction ~15 min (sandbox cannot write the
@@ -146,7 +221,7 @@ Template:
 - tier-call: right (T1: one new format, an approved memo, a rollout order).
 - delegation: depth Opus high (the S3 was the rollout case: a quiet tracker never re-publishes);
   confirming Sonnet medium (clean).
-- unconsolidated: 7
+- unconsolidated: 11
 - improve: a format change gets a memo row "what happens to data already written in the old
   format when nothing changes?" (the S3: the skip-unchanged optimisation from 2026-10-24 froze
   the old format in place); and an issue filed from a gate finding quotes the finding's

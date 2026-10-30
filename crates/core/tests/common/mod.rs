@@ -3,6 +3,7 @@
 #![allow(dead_code)]
 
 pub mod fixture;
+pub mod triage;
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -137,6 +138,7 @@ pub fn launch_doc(id: &str, project: &str, items: &[&str], recipe: &str) -> Laun
             reason: None,
         },
         suggested_routing: None,
+        scope: None,
     }
 }
 

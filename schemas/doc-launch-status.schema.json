@@ -19,6 +19,23 @@
     "launch": {
       "$ref": "common.schema.json#/$defs/docId"
     },
+    "kind": {
+      "description": "The launch's kind, so the page knows a triage launch it did not write (the daily run's, triage spec 5.1-5.2).",
+      "type": "string",
+      "minLength": 1
+    },
+    "scope": {
+      "description": "A triage launch's scope; null for any other kind.",
+      "enum": [
+        "full",
+        "closures",
+        null
+      ]
+    },
+    "author": {
+      "type": "string",
+      "minLength": 1
+    },
     "state": {
       "enum": [
         "requested",

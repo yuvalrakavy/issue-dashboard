@@ -1,0 +1,386 @@
+{
+  "name": "history_issues",
+  "response": {
+    "data": {
+      "repository": {
+        "issues": {
+          "nodes": [
+            {
+              "author": {
+                "login": "yuvalrakavy"
+              },
+              "authorAssociation": "OWNER",
+              "body": "The count-domain bound is fixed (see below) — this issue tracks the **trigger**, which is still unnamed.\n\n## What happened\n\n`playlist::tests::all_undecodable_loop_playlist_terminates_not_spins` failed three times on\n2026-08-08 during the #6 work, and stayed green across ~30 other runs.\n\nHealthy cost, measured: **44 polls / 112 ms**, against the then-bounds of 2000 polls / `within(20)`.\nA ~180x margin, so this is not ordinary jitter.\n\n## What was ruled out\n\nEach of these was tested, not reasoned about:\n\n| Hypothesis | How it was falsified |\n|---|---|\n| CPU contention / scheduler overshoot on the 2 ms sleep | Full suite under 20 CPU burners (= core count): green, and at **identical** wall clock (10.44 s), so the burners were not even perturbing it |\n| Eof-vs-health ordering race on the second assert | `retire()` calls `health.record` before the fetcher breaks, and the `tx` drop that produces `Eof` happens after — the write strictly happens-before the signal |\n| An artifact of the mutation testing in flight at the time (unlatched `check_health` flooding an unpolled rig `Connection`) | Full suite 3x with that mutation applied: exactly the 2 expected latch failures, playlist row green every time |\n| Concurrent filesystem saturation | Full suite with 4 writer/deleter loops running: green |\n| Pre-existing at HEAD vs introduced by the #6 branch | 8 runs on a pristine `1ad466c` worktree: green. Weak evidence either way — 3 failures in ~30 runs is not separable at n=8 |\n\n## The one correlation that survives\n\nAll three failures coincided with heavy concurrent work on the machine — two cargo rebuilds and one\n`git worktree remove --force` deleting a full `target/` tree. Synthetic CPU and synthetic filesystem\nload each failed to reproduce it, so \"system busy\" is a correlation, not a mechanism.\n\n## What was fixed anyway\n\nThe test expressed a **time-domain property** (\"it terminates rather than spinning\") with a\n**count-domain bound** (2000 polls). A count bounds spinning only if each iteration costs a bounded\namount, and each iteration is `pull()` plus a 2 ms sleep — both contention-sensitive. So a stalled\nsystem consumed the budget by WAITING and the test reported \"it is spinning\" about a daemon that was\nmerely slow.\n\nNow bounded by a 10 s deadline (90x the healthy cost, still 2x inside `within`'s guard), and\nself-diagnosing: the failure message carries poll count and elapsed, so a high count reads as a real\nspin and a low count over the full budget reads as something blocking inside `pull()`.\n\nNegative-controlled: removing `retired[c] = true` in `Rotation::retire` produces a genuine spin,\ncaught at 10.0 s with **3894 polls**.\n\n## Why this stays open\n\nThe fix removes the whole class regardless of trigger, but per the repo's flake rule an unexplained\nred is the start of an investigation, not the end. If this recurs, the message now names which bound\nbroke and by how far — start there.",
+              "closedAt": "2026-08-11T09:11:51Z",
+              "comments": {
+                "nodes": [
+                  {
+                    "author": {
+                      "login": "yuvalrakavy"
+                    },
+                    "authorAssociation": "OWNER",
+                    "body": "## Parked, deliberately — 2026-08-09\n\nRecording the decision so nobody re-opens the investigation from scratch, and so nobody closes it by mistake either.\n\n**The actionable half is done.** The category error — a **time-domain** property (\"it terminates rather than spinning\") bounded by a **count** (2000 polls) — is fixed in `196541c`. A count bounds spinning only if each iteration costs a bounded amount, and each iteration is `pull()` plus a 2 ms sleep, both contention-sensitive. That fix removes the whole class **regardless of what the trigger turns out to be**.\n\n**The trigger is still unnamed, and four hypotheses are falsified** (CPU saturation under 20 burners at identical wall clock; filesystem saturation; the mutation in flight at the time; HEAD-vs-branch over 8 clean runs). ~30 clean runs since.\n\n**Why this stays open rather than closed:** the repo's flake rule is explicit that an unexplained red is the start of an investigation, not the end, and I would rather not weaken that by closing the first one that resisted. But there is nothing to work on today.\n\n**What changes if it recurs:** the test now names its own mechanism — the failure message carries poll count and elapsed against the budget, with the healthy baseline (44 polls / ~112 ms) inline. A high poll count reads as a genuine spin; a low count over the full budget reads as something blocking inside `pull()`. That is the measurement the last investigation lacked, so a recurrence should be diagnosable in minutes rather than an hour.\n\nDo not spend time on this proactively.",
+                    "createdAt": "2026-08-09T08:50:08Z"
+                  },
+                  {
+                    "author": {
+                      "login": "yuvalrakavy"
+                    },
+                    "authorAssociation": "OWNER",
+                    "body": "## It recurred once on 2026-08-09, and left the first mechanism-shaped lead\n\nFired during unrelated work (the #7 fade change). The self-diagnosing message was lost to a truncated grep before I could read it — my error, and the exact thing the instrumentation exists to prevent. But the captured stdout carried something better than a timing number.\n\n### The test's own cost model is wrong\n\nIts comment says:\n\n> *\"Non-existent files → decode fails (no ffmpeg needed).\"*\n\nThe captured output says otherwise:\n\n```\n[airzoned] decode: ffmpeg fallback for /var/folders/.../airzone-pl-bad-80046/nope1.flac\n```\n\nConfirmed in code: `decode_file` (`src/audio.rs:45`) falls back to ffmpeg on **any** Symphonia error — including \"file not found\" — and `decode_via_ffmpeg` does `Command::new(\"ffmpeg\")`. So each of the two nonexistent tracks costs a **full subprocess spawn and wait**, not a failed `open()`.\n\n### Why that is the best lead so far\n\nProcess spawn is the most load-sensitive operation in this path by a wide margin, and it fits the one correlation that survived every falsification: all three original failures coincided with heavy concurrent machine activity — two cargo rebuilds and a recursive delete of a `target/` tree — while synthetic **CPU** load and synthetic **filesystem** load each failed to reproduce it. Neither of those synthetic loads stresses process creation, which may be why they missed.\n\nIt also explains the measured healthy cost. 44 polls / 112 ms for what the comment implies should be two instant failures is a lot; two ffmpeg spawns is about right.\n\n### What this does not settle\n\nIt is a plausible mechanism, not a demonstrated one. Nobody has shown a spawn-storm making this test cross its budget. The falsifiable next step is cheap and specific: run the suite against a PATH with no `ffmpeg` on it, or under concurrent process-spawn pressure rather than CPU or I/O pressure, and see whether the timing moves.\n\nStill parked — not worth chasing proactively. But the next investigation should start here rather than from nothing, and the test's comment should be corrected either way, because it is currently telling its reader the opposite of what the code does.",
+                    "createdAt": "2026-08-10T04:33:59Z"
+                  },
+                  {
+                    "author": {
+                      "login": "yuvalrakavy"
+                    },
+                    "authorAssociation": "OWNER",
+                    "body": "## The trigger is not load, and the deadline rewrite proved it\n\nCaught incidentally while building the in-session source crossfade (Store #133), which added a rig test using an all-undecodable playlist. I suspected my own fixture was the trigger — it spawns ffmpeg processes against a missing file — and ran an interleaved A/B to check.\n\n**The A/B refuted that.** 3 A-runs (new test present) and 3 B-runs (new test `#[ignore]`d), interleaved so machine drift could not masquerade as the effect:\n\n| arm | new ffmpeg-storming test | runs | `all_undecodable` failures |\n|---|---|---|---|\n| A | present | 3 | 0 |\n| B | disabled | 3 | **1** |\n\nIt fired in the arm WITHOUT the extra load. So the new test is not the trigger, and — more usefully — extra concurrent ffmpeg pressure did not reproduce it either, which is consistent with the earlier failed attempts at deliberate CPU and filesystem saturation.\n\n## What the deadline rewrite bought: the failure now says which cause it is\n\nThe rewrite from an iteration count to a wall-clock budget added a diagnostic that discriminates the two hypotheses, and this run used it:\n\n```\nall-undecodable loop playlist must reach Eof, not spin — polled 3547 times over\n10.000357375s against a 10s budget (healthy: 44 polls / ~112 ms). A high poll count\nmeans it really is spinning; a LOW count over the full budget means something blocked\ninside pull() and the fetcher never signalled Eof.\n```\n\n**3547 polls against a healthy 44 — 80×.** By the test's own rubric that is a *spin*, not a stall. The \"the machine was busy so each poll was slow\" story predicts the opposite signature (a low count filling the budget), and is now positively excluded for this occurrence. The property under test is genuinely violated intermittently: the source does not reach `Eof`.\n\n## And a sibling failure in the same run names the mechanism\n\n`player::tests::idle_rig::a_mix_that_dies_mid_play_republishes_with_the_reason` failed in the SAME run, at:\n\n```\nthe fetcher must retire collections whose every track fails\n```\n\nTwo independent tests, one run, one mechanism: **the fetcher intermittently fails to retire a collection whose every track fails to decode.** That is a race in the retire-on-all-tracks-failed path, not an artifact of timing tolerance. It also explains the spin directly — a collection that is never retired is a collection the rotation keeps returning to, which is exactly what \"polls 3547 times without reaching Eof\" looks like from outside.\n\n## Where that leaves this issue\n\nThe category error is fixed and the instrument now reports which cause it saw. What remains is a real bug with a named location: whatever decides a collection is exhausted when every one of its tracks failed to decode. Reproduction is still probabilistic (1 in 6 here), but no longer undiagnosable — every future occurrence prints its own poll count and says spin-or-stall.\n\nNot fixed here: this is out of scope for #133, which touches neither the fetcher nor the rotation. Filed as evidence so the next person starts from a mechanism instead of from \"it went red again\".\n",
+                    "createdAt": "2026-08-10T09:34:56Z"
+                  },
+                  {
+                    "author": {
+                      "login": "yuvalrakavy"
+                    },
+                    "authorAssociation": "OWNER",
+                    "body": "## Root-caused and fixed — a missing file cost a whole ffmpeg process spawn\n\nFixed on `main` (`c4aa981`). Three consecutive full-suite runs at default parallelism, 236 green each.\n\n### The mechanism\n\nA missing track went symphonia (fails) → **`decode_via_ffmpeg`**, i.e. `Command::new(\"ffmpeg\")` — a\nwhole process spawn to decode something that does not exist.\n\n`all_undecodable_loop_playlist_terminates_not_spins` needs three consecutive failures to retire its\ncollection, so it paid **three ffmpeg spawns**. Healthy that is ~112 ms. Under N-way parallel\n`cargo test`, where many tests spawn ffmpeg at once, process spawn contends badly enough to blow the\ntest's 10 s budget.\n\nThe fix is a `path.exists()` check before the fallback. Production wants it as much as the tests do:\nan unmounted volume currently costs one ffmpeg spawn **per track per rotation cycle**, for every\ntrack on it.\n\n### Why it resisted the earlier investigation\n\nThis issue's own notes say the trigger was unnamed, that it went red three times alongside heavy\nconcurrent work, and that **deliberate CPU saturation and filesystem saturation both failed to\nreproduce it**. That is consistent, and it is the clue: the contended resource is neither CPU nor\nfilesystem — it is **process spawn**, which only saturates when many things spawn processes at once.\nA test suite full of ffmpeg-invoking tests does exactly that; a `yes > /dev/null` loop does not.\n\nReproduction, for the record:\n\n```\ndefault parallelism  -> 3 tests fail (this one plus two that share the fetcher-Eof path)\n--test-threads=4     -> 235 pass\n```\n\nThat A/B is what turned it from \"an unexplained flake\" into a measurement.\n\n### A correction worth recording\n\nEarlier today I read the signature — *3901 polls over 10 s* — as a busy spin burning a core, and said\nso. **It is not.** The poll loop sleeps 2 ms per iteration, so 3901 polls is ~7.8 s of sleeping. The\npoll count was measuring the wait, not a spin. The test's own message anticipates both readings\n(\"a high poll count means it really is spinning\"), and I took the wrong branch of it; the count is\nhigh *and* the loop is idle, which the message does not cover.\n\n### A test defect the fix exposed rather than caused\n\n`a_mix_that_dies_mid_play_republishes_with_the_reason` compared publish **counts** across a race with\nthe fetcher thread. Whether the retirement reason landed before or after `on_session`'s own publish\nwas thread timing, so \"did `check_health` add a publish?\" was only ever true when the fetcher lost.\nMaking a missing file cheap flipped which side usually wins, and a test that had passed for weeks\nbegan failing over a behaviour that had not changed. It now poses the property directly: given a\nsource reason the wire has not seen, and member health that has **not** moved, does `check_health`\npublish it?\n",
+                    "createdAt": "2026-08-11T09:11:50Z"
+                  }
+                ],
+                "totalCount": 4
+              },
+              "createdAt": "2026-08-08T21:10:26Z",
+              "id": "I_kwDOTBQnEM8AAAABL_P6jg",
+              "labels": {
+                "nodes": [
+                  {
+                    "name": "bug"
+                  }
+                ],
+                "totalCount": 1
+              },
+              "number": 26,
+              "repository": {
+                "nameWithOwner": "yuvalrakavy/airzoned"
+              },
+              "state": "CLOSED",
+              "stateReason": "COMPLETED",
+              "timelineItems": {
+                "nodes": [
+                  {
+                    "__typename": "LabeledEvent",
+                    "actor": {
+                      "login": "yuvalrakavy"
+                    },
+                    "createdAt": "2026-08-08T21:10:27Z",
+                    "id": "LE_lADOTBQnEM8AAAABL_P6js8AAAAGyoiB7Q",
+                    "label": {
+                      "name": "bug"
+                    }
+                  }
+                ],
+                "totalCount": 1
+              },
+              "title": "Flake: all_undecodable_loop_playlist_terminates_not_spins went red 3x on 2026-08-08, trigger unnamed",
+              "updatedAt": "2026-08-11T09:11:51Z"
+            },
+            {
+              "author": {
+                "login": "yuvalrakavy"
+              },
+              "authorAssociation": "OWNER",
+              "body": "## What happens\n\n`airzoned play` installs no signal handler. Only the daemon does (`signal-hook`, wired in `mqtt::run`). Confirmed:\n\n```\ngrep -n \"signal\\|SIGTERM\\|Drop for\" src/sender.rs src/main.rs   -> nothing\n```\n\nSo a `pkill` / Ctrl-C on a one-shot `play` terminates it mid-session with **no RTSP TEARDOWN**. The receiver keeps the session, and the next connection either gets `453 Not Enough Bandwidth` or is accepted and silently not rendered.\n\n## Why it matters more than it looks\n\n`play` is the **bring-up diagnostic** — the thing you reach for when something is already wrong. Using it to investigate a problem can therefore *create* a worse one, and the state it leaves looks exactly like a broken feature:\n\n- room silent\n- RTSP handshake completes cleanly (ANNOUNCE / SETUP / RECORD / SET_PARAMETER all succeed)\n- the receiver even requests RTP retransmissions, so it is demonstrably ingesting\n- `Transport: Playing`, member health green, no status reason\n\nOn 2026-08-15 this cost several hours and produced **two wrong culprits in a row** — a merge and then a feature branch were each named as an audio regression. Both builds were fine. An AirPlay push from a phone cleared the wedge in one move.\n\n`scripts/restart-daemon.sh` already documents this hazard in detail and waits 35 s with verification for the daemon. The one-shot has no equivalent.\n\n## Fix\n\nGive `run_play` / `sender::play` the same SIGTERM+SIGINT handling the daemon has, so the RTSP TEARDOWN goes out on the way down. The `Drop`-based teardown already exists; it just never runs.\n\n## Related\n\nThe trap is now documented in the `audio-ear-testing` skill (Store repo) so the *signature* is recognisable even before this is fixed.\n",
+              "closedAt": "2026-08-15T04:44:09Z",
+              "comments": {
+                "nodes": [
+                  {
+                    "author": {
+                      "login": "yuvalrakavy"
+                    },
+                    "authorAssociation": "OWNER",
+                    "body": "## Correction: the justification in the issue body was wrong, the fix is still right\n\nI attributed the 2026-08-15 incident to this missing TEARDOWN. **That is false for this receiver**, and I measured it properly after filing:\n\n| first `play` ended by | second `play` immediately after |\n|---|---|\n| `SIGKILL` — uncatchable, so no TEARDOWN at all | **connects fine** |\n| still running | **453 Not Enough Bandwidth** |\n\nThe receiver frees its session when the RTSP control connection drops, so the TCP close already does what a TEARDOWN would. A *dead* one-shot is harmless.\n\nWhat actually caused the incident was a **live** `airzoned play` I had backgrounded with `nohup … &` and lost track of — `netstat` showed it `ESTABLISHED` against the receiver while I was concluding things about silence. It competed with my own subsequent tests, and its 453 was read as evidence about the code under test.\n\n## So why keep the fix\n\nIt shipped anyway, because it is correct on its own terms:\n\n- an explicit TEARDOWN is what the protocol asks for, rather than relying on a receiver noticing a dropped socket;\n- it makes `play` symmetric with the daemon, which has had signal handling since `signal-hook` was added;\n- other receivers may well not be as forgiving as this one, and the cost is ~20 lines.\n\nIt is **hygiene, not a bug fix**, and the code comment now says that rather than repeating the wrong story.\n\nVerified: `SIGTERM` prints the teardown line and exits `done.`, and the next `play` connects immediately.\n",
+                    "createdAt": "2026-08-15T04:37:46Z"
+                  },
+                  {
+                    "author": {
+                      "login": "yuvalrakavy"
+                    },
+                    "authorAssociation": "OWNER",
+                    "body": "Shipped in `3f3364b`. SIGTERM/SIGINT clear the `running` flag that `sender::play`'s send loop already watched, so `rtsp.teardown()` (which already ran right after that loop) finally happens.\n\nVerified against the real receiver: SIGTERM prints the teardown line, exits `done.`, and the next `play` connects immediately.\n\nClosing as **hygiene**, per the correction above — it was not the cause of the 2026-08-15 incident. A live backgrounded `play` was.",
+                    "createdAt": "2026-08-15T04:44:09Z"
+                  }
+                ],
+                "totalCount": 2
+              },
+              "createdAt": "2026-08-15T04:26:18Z",
+              "id": "I_kwDOTBQnEM8AAAABM2tE8Q",
+              "labels": {
+                "nodes": [],
+                "totalCount": 0
+              },
+              "number": 27,
+              "repository": {
+                "nameWithOwner": "yuvalrakavy/airzoned"
+              },
+              "state": "CLOSED",
+              "stateReason": "COMPLETED",
+              "timelineItems": {
+                "nodes": [],
+                "totalCount": 0
+              },
+              "title": "play should send an RTSP TEARDOWN on signal (hygiene; NOT the cause of the 2026-08-15 incident)",
+              "updatedAt": "2026-08-15T04:44:09Z"
+            },
+            {
+              "author": {
+                "login": "yuvalrakavy"
+              },
+              "authorAssociation": "OWNER",
+              "body": "> **Status 2026-10-23:** **partially fixed.** The retirement wedge is gone: `ec58a82` made `PlaylistSource::drop` join producer and fetcher within `TEARDOWN_BOUND` = 2 s (`src/playlist.rs:1091-1121`), and `d7b2c68` leaves a stuck network fetch running (`fetch_left_running`) instead of joining it, so the serial source-reaper no longer queues behind it. The fetch thread is now leaked rather than joined, and keeps downloading. \"Reports Playing\" was fixed earlier by `74ed31e`. **Still open:** `read_to_end` (`src/spotify.rs:1378-1380`) has no aggregate deadline, so a slow-but-alive link stalls the room for one track. Docs to correct along with the fix: the \"bounded\" doc comment at `src/spotify.rs:1296-1297` and the `az-spotify-read` row at `docs/wait-registry.md:73`, which still make the claim this issue refutes.\n\n<!-- triage-2026-09-17 -->\n> **Correction, triaged 2026-09-17 — the stall and the retirement wedge below are real; the \"room reports Playing\" paragraph is fixed.**\n>\n> Fixed by `74ed31e` (`SourceEnd` on the wire): the producer's silence meter counts `Starved` on a thread that is not the one blocked in the read, so a room whose fetch hangs now publishes `Failed` with `SourceEnd: \"Broken\"` once it has been silent past the 30 s ceiling, instead of claiming `Playing`. Observed on 2026-09-16.\n>\n> Still open, and the reason to keep this: `fetch_track_bytes` has no aggregate deadline — the final `read_to_end` is unbounded — and a stalled fetch wedges retirement, because `PlaylistSource::drop` joins both threads (`src/playlist.rs`) on the single serial `source-reaper` (`src/engine/switch.rs`). A `take()` adapter with an elapsed budget would bound it; estimated hours. Triage recommendation: fix before deploy if time allows, else first after.\n\n---\n\n## The claim, and why it is wrong\n\n`fetch_track_bytes` carries this comment:\n\n> Bounded without a wall clock: every `AudioFile::read` either makes progress or fails on librespot's own download timeout, so there is no state in which this waits forever.\n\nThe **liveness** half holds — `position` advances and terminates at `file_size`, so `read_to_end` cannot loop forever. The **bound** does not.\n\nChecked against `librespot-audio-0.8.0/src/fetch/mod.rs:552-625`:\n\n- `download_timeout` = `minimum_download_size / minimum_throughput` = 64 KiB / 8 KiB = **8 s per condvar wait**, not per fetch. A 320 kbps track is ~8 MB in >=64 KiB chunks, so ~128 reads: worst case ~17 minutes.\n- Worse, on the branch that matters the 8 s **never fires at all**. `Condvar::wait_timeout` reports `timed_out()` only after a full interval with no notification, and `receive_data` notifies on every chunk. On a degraded-but-alive link (2 KB/s — a saturated uplink, a bad wifi channel) every read makes progress, so nothing times out and the read waits ~65 minutes for one track.\n\nTwo independent gate reviewers reached this conclusion separately.\n\n## What the listener gets\n\nThe producer holds the whole current track, so the stall surfaces at the *next* transition: `run_playlist` reaches `remaining == 0`, finds no prefetched `next`, and blocks in `track_rx.recv()` (`src/playlist.rs:631`). The packetiser stops, `pull()` returns `Starved`, `engine/switch.rs` mixes silence — with `Transport: Playing` and `StatusReason: null`. That is verbatim the failure `switch.rs:398-400` exists to prevent: *\"a silent room with nothing able to report it.\"*\n\n## And it wedges teardown\n\nA blocked producer cannot observe `skip` (the swap is above where it blocks), so **Skip does nothing**. `PlaylistSource::drop` sets `running = false` then joins the producer, which only unblocks when the fetcher drops `tx`, which only happens when the network read returns. That drop runs on the **single, serial** source-reaper thread (`engine/switch.rs:110-143`), so every subsequent retirement queues behind it, each still pinning two threads and up to ~3 decoded tracks.\n\nThis is the shape `CALL_TIMEOUT`'s own doc names — *\"a fetcher that never returns is the shape that wedged the house once already\"* — reintroduced through the one call `CALL_TIMEOUT` does not wrap.\n\n## Fix\n\nA size/time-limited `Read` adapter around the decrypted stream, or `take()` plus a checked elapsed budget, sized against `READY_GRACE_BOUNDED_PKTS` (~120 s). A timeout must be an item failure, which the rotation already handles.\n\n",
+              "closedAt": null,
+              "comments": {
+                "nodes": [],
+                "totalCount": 0
+              },
+              "createdAt": "2026-08-15T04:26:19Z",
+              "id": "I_kwDOTBQnEM8AAAABM2tFFw",
+              "labels": {
+                "nodes": [
+                  {
+                    "name": "bug"
+                  },
+                  {
+                    "name": "p2"
+                  },
+                  {
+                    "name": "partial"
+                  },
+                  {
+                    "name": "sources"
+                  }
+                ],
+                "totalCount": 4
+              },
+              "number": 28,
+              "repository": {
+                "nameWithOwner": "yuvalrakavy/airzoned"
+              },
+              "state": "OPEN",
+              "stateReason": null,
+              "timelineItems": {
+                "nodes": [
+                  {
+                    "__typename": "LabeledEvent",
+                    "actor": {
+                      "login": "yuvalrakavy"
+                    },
+                    "createdAt": "2026-10-23T20:22:28Z",
+                    "id": "LE_lADOTBQnEM8AAAABM2tFF88AAAAH79nS2Q",
+                    "label": {
+                      "name": "bug"
+                    }
+                  },
+                  {
+                    "__typename": "LabeledEvent",
+                    "actor": {
+                      "login": "yuvalrakavy"
+                    },
+                    "createdAt": "2026-10-23T20:22:28Z",
+                    "id": "LE_lADOTBQnEM8AAAABM2tFF88AAAAH79nTQQ",
+                    "label": {
+                      "name": "p2"
+                    }
+                  },
+                  {
+                    "__typename": "LabeledEvent",
+                    "actor": {
+                      "login": "yuvalrakavy"
+                    },
+                    "createdAt": "2026-10-23T20:22:28Z",
+                    "id": "LE_lADOTBQnEM8AAAABM2tFF88AAAAH79nTkw",
+                    "label": {
+                      "name": "sources"
+                    }
+                  },
+                  {
+                    "__typename": "LabeledEvent",
+                    "actor": {
+                      "login": "yuvalrakavy"
+                    },
+                    "createdAt": "2026-10-23T20:22:28Z",
+                    "id": "LE_lADOTBQnEM8AAAABM2tFF88AAAAH79nT6Q",
+                    "label": {
+                      "name": "partial"
+                    }
+                  }
+                ],
+                "totalCount": 4
+              },
+              "title": "fetch_track_bytes has no aggregate deadline: a slow-but-alive link stalls the room for a whole track",
+              "updatedAt": "2026-10-23T20:22:28Z"
+            },
+            {
+              "author": {
+                "login": "yuvalrakavy"
+              },
+              "authorAssociation": "OWNER",
+              "body": "> **Status 2026-10-23:** still open, checked against `7b4623f`; title updated because the consequence changed twice since filing (inferred from the code paths, not re-measured):\n\n- (a) An **unresolved** collection already answers `Turn::Unavailable` on a session failure (`src/spotify.rs:510-523`, #32), so the scenario needs the program resolved before the account died. A resolved Snapshot's budget is still `tracks.len().max(3)` (`spotify.rs:576-587`), and each item still calls `shared_session()` (`playlist.rs:1367`), reconnecting under the global `SHARED_SESSION` lock (`spotify.rs:1540-1567`). No time cap and no collection-level \"no session\" fault yet.\n- (b) Since `74ed31e` the starved room publishes `Failed` / `SourceEnd: \"Broken\"` after the 30 s silence ceiling and the store turns the room off. So the Mix is switched off instead of playing its other collection, rather than staying silent for ~100 min under `Playing`.\n\nCross-link: **#34** (same fix at the Spotify boundary; each failed item re-runs the `/v1/me` GET that drives its Retry-After up).\n\n## The mismatch\n\n`take_turn` (`src/playlist.rs:753-890`; was `Rotation::next_with` at 300-371) deliberately **stays inside a failing collection** until it succeeds or exhausts its budget, so one bad file does not cost a collection its airtime. That is correct when a failure costs milliseconds — a local decode error.\n\nA Spotify failure does not. It costs 20 s (metadata timeout), or 20 s + `alternatives.len() x 20 s`, or a whole slow-link read. And `SpotifyCollection::failure_budget()` is `tracks.len().max(3)`.\n\n## Scenario\n\nA Mix of `[spotify:playlist:200-tracks, /music/jazz.m3u]`. The enrolment is revoked overnight. On the Spotify slot's turn the budget is **200**, and each failed item costs a `shared_session()` -> `connect()` -> `oauth.refresh_token` (reqwest blocking, 30 s default timeout, verified at `reqwest-0.12.28/src/blocking/client.rs:1498`).\n\n200 x 30 s is **~100 minutes** during which the inner loop never breaks, so **the jazz collection never gets a turn** and the room is silent with `Transport: Playing`.\n\nThe comment (was `src/playlist.rs:688-691`, now nearest at `src/playlist.rs:230`) claims the opposite — that a Mix \"keeps playing its other collections\". That is only true *after* the budget is spent.\n\n## Compounding\n\nEvery one of those attempts holds the global `SHARED_SESSION` mutex across the whole connect, so a second room attempting Spotify serialises behind it.\n\n## Fix, two parts\n\nSame fix as #34 at the Spotify boundary (honour `Retry-After`, treat \"no session\" as a collection-level fault); land them together.\n\n1. **Cap the budget in time as well as items** for network-backed collections.\n2. **Treat \"cannot get a session at all\" as a COLLECTION-level fault** — retire immediately — rather than as N item-level ones. The rotation already draws that distinction; it just cannot see through the `decode` closure.\n\nPart 2 is the important one: a dead account is fully determined on attempt one, and paying for it 200 times is the actual defect.\n\n",
+              "closedAt": null,
+              "comments": {
+                "nodes": [],
+                "totalCount": 0
+              },
+              "createdAt": "2026-08-15T04:26:19Z",
+              "id": "I_kwDOTBQnEM8AAAABM2tFRg",
+              "labels": {
+                "nodes": [
+                  {
+                    "name": "bug"
+                  },
+                  {
+                    "name": "p1"
+                  },
+                  {
+                    "name": "sources"
+                  }
+                ],
+                "totalCount": 3
+              },
+              "number": 29,
+              "repository": {
+                "nameWithOwner": "yuvalrakavy/airzoned"
+              },
+              "state": "OPEN",
+              "stateReason": null,
+              "timelineItems": {
+                "nodes": [
+                  {
+                    "__typename": "LabeledEvent",
+                    "actor": {
+                      "login": "yuvalrakavy"
+                    },
+                    "createdAt": "2026-10-23T20:22:26Z",
+                    "id": "LE_lADOTBQnEM8AAAABM2tFRs8AAAAH79nIuw",
+                    "label": {
+                      "name": "bug"
+                    }
+                  },
+                  {
+                    "__typename": "LabeledEvent",
+                    "actor": {
+                      "login": "yuvalrakavy"
+                    },
+                    "createdAt": "2026-10-23T20:22:26Z",
+                    "id": "LE_lADOTBQnEM8AAAABM2tFRs8AAAAH79nI6w",
+                    "label": {
+                      "name": "p1"
+                    }
+                  },
+                  {
+                    "__typename": "LabeledEvent",
+                    "actor": {
+                      "login": "yuvalrakavy"
+                    },
+                    "createdAt": "2026-10-23T20:22:26Z",
+                    "id": "LE_lADOTBQnEM8AAAABM2tFRs8AAAAH79nJJA",
+                    "label": {
+                      "name": "sources"
+                    }
+                  }
+                ],
+                "totalCount": 3
+              },
+              "title": "A dead Spotify account is paid per item, so a Mix never reaches its other collections (and is now turned off as Broken)",
+              "updatedAt": "2026-10-23T20:22:26Z"
+            },
+            {
+              "author": {
+                "login": "yuvalrakavy"
+              },
+              "authorAssociation": "OWNER",
+              "body": "> **Status 2026-10-23:** still open, checked against `7b4623f`. The alternatives loop is `src/spotify.rs:1316-1340`; `id` is rebound there and consumed by `audio_key().request(id, file_id)` (`spotify.rs:1346`); `.map_err(...)?` on a bad alternative id (1326-1329) aborts the whole fetch; no `availability`/`restrictions` use anywhere in `src/`. The side regression in the correction note (empty ids from `track_refs`) **is fixed** by `339b280` (`spotify.rs:1266-1285` skips id-less entries with a log line), so only the four loop defects remain. Item 2 (which track id the key wants) still needs a live region-split track.\n\n<!-- triage-2026-09-17 -->\n> **Correction, triaged 2026-09-17 — the two main defects below still hold; §3 refers to code that no longer exists.**\n>\n> Still valid: the alternatives fallback applies no `availability` filter (`src/spotify.rs` `fetch_track_bytes`; the field exists at `librespot-metadata` `track.rs:43` and is used nowhere in `src/`); the audio key uses the **alternative's** id (`id` is rebound, then consumed by the key request); the walk has no cap; and a `map_err(…)?` aborts the whole fetch where it should `continue`.\n>\n> §3 below is stale: `name_tracks` was removed on 2026-09-16 (`bca5b32`) — a program is now resolved to ids alone, and a track is named lazily by the fetch that plays it. That change introduced a small related regression (**fixed by `339b280`**, see the 2026-10-23 status): `track_refs` does `uri.to_id().unwrap_or_default()`, so an unparseable URI yields an **empty** id, and because the playout log now falls back to the id until the track is fetched (`src/playlist.rs` `Item::describe`), such a track logs as nothing where it used to log a title.\n\n---\n\n## Two defects in the same loop (`src/spotify.rs`, the `alternatives` fallback)\n\nSpotify models regional licensing by publishing the same recording several times; when the named copy has no playable file we walk `track.alternatives`. Both problems below live only on that path, which is why a probe run on one account in one region never enters it.\n\n### 1. `availability` is ignored, where librespot filters on it\n\nWe take the **first** alternative that has a Vorbis file. librespot takes the first that is *available to this user*:\n\n```rust\n// librespot player.rs:906-926, find_available_alternative\nalternatives\n    .filter_map(|x| future::ready(x.ok()))\n    .filter(|x| future::ready(x.availability.is_ok()))   // <-- this\n    .next()\n```\n\n`availability` is computed by `available_for_user` (embargo + `countries_allowed`/`countries_forbidden` against `user_data.country`). airzoned reads neither `track.availability` nor `track.restrictions` anywhere — both are on the struct (`librespot-metadata/src/track.rs:33-34`), grep finds zero uses.\n\n**Failure:** primary copy region-gated; alt-A licensed US-only, alt-B licensed IL; account is IL. We pick alt-A because it is first and has a file. The key request or CDN open refuses it, the track is skipped and charged to the budget, and alt-B — the copy we could actually stream — is never tried. Across a playlist of regionally-split tracks the collection retires on a source librespot plays fine.\n\n### 2. The audio key uses the ALTERNATIVE's track id; librespot uses the ORIGINAL's\n\nlibrespot binds `track_id` from the originally requested URI **before** `find_available_alternative` may swap in an alternative, and never reassigns it — then requests `audio_key().request(track_id, file_id)`: original track id, alternative's file id. We pass `(alt_id, alt_file_id)`.\n\n`AudioKeyManager::request(&self, track: SpotifyId, file: FileId)` takes both and the **pair** is what the key server validates.\n\n**UNCONFIRMED which side is right** — it needs a live account holding a region-split track, and both are defensible readings of a pair-keyed API. But the divergence from the reference implementation is a fact, it sits on the one path a probe never exercises, and if librespot is right then every alternative-sourced track gets a refused key.\n\n### 3. Minor, same loop\n\n- No cap on iteration: each alternative costs up to `CALL_TIMEOUT` (20 s), and catalogue titles routinely carry 10-40. Feeds directly into the unbounded-fetch and budget-in-seconds issues.\n- `SpotifyId::from_base62(&alt_uri.to_id().unwrap_or_default())` uses `?`, so one alternative with an id that will not round-trip **aborts the whole fetch** instead of `continue`-ing to the next.\n- The same `unwrap_or_default()` in `name_tracks` mints a `TrackRef` with an empty id and a real display name — a program slot that fails every cycle forever while looking normal in the playout log.\n\n## Fix\n\nFilter on `availability` like librespot does; decide the track-id question against a real region-split track and match the reference; cap the walk; `continue` instead of `?`.\n\n",
+              "closedAt": null,
+              "comments": {
+                "nodes": [],
+                "totalCount": 0
+              },
+              "createdAt": "2026-08-15T04:26:20Z",
+              "id": "I_kwDOTBQnEM8AAAABM2tFag",
+              "labels": {
+                "nodes": [
+                  {
+                    "name": "bug"
+                  },
+                  {
+                    "name": "p2"
+                  },
+                  {
+                    "name": "sources"
+                  }
+                ],
+                "totalCount": 3
+              },
+              "number": 30,
+              "repository": {
+                "nameWithOwner": "yuvalrakavy/airzoned"
+              },
+              "state": "OPEN",
+              "stateReason": null,
+              "timelineItems": {
+                "nodes": [
+                  {
+                    "__typename": "LabeledEvent",
+                    "actor": {
+                      "login": "yuvalrakavy"
+                    },
+                    "createdAt": "2026-10-23T20:22:23Z",
+                    "id": "LE_lADOTBQnEM8AAAABM2tFas8AAAAH79m8Sg",
+                    "label": {
+                      "name": "bug"
+                    }
+                  },
+                  {
+                    "__typename": "LabeledEvent",
+                    "actor": {
+                      "login": "yuvalrakavy"
+                    },
+                    "createdAt": "2026-10-23T20:22:23Z",
+                    "id": "LE_lADOTBQnEM8AAAABM2tFas8AAAAH79m8mw",
+                    "label": {
+                      "name": "p2"
+                    }
+                  },
+                  {
+                    "__typename": "LabeledEvent",
+                    "actor": {
+                      "login": "yuvalrakavy"
+                    },
+                    "createdAt": "2026-10-23T20:22:23Z",
+                    "id": "LE_lADOTBQnEM8AAAABM2tFas8AAAAH79m82g",
+                    "label": {
+                      "name": "sources"
+                    }
+                  }
+                ],
+                "totalCount": 3
+              },
+              "title": "The alternatives fallback ignores availability, and uses the alternative's track id for the audio key",
+              "updatedAt": "2026-10-23T20:22:23Z"
+            }
+          ],
+          "pageInfo": {
+            "endCursor": "Y3Vyc29yOnYyOpK0MjAyNi0wOC0xNVQwNDoyNjoyMFrPAAAAATNrRWo=",
+            "hasNextPage": true
+          }
+        }
+      }
+    }
+  },
+  "variables": {
+    "after": "Y3Vyc29yOnYyOpK0MjAyNi0wOC0wOFQxODo1NjoxNVrPAAAAAS_sLgY=",
+    "first": 5,
+    "name": "airzoned",
+    "owner": "yuvalrakavy",
+    "since": "2024-10-29T12:00:00.000Z"
+  }
+}

@@ -2,7 +2,8 @@
 //! transaction of the ledger, and written as `<root>/outbox/<project>/<seq>.json`.
 //!
 //! Phase 1 derives `meta`, `issues`, `acks`, `launch_status` and `suggestions` (a
-//! recommender's, [`suggest`]); `plans`, `forks` and `metrics` are written empty until the
+//! recommender's, [`suggest`]); `metrics` holds one document per triage key
+//! ([`crate::metrics`], triage spec 4.4); `plans` and `forks` are written empty until the
 //! steps that produce them exist. Every
 //! document is checked against its schema before the file is written.
 
@@ -18,9 +19,10 @@ use serde_json::{Value, json};
 
 use crate::config::{ConfigSet, View};
 use crate::decision::{self, Status};
-use crate::docs::{Action, Decision, DecisionValue, Priority};
+use crate::docs::{Action, Decision, Priority};
 use crate::event::Kind;
 use crate::launch::{self, State};
+use crate::layers::{self, Layers};
 use crate::ledger;
 use crate::observe::{ItemKind, ObservedData};
 use crate::root::{format_time, parse_time};
@@ -118,8 +120,10 @@ struct Context<'a> {
     translation: Translation,
     maintainers: &'a [String],
     limits: BTreeMap<Priority, u32>,
-    project_priorities: &'a BTreeMap<String, Priority>,
-    overrides: &'a BTreeMap<String, (DecisionValue, Option<String>)>,
+    /// Override > accepted suggestion > label (triage spec 4.2).
+    layers: &'a Layers,
+    /// The Details of each item's triage (4.5), by item.
+    triage: &'a BTreeMap<String, Value>,
     taken_at: DateTime<Utc>,
     stale: bool,
     closes: &'a BTreeMap<String, Value>,
@@ -162,20 +166,16 @@ impl Context<'_> {
         let c = &o.content;
         let labels = strings(c, "labels");
         let canon = self.translation.translate(&labels);
-        let over = self.overrides.get(id);
-        let type_ = over.and_then(|(v, _)| v.type_.clone()).or(canon.type_.clone());
-        let areas = over.and_then(|(v, _)| v.areas.clone()).unwrap_or(canon.areas.clone());
+        let over = self.layers.overrides.get(id);
+        let eff = self.layers.effective(id, &canon);
+        let type_ = eff.type_.clone();
+        let areas = eff.areas.clone();
         let override_priority = over.and_then(|(v, reason)| {
             v.priority
                 .map(|p| json!({"value": p, "reason": reason.clone().unwrap_or_else(|| "set on the dashboard".into())}))
         });
-        let project = self.project_priorities.get(id).copied();
-        let (value, source) = match (over.and_then(|(v, _)| v.priority), project, canon.priority) {
-            (Some(p), _, _) => (Some(p), Some("override")),
-            (None, Some(p), _) => (Some(p), Some("project")),
-            (None, None, Some(p)) => (Some(p), Some("label")),
-            _ => (None, None),
-        };
+        let project = self.layers.priorities.get(id).copied();
+        let (value, source) = (eff.priority, eff.priority_source);
 
         let association = c.get("author_association").and_then(Value::as_str).unwrap_or("NONE");
         let author = c.get("author").and_then(Value::as_str).unwrap_or("ghost").to_string();
@@ -228,7 +228,10 @@ impl Context<'_> {
             "title": c.get("title").and_then(Value::as_str).unwrap_or(""),
             "state": state,
             "type": type_,
+            "type_source": eff.type_source,
             "areas": areas,
+            "areas_source": eff.areas_source,
+            "triage": self.triage.get(id).cloned().unwrap_or_else(|| json!({})),
             "modifiers": canon.modifiers,
             "priority": {
                 "value": value,
@@ -469,6 +472,9 @@ fn launch_status(conn: &Connection, project: &str) -> Result<Vec<Value>> {
         out.push(json!({
             "id": l.id,
             "launch": l.id,
+            "kind": l.request.kind,
+            "scope": l.request.triage_scope(),
+            "author": l.request.author,
             "state": l.state,
             "token": l.token,
             "session": l.session,
@@ -481,6 +487,43 @@ fn launch_status(conn: &Connection, project: &str) -> Result<Vec<Value>> {
         }));
     }
     Ok(out)
+}
+
+/// What the page's Run triage… sheet needs (triage spec 5.1, 5.3): the routing each launch kind
+/// gets, the backends any evaluation measured, and the items each scope would ask about now
+/// (in the 2.2 order, uncapped).
+fn triage_meta(conn: &Connection, config: &ConfigSet, project: &str, now: &str) -> Result<Value> {
+    let routing = |kind: &str| -> Result<Value> {
+        Ok(match config.routing(project, kind) {
+            Ok(r) => serde_json::to_value(r)?,
+            Err(_) => Value::Null,
+        })
+    };
+    let mut evaluated = std::collections::BTreeSet::new();
+    for e in ledger::events_by_kind(conn, Kind::Evaluated)? {
+        if e.data["project"] == project
+            && let Some(b) = e.data["backend"].as_str()
+        {
+            evaluated.insert(b.to_string());
+        }
+    }
+    let p = config.project(project)?;
+    let max = p.max_triage_items.unwrap_or(crate::config::MAX_TRIAGE_ITEMS) as usize;
+    // Uncapped: the page keeps the items of the repos in view and only then caps at
+    // `max_triage_items`, so one busy repo cannot hide another's due items.
+    let queue = |scope| -> Result<Vec<String>> {
+        let c = crate::triage::select(conn, config, project, scope, now)?;
+        Ok(c.into_iter().map(|c| c.item).collect())
+    };
+    Ok(json!({
+        "routing": {"triage": routing("triage")?, "stronger_look": routing("stronger_look")?},
+        "evaluated_backends": evaluated,
+        "max_triage_items": max,
+        "triage_queue": {
+            "full": queue(crate::docs::TriageScope::Full)?,
+            "closures": queue(crate::docs::TriageScope::Closures)?,
+        },
+    }))
 }
 
 /// Each group a member of `project` names, with the tracked repos it holds (the page's scope
@@ -571,8 +614,8 @@ pub fn derive(
     let sync_minutes = p.sync_interval_minutes.unwrap_or(DEFAULT_SYNC_MINUTES);
     let maintainers = p.maintainers.clone().unwrap_or_default();
     let limits = limits(config, project)?;
-    let project_priorities = decision::project_priorities(conn, project)?;
-    let overrides: BTreeMap<String, (DecisionValue, Option<String>)> = decision::overrides(conn, project)?;
+    let layers = layers::layers(conn, project)?;
+    let triage = suggest::triage_details(conn, project, &layers)?;
     let window = taken_at - Duration::days(history_days as i64);
     let closes = write::standing_closes(conn, project)?;
     let dismissals = decision::dismissals(conn, project)?;
@@ -595,8 +638,8 @@ pub fn derive(
             translation: Translation::for_repo(config, &view.repo),
             maintainers: &maintainers,
             limits: limits.clone(),
-            project_priorities: &project_priorities,
-            overrides: &overrides,
+            layers: &layers,
+            triage: &triage,
             taken_at,
             stale,
             closes: &closes,
@@ -629,6 +672,7 @@ pub fn derive(
         "open": open.len(),
     });
     let taken = format_time(taken_at);
+    let triage = triage_meta(conn, config, project, &taken)?;
     let meta = json!({
         "schema": 1,
         "project": project,
@@ -646,6 +690,10 @@ pub fn derive(
         "recently_closed_days": p.recently_closed_days.unwrap_or(DEFAULT_RECENTLY_CLOSED_DAYS).min(history_days),
         // The page tells a viewer whose actions would all be refused (10.5): none is set yet.
         "owner_id": Some(p.owner_id.as_str()).filter(|o| !o.is_empty() && *o != PENDING_OWNER),
+        "routing": triage["routing"],
+        "evaluated_backends": triage["evaluated_backends"],
+        "max_triage_items": triage["max_triage_items"],
+        "triage_queue": triage["triage_queue"],
     });
     let out = Outbox {
         project: project.to_string(),
@@ -655,10 +703,10 @@ pub fn derive(
         issues,
         acks: acks(conn, project, taken_at)?,
         launch_status: launch_status(conn, project)?,
-        suggestions: suggest::documents(conn, project)?,
+        suggestions: suggest::documents(conn, config, project)?,
         plans: Vec::new(),
         forks: Vec::new(),
-        metrics: Vec::new(),
+        metrics: crate::metrics::documents(conn, project, taken_at)?,
     };
     validate(&out)?;
     Ok(out)
@@ -672,6 +720,7 @@ pub fn validate(out: &Outbox) -> Result<()> {
         ("doc-acks", &out.acks),
         ("doc-launch-status", &out.launch_status),
         ("doc-suggestion", &out.suggestions),
+        ("doc-metrics", &out.metrics),
     ] {
         for d in docs {
             schema::validate(stem, &format!("{stem} {}", d["id"]), d)?;

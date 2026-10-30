@@ -880,6 +880,10 @@ comment): the owner's Close on that sheet is the approval, as for a hand close. 
 hides that issue's suggestion of that kind, from every later run, until a newer observation
 of the issue.
 
+`recommend_closures` is an alias of the `triage` launch with scope `closures` (triage spec 5.1):
+it runs in the same read-only pool, its phase-1 documents and button keep working, and it keeps
+its own brief (7.5).
+
 **The rule behind the table:** accepting a label change is approval enough to write it;
 anything that closes an issue or posts a comment is visible to others and harder to undo, so
 it comes back once more as a plan. "Apply all labels at or above a confidence" acts only on
@@ -994,8 +998,8 @@ the summed effort plus one gate cost. The highest-scoring batch is the **Next ba
 ### 6.7 The priority suggestion
 
 The suggested level for an untriaged issue is a decision through the seam (7.1), from
-severity, reach, likelihood and detectability, with a silent failure raised one level. It
-is shown beside the current label with its confidence, and becomes the project priority only
+severity, reach and detectability, with a silent failure raised one level (likelihood is
+folded into reach, triage spec 1.5). It is shown beside the current label with its confidence, and becomes the project priority only
 when you accept it.
 
 ### 6.8 Keeping the estimates honest
@@ -1045,10 +1049,10 @@ Two rules:
 
    | Bar | Needs | Unlocks |
    |---|---|---|
-   | **Evaluated** | at least 50 labelled examples held out from any tuning, and expected calibration error at most 0.10 | its suggestions are shown marked "evaluated"; a calibrated backend's stated confidence can be trusted even when its accuracy is middling, and that confidence is what each card shows |
+   | **Evaluated** | at least 100 labelled examples held out from any tuning, and expected calibration error (plain ℓ1, ten bins) at most 0.10 | its suggestions are shown marked "evaluated"; a calibrated backend's stated confidence can be trusted even when its accuracy is middling, and that confidence is what each card shows |
    | **Bulk** | the evaluated bar, plus accuracy at least 85 % | its suggestions may be included in "apply all at or above a confidence", the one place an error is applied unread |
 
-   **Cold start:** until a decision has 50 labelled examples, the default backend (Claude)
+   **Cold start:** until a decision has 100 labelled examples, the default backend (Claude)
    answers it unevaluated; its suggestions are marked "unevaluated" and are never included
    in "apply all at or above a confidence". For decisions with no ground truth in labels
    (duplicates, "is this fixed"), the examples come from your accepts and dismissals (5.7)
@@ -1057,8 +1061,9 @@ Two rules:
    **Labels set in a bulk review are tagged.** Labels you approved as a batch (such as the
    priorities set in the 2026-10-23 review, drafted by Claude) count as ground truth, but
    carry their provenance, so an evaluation can be re-run without them if they skew the
-   result. As of 2026-10-24, type and priority already have enough examples in Store alone;
-   area (eleven choices in Store) may stay unevaluated for a while.
+   result. Measured on VillaRakavy's history, type, priority and Store's area pass the Evaluated
+   bar and type also passes Bulk; a repo with few labelled issues (logmon-mcp's area, 13
+   examples) stays unevaluated until it has 100 (`docs/triage-tutorial.md`, section 5).
 2. **Backends are configuration, and so is who may see what.** The tracker-wide config picks
    a backend per decision. Each repo has a data policy naming the backends allowed to see
    its issue text; for a private repo, every external backend is off until the owner
@@ -1179,7 +1184,7 @@ routing:
 | fix, tier T2 | strongest | high |
 | fix, tier T3, or a bug whose cause is unknown | strongest | high |
 | batch | the highest row any member needs | |
-| triage session | Sonnet | medium; a judgement it cannot settle is recorded as "needs a stronger look", and the dispatcher (which runs on the strongest model) launches a short stronger session for those items, since a session cannot start one above itself |
+| triage session | Opus 5.5 | medium (the owner's ruling; `[routing.triage]` overrides it); a judgement it cannot settle is recorded as "needs a stronger look", and the dispatcher (which runs on the strongest model) launches a short stronger session for those items (`stronger_look`: the strongest model, high), since a session cannot start one above itself |
 | review of an outside pull request | strongest | high |
 | `decision` type (design question) | the best design model | high, design only, no code |
 | "send upstream" | Opus | medium |
@@ -1214,14 +1219,16 @@ material like any other outside text. Its sections:
 6. **Out of scope**: side problems get filed, not fixed.
 7. **Reporting back**: the outcome record to write when it lands (7.7).
 
-**The recommend brief** (`recommend_closures`, 5.8) has its own template: the read-only rules
-(never close, label, comment or push; record only with `record-suggestions`); the generic
-closing procedure (`docs/closing-recommendations.md`) when some repo has no campaign skill;
-per repo, its campaign skill's path (the registry's `campaign_skill`, a path in the repo's
-`local_path` checkout), or a note that the file is missing and the generic procedure applies;
-then each issue's alias and title, fenced under its author, inside or outside; and the JSON
-the session writes. The skill named is the repo's own way of deciding what can close and what
-closes together; the tracker names it in config and never in code.
+**The recommend brief** (`recommend_closures`, 5.8) is the triage brief with scope `closures`
+(triage spec 2.1, 5.1): the read-only rules (never close, label, comment or push; run only
+`prepare` and `record-suggestions`); the steps (prepare, answer, record the answers with the
+estimates, batches and issues left open, in one file whose example the brief shows); per repo,
+its checkout and how to judge closures: its campaign skill's path (the registry's
+`campaign_skill`, a path in the repo's `local_path` checkout), or a note that the file is
+missing or that none is named, and that the closing procedure of the
+`issue-dashboard-triage-session` skill applies; then the issues by alias only (blinded), with
+any instructs_agent warning. The skill named is the repo's own way of deciding what can close
+and what closes together; the tracker names it in config and never in code.
 
 ### 7.6 Launch recipes
 

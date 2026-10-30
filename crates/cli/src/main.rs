@@ -15,7 +15,9 @@ use issue_dashboard_core::brief;
 use issue_dashboard_core::config::ConfigSet;
 use issue_dashboard_core::cycle;
 use issue_dashboard_core::docs::LaunchRequest;
+use issue_dashboard_core::eval;
 use issue_dashboard_core::github::{GhCli, GitHub, Recorder, Replay};
+use issue_dashboard_core::history;
 use issue_dashboard_core::ingest::{self, Pages};
 use issue_dashboard_core::launch::{self, EndState, Via};
 use issue_dashboard_core::outcome::{self, GateRuns, Outcome, RecordedBy};
@@ -26,6 +28,7 @@ use issue_dashboard_core::sessions::SessionList;
 use issue_dashboard_core::suggest;
 use issue_dashboard_core::sync;
 use issue_dashboard_core::triage;
+use issue_dashboard_core::truth;
 use issue_dashboard_core::write::{GhIssues, IssueWriter};
 use issue_dashboard_core::{Error, Kind, Root, ledger};
 use serde_json::{Value, json};
@@ -135,6 +138,17 @@ enum Command {
         /// Only those holding a slot (reserved, unconfirmed or started) or queued.
         #[arg(long)]
         live: bool,
+        /// Only those recorded and not yet reserved or queued: the daily triage run's request
+        /// waits here until the dispatcher reserves it (triage spec 5.2).
+        #[arg(long, conflicts_with = "live")]
+        requested: bool,
+    },
+    /// The daily triage run (triage spec 5.2): record a `triage` launch request authored by
+    /// `schedule`, naming the items due, at the project's configured routing. Refused while a
+    /// triage launch of the project is live; with nothing due it records nothing.
+    TriageRequest {
+        #[arg(long)]
+        project: String,
     },
     /// One cycle of a project (10.4): ingest the page documents, read GitHub, and write the
     /// project's outbox.
@@ -208,6 +222,95 @@ enum Command {
         listing: PathBuf,
         #[arg(long)]
         out: PathBuf,
+    },
+    /// Measure a triage backend against history and the owner's records (triage spec 3).
+    #[command(subcommand)]
+    Eval(EvalCommand),
+    /// Mark truth (triage spec 3.3).
+    #[command(subcommand)]
+    Truth(TruthCommand),
+}
+
+#[derive(Subcommand)]
+enum EvalCommand {
+    /// Read the project's issue history of the last eval_history_days (default 730) into
+    /// state/evals/history; an interrupted read resumes from its last page (3.2).
+    RefreshHistory {
+        #[arg(long)]
+        project: String,
+    },
+    /// Write a replay's blinded tuning and held-out question files into --out, and its manifest
+    /// under state/evals (3.2).
+    Prepare {
+        #[arg(long)]
+        project: String,
+        #[arg(long)]
+        decision: String,
+        /// The backend measured, as model@effort.
+        #[arg(long)]
+        backend: String,
+        #[arg(long)]
+        out: PathBuf,
+        /// Drop truths of this provenance; repeatable.
+        #[arg(long)]
+        exclude: Vec<String>,
+        /// Only this repo's items (area is asked differently per repo).
+        #[arg(long)]
+        repo: Option<String>,
+        /// Priority's stages: first (severity, reach, detectability), then priority.
+        #[arg(long, value_enum)]
+        stage: Option<StageArg>,
+        /// Priority's stage: the first stage's answers files.
+        #[arg(long)]
+        answers: Vec<PathBuf>,
+    },
+    /// Score a replay's answers (or with --live a closure decision's recorded suggestions),
+    /// fit and freeze its calibration map, and record the evaluated event (3.2, 3.5).
+    Score {
+        #[arg(long)]
+        project: String,
+        #[arg(long)]
+        decision: String,
+        #[arg(long)]
+        backend: String,
+        /// The answers files of the tuning and held-out questions.
+        #[arg(long, required_unless_present = "live")]
+        answers: Vec<PathBuf>,
+        #[arg(long)]
+        exclude: Vec<String>,
+        #[arg(long)]
+        repo: Option<String>,
+        #[arg(long, conflicts_with_all = ["answers", "repo"])]
+        live: bool,
+    },
+    /// Every key's latest evaluation and drift (3.5).
+    Status {
+        #[arg(long)]
+        project: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum TruthCommand {
+    /// List the later label events of a decision in a time range, and with --yes tag them as
+    /// a named bulk review (3.3).
+    Tag {
+        #[arg(long)]
+        project: String,
+        #[arg(long)]
+        name: String,
+        #[arg(long)]
+        decision: String,
+        #[arg(long)]
+        from: String,
+        #[arg(long)]
+        to: String,
+        /// Only these issues (owner/repo#N); repeatable.
+        #[arg(long)]
+        issues: Vec<String>,
+        /// Record the tags; without it the events are only listed.
+        #[arg(long)]
+        yes: bool,
     },
 }
 
@@ -365,6 +468,18 @@ fn outcome_of(a: &OutcomeArgs) -> Result<Outcome, Error> {
     })
 }
 
+/// Eval answers files (3.2), each `{backend, answers}`.
+fn read_answers(paths: &[PathBuf]) -> anyhow::Result<Vec<eval::EvalAnswers>> {
+    paths
+        .iter()
+        .map(|path| {
+            let text = std::fs::read_to_string(path).with_context(|| path.display().to_string())?;
+            Ok(serde_json::from_str(&text)
+                .map_err(|e| Error::refused(format!("{}: not an answers file: {e}", path.display())))?)
+        })
+        .collect()
+}
+
 /// A path as one shell word, for the commands a brief hands a session.
 fn shell_word(p: &std::path::Path) -> String {
     let s = p.display().to_string();
@@ -461,6 +576,12 @@ fn run(cli: Cli) -> anyhow::Result<Value> {
         Command::Cycle { .. } => "cycle",
         Command::Snapshot { .. } => "snapshot",
         Command::SyncNow { .. } => "sync-now",
+        Command::TriageRequest { .. } => "triage-request",
+        Command::Eval(EvalCommand::RefreshHistory { .. }) => "eval-refresh-history",
+        Command::Eval(EvalCommand::Prepare { .. }) => "eval-prepare",
+        Command::Eval(EvalCommand::Score { .. }) => "eval-score",
+        Command::Eval(EvalCommand::Status { .. }) => "eval-status",
+        Command::Truth(TruthCommand::Tag { .. }) => "truth-tag",
         Command::Pages { .. } | Command::PublishPlan { .. } | Command::CleanupPlan { .. } => {
             unreachable!("run_sync answered")
         }
@@ -510,14 +631,9 @@ fn run(cli: Cli) -> anyhow::Result<Value> {
                 }
                 let id = match &request {
                     Some(doc) => {
-                        // 7.3 step 1: only the owner's launch documents are acted on.
-                        let owner = &config.project(&doc.project)?.owner_id;
-                        if &doc.author != owner {
-                            return Err(Error::refused(format!(
-                                "launch {}: author {} is not project {}'s owner_id",
-                                doc.id, doc.author, doc.project
-                            )));
-                        }
+                        // 7.3 step 1: only the owner's launch documents are acted on, and the
+                        // daily run's triage requests (triage spec 5.2).
+                        launch::check_author(&config, doc)?;
                         launch::request(tx, doc, Via::Reserve)?;
                         // A cancel ingested before this launch was requested takes effect now,
                         // or did on an earlier try of this command: either way it is withdrawn.
@@ -527,7 +643,15 @@ fn run(cli: Cli) -> anyhow::Result<Value> {
                         }
                         doc.id.clone()
                     }
-                    None => a.launch.clone().expect("clap requires --launch without --request"),
+                    None => {
+                        let id = a.launch.clone().expect("clap requires --launch without --request");
+                        // The same check for a launch already recorded: the daily run records
+                        // its request itself, and reserve is where the author is checked.
+                        if let Some(l) = launch::load(tx.conn(), &id)? {
+                            launch::check_author(&config, &l.request)?;
+                        }
+                        id
+                    }
                 };
                 Ok(serde_json::to_value(launch::reserve(
                     tx,
@@ -612,11 +736,14 @@ fn run(cli: Cli) -> anyhow::Result<Value> {
                 suggest::record(tx, &config, &launch, &input, &commits)
             })?)?
         }
-        Command::Launches { live } => {
+        Command::Launches { live, requested } => {
             let rows = root.read(|l| {
                 let mut out = Vec::new();
                 for x in launch::all(l.conn())? {
                     if live && !(x.state.holds() || x.state == launch::State::Queued) {
+                        continue;
+                    }
+                    if requested && x.state != launch::State::Requested {
                         continue;
                     }
                     let outcome = ledger::latest(l.conn(), &x.id, Kind::Outcome)?.is_some();
@@ -624,6 +751,8 @@ fn run(cli: Cli) -> anyhow::Result<Value> {
                         "id": x.id,
                         "project": x.request.project,
                         "kind": x.request.kind,
+                        "scope": x.request.triage_scope(),
+                        "author": x.request.author,
                         "aliases": x.request.aliases,
                         "recipe": x.request.recipe,
                         "routing": x.request.routing,
@@ -684,9 +813,101 @@ fn run(cli: Cli) -> anyhow::Result<Value> {
             config.record(tx)?;
             sync::request(tx, &config, &project, issue.as_deref())
         })?)?,
+        Command::TriageRequest { project } => serde_json::to_value(root.mutate_with_clock(now, |tx| {
+            // Read under the lock, as `reserve` does.
+            let config = ConfigSet::load(&dir)?;
+            config.record(tx)?;
+            issue_dashboard_core::daily::request(tx, &config, &project)
+        })?)?,
         Command::Snapshot { project } => {
             let gh = github()?;
             json!({"repos": cycle::snapshot(&root, gh.as_ref(), &project, &now, page_size()?)?})
+        }
+        Command::Eval(EvalCommand::RefreshHistory { project }) => {
+            let config = ConfigSet::load(&dir)?;
+            let gh = github()?;
+            let page = match std::env::var(ENV_PAGE_SIZE) {
+                Ok(_) => page_size()?,
+                Err(_) => history::HISTORY_PAGE,
+            };
+            // History is files beside the ledger, not events: it takes no lock, so a long read
+            // never blocks a sync cycle; each page is written whole, by rename.
+            let repos = history::refresh(&dir, &config, gh.as_ref(), &project, now(), page)?;
+            json!({"repos": repos})
+        }
+        Command::Eval(EvalCommand::Prepare {
+            project,
+            decision,
+            backend,
+            out,
+            exclude,
+            repo,
+            stage,
+            answers,
+        }) => {
+            let config = ConfigSet::load(&dir)?;
+            let first = read_answers(&answers)?;
+            let stage = match stage {
+                Some(StageArg::First) => eval::EvalStage::First,
+                Some(StageArg::Priority) | None => eval::EvalStage::Scored,
+            };
+            let r = eval::Replay {
+                exclude: eval::exclusions(&config, &project, &exclude)?,
+                project,
+                decision,
+                backend,
+                repo,
+            };
+            serde_json::to_value(root.read(|l| eval::prepare(l.conn(), &dir, &config, &r, stage, &first, &out))?)?
+        }
+        Command::Eval(EvalCommand::Score {
+            project,
+            decision,
+            backend,
+            answers,
+            exclude,
+            repo,
+            live,
+        }) => {
+            let answers = read_answers(&answers)?;
+            serde_json::to_value(root.mutate_with_clock(now, |tx| {
+                let config = ConfigSet::load(&dir)?;
+                if live {
+                    return eval::score_live(tx, &dir, &config, &project, &decision, &backend, &exclude);
+                }
+                let r = eval::Replay {
+                    exclude: eval::exclusions(&config, &project, &exclude)?,
+                    project: project.clone(),
+                    decision: decision.clone(),
+                    backend: backend.clone(),
+                    repo: repo.clone(),
+                };
+                eval::score(tx, &dir, &config, &r, &answers)
+            })?)?
+        }
+        Command::Eval(EvalCommand::Status { project }) => {
+            json!({"keys": root.read(|l| eval::status(l.conn(), &project))?})
+        }
+        Command::Truth(TruthCommand::Tag {
+            project,
+            name,
+            decision,
+            from,
+            to,
+            issues,
+            yes,
+        }) => {
+            let (from, to) = (parse_time(&from)?, parse_time(&to)?);
+            let config = ConfigSet::load(&dir)?;
+            let history = history::project_history(&dir, &config, &project)?;
+            let tagged = truth::taggable(&config, &history, &decision, from, to, &issues)?;
+            let recorded = match yes {
+                true => {
+                    Some(root.mutate_with_clock(now, |tx| truth::record_tags(tx, &project, &name, &decision, &tagged))?)
+                }
+                false => None,
+            };
+            json!({"name": name, "decision": decision, "events": tagged, "recorded": recorded})
         }
         Command::Pages { .. } | Command::PublishPlan { .. } | Command::CleanupPlan { .. } => {
             unreachable!("run_sync answered")

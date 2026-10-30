@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yuvalrakavy/issue-dashboard/schemas/event-truth-tag.schema.json",
+  "title": "Ledger event: truth_tag",
+  "description": "A GitHub label event was tagged as part of a named bulk review (triage spec 3.3): its truth's provenance becomes bulk_review:<name>. The subject is the label event's node id; identity is the project and the name, deduplicated against the latest tag of the event.",
+  "allOf": [
+    {
+      "$ref": "common.schema.json#/$defs/eventEnvelope"
+    }
+  ],
+  "properties": {
+    "kind": {
+      "const": "truth_tag"
+    },
+    "subject": {
+      "$ref": "common.schema.json#/$defs/nodeId"
+    },
+    "distinct": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "project",
+        "name"
+      ],
+      "properties": {
+        "project": {
+          "$ref": "common.schema.json#/$defs/projectName"
+        },
+        "name": {
+          "$ref": "#/$defs/name"
+        }
+      }
+    },
+    "data": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "project",
+        "name",
+        "decision",
+        "item",
+        "alias",
+        "label",
+        "added",
+        "at"
+      ],
+      "properties": {
+        "project": {
+          "$ref": "common.schema.json#/$defs/projectName"
+        },
+        "name": {
+          "$ref": "#/$defs/name"
+        },
+        "decision": {
+          "enum": [
+            "type",
+            "area",
+            "priority"
+          ]
+        },
+        "item": {
+          "$ref": "common.schema.json#/$defs/nodeId"
+        },
+        "alias": {
+          "$ref": "common.schema.json#/$defs/alias"
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1
+        },
+        "added": {
+          "description": "Whether the label event added the label (else removed it).",
+          "type": "boolean"
+        },
+        "at": {
+          "$ref": "common.schema.json#/$defs/timestamp"
+        }
+      }
+    }
+  },
+  "$defs": {
+    "name": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9._-]+$"
+    }
+  }
+}

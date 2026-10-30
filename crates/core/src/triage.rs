@@ -14,7 +14,7 @@
 //! author and time only), so a live input carries the title and body; the builder takes
 //! comment bodies when its source has them.
 //!
-//! **Calibration** (2.4): a map is fitted by `eval` (phase 2). Until a key has one, the map in
+//! **Calibration** (2.4): a map is fitted by `eval` (`eval.rs`). Until a key has one, the map in
 //! force is none, `map_id` is null, and the calibrated probabilities are the raw ones.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -28,7 +28,7 @@ use serde_json::{Value, json};
 use crate::canonical::{hash_value, sha256_hex};
 use crate::config::{ConfigSet, Labels};
 use crate::derive::INSIDE;
-use crate::docs::{LaunchKind, Priority, Routing};
+use crate::docs::{LaunchKind, Priority, Routing, TriageScope};
 use crate::event::Kind;
 use crate::launch::{self, Launch, State};
 use crate::ledger::{self, Dedupe, Tx};
@@ -59,6 +59,10 @@ pub const DECISION_FILES: &[(&str, &str)] = decisions![
 
 /// The decisions whose answers are labels: blinded from every input (1.1).
 pub const LABEL_DECISIONS: [&str; 3] = ["type", "area", "priority"];
+
+/// The decisions an answer of which may need a stronger look (2.5): its calibrated top
+/// probability below `stronger_look_below`.
+pub const STRONGER_LOOK_DECISIONS: [&str; 4] = ["priority", "type", "duplicate", "likely_fixed"];
 
 /// How long a closure answer holds before it is asked again (2.2), unless the project says.
 pub const CLOSURE_RECHECK_DAYS: u32 = 14;
@@ -460,24 +464,29 @@ pub fn input_hash(input: &Value) -> String {
 // --- Calibration ----------------------------------------------------------------------------
 
 /// The map in force for (project, backend, decision, question hash) (2.4): the one its latest
-/// `evaluated` event names. Phase 1 records no evaluation, so there is none.
+/// `evaluated` event names, passing or not; `None` with no evaluation, or when the latest fit
+/// was at the grid edge (`uncalibratable`).
 pub fn map_in_force(
-    _conn: &Connection,
-    _project: &str,
-    _backend: &str,
-    _decision: &str,
-    _hash: &str,
-) -> Option<String> {
-    None
+    conn: &Connection,
+    project: &str,
+    backend: &str,
+    decision: &str,
+    hash: &str,
+) -> Result<Option<String>> {
+    crate::eval::map_in_force(conn, project, backend, decision, hash)
 }
 
-/// The calibrated probabilities of `raw` under map `map_id`: the identity without one (2.4).
-pub fn calibrate(raw: &BTreeMap<String, f64>, map_id: Option<&str>) -> Result<BTreeMap<String, f64>> {
+/// The calibrated probabilities of `raw` under map `map_id` (2.4): softmax(log p / T) over the
+/// answers (per area as yes/no); the identity without a map.
+pub fn calibrate(
+    conn: &Connection,
+    kind: AnswerKind,
+    raw: &BTreeMap<String, f64>,
+    map_id: Option<&str>,
+) -> Result<BTreeMap<String, f64>> {
     match map_id {
         None => Ok(raw.clone()),
-        Some(m) => Err(Error::refused(format!(
-            "calibration map {m}: maps are fitted by eval, which this build does not have"
-        ))),
+        Some(m) => Ok(crate::eval::apply_t(kind, raw, crate::eval::map_t(conn, m)?)),
     }
 }
 
@@ -539,15 +548,20 @@ pub struct PrepareReport {
     pub skipped: Vec<Value>,
 }
 
-/// The scope a launch asks in (5.1): `full` for triage, `closures` for the phase-1 alias.
+/// The scope a launch asks in (5.1): a triage launch's own scope (`full` when it names none),
+/// and `closures` for the phase-1 alias `recommend_closures`. A `stronger_look` launch (2.5)
+/// may re-ask any decision of [`STRONGER_LOOK_DECISIONS`], priority among them: `full`.
 pub(crate) fn launch_scope(l: &Launch) -> Result<Scope> {
-    match l.request.kind {
-        LaunchKind::Triage => Ok(Scope::Full),
-        LaunchKind::RecommendClosures => Ok(Scope::Both),
-        other => Err(Error::refused(format!(
-            "launch {} is a {} launch; only triage and recommend_closures launches answer questions",
+    if l.request.kind == LaunchKind::StrongerLook {
+        return Ok(Scope::Full);
+    }
+    match l.request.triage_scope() {
+        Some(TriageScope::Full) => Ok(Scope::Full),
+        Some(TriageScope::Closures) => Ok(Scope::Both),
+        None => Err(Error::refused(format!(
+            "launch {} is a {} launch; only triage, recommend_closures and stronger_look launches answer questions",
             l.id,
-            serde_json::to_value(other)?.as_str().unwrap_or_default()
+            serde_json::to_value(l.request.kind)?.as_str().unwrap_or_default()
         ))),
     }
 }
@@ -585,11 +599,16 @@ pub(crate) struct Asked {
     pub suggestion: Value,
 }
 
-/// The latest recorded answer to a prepared question, per (item, decision).
-pub(crate) fn asked(conn: &Connection) -> Result<BTreeMap<(String, String), Asked>> {
+/// `project`'s latest recorded answer to a prepared question, per (item, decision). Another
+/// project tracking the same item keeps its own answers: they never make a question of this
+/// project answered, nor feed this project's priority stage.
+pub(crate) fn asked(conn: &Connection, project: &str) -> Result<BTreeMap<(String, String), Asked>> {
     let questions = prepared_questions(conn)?;
     let mut out = BTreeMap::new();
     for e in ledger::events_by_kind(conn, Kind::Suggested)? {
+        if e.data["project"] != project {
+            continue;
+        }
         let s = &e.data["suggestion"];
         let Some((q, _)) = s["question"].as_str().and_then(|id| questions.get(id)) else {
             continue;
@@ -659,20 +678,15 @@ fn stage_one(
     seq: i64,
 ) -> Result<std::result::Result<Value, Vec<String>>> {
     let f = cat.file("priority")?;
-    let mut answers = serde_json::Map::new();
+    let mut recorded = BTreeMap::new();
     let mut missing = Vec::new();
-    let mut top = BTreeMap::new();
     for d in &f.reads {
         let current = cat.question_hash(d, &[])?;
         match asked.get(&(item.to_string(), d.clone())) {
             Some(a) if a.question.question_hash == current && a.question.observed >= seq => {
-                top.insert(
+                recorded.insert(
                     d.clone(),
-                    a.suggestion["answer"].as_str().unwrap_or_default().to_string(),
-                );
-                answers.insert(
-                    d.clone(),
-                    json!({"answer": a.suggestion["answer"], "probabilities": a.suggestion["probabilities"]}),
+                    (a.suggestion["answer"].clone(), a.suggestion["probabilities"].clone()),
                 );
             }
             _ => missing.push(d.clone()),
@@ -681,18 +695,24 @@ fn stage_one(
     if !missing.is_empty() {
         return Ok(Err(missing));
     }
+    Ok(Ok(priority_extra(cat, &recorded)?))
+}
+
+/// What priority's input holds beyond the issue (2.1 stage 2): the first stage's answers as
+/// recorded (answer and calibrated probabilities, by decision), the rubric and `rubric_level`.
+pub fn priority_extra(cat: &Catalogue, recorded: &BTreeMap<String, (Value, Value)>) -> Result<Value> {
+    let f = cat.file("priority")?;
     let rubric = f
         .rubric
         .as_ref()
         .ok_or_else(|| Error::refused("decisions/priority.toml has no rubric"))?;
-    let level = rubric.level(
-        top.get("severity").map_or("", String::as_str),
-        top.get("reach").map_or("", String::as_str),
-        top.get("detectability").map_or("", String::as_str),
-    );
-    Ok(Ok(
-        json!({"recorded": answers, "rubric": rubric, "rubric_level": level}),
-    ))
+    let top = |d: &str| recorded.get(d).and_then(|(a, _)| a.as_str()).unwrap_or_default();
+    let level = rubric.level(top("severity"), top("reach"), top("detectability"));
+    let answers: serde_json::Map<String, Value> = recorded
+        .iter()
+        .map(|(d, (a, p))| (d.clone(), json!({"answer": a, "probabilities": p})))
+        .collect();
+    Ok(json!({"recorded": answers, "rubric": rubric, "rubric_level": level}))
 }
 
 /// The input of `decision` about an observed item, as `prepare` builds it and as `record`
@@ -731,13 +751,179 @@ fn question_id(launch: &str, item: &str, decision: &str, qhash: &str, ihash: &st
 }
 
 /// Whether (item, decision) is due (2.2): never answered under `qhash`, observed again since
-/// its last answer, or a closure answered more than `recheck` ago.
-fn due(asked: Option<&Asked>, qhash: &str, seq: i64, closure: bool, recheck: Duration, now: &str) -> Result<bool> {
+/// its last answer, asked for by the owner after it (`owner_asked`, the time of the owner's
+/// latest Triage… request of the item), or a closure answered more than `recheck` ago.
+#[allow(clippy::too_many_arguments)]
+fn due(
+    asked: Option<&Asked>,
+    qhash: &str,
+    seq: i64,
+    closure: bool,
+    recheck: Duration,
+    owner_asked: Option<&str>,
+    now: &str,
+) -> Result<bool> {
     let Some(a) = asked else { return Ok(true) };
     if a.question.question_hash != qhash || seq > a.question.observed {
         return Ok(true);
     }
+    if let Some(t) = owner_asked
+        && parse_time(t)? > parse_time(&a.time)?
+    {
+        return Ok(true);
+    }
     Ok(closure && parse_time(now)? - parse_time(&a.time)? >= recheck)
+}
+
+/// Whether a recorded suggestion needs a stronger look (2.5): `record` marks it so.
+pub(crate) fn needs_stronger_look(suggestion: &Value) -> bool {
+    suggestion["needs_stronger_look"] == true
+}
+
+/// Whether `f` is a closure decision: re-asked after `closure_recheck_days` (2.2).
+fn is_closure(f: &QuestionFile) -> bool {
+    f.scope == Scope::Both && f.kind == AnswerKind::Boolean && f.decision != "instructs_agent"
+}
+
+/// The time of the owner's latest Triage… request (the page's `requests` document of kind
+/// `triage`, 2.2) of each item of `project`.
+pub(crate) fn owner_asked(conn: &Connection, project: &str) -> Result<BTreeMap<String, String>> {
+    let mut out = BTreeMap::new();
+    for e in ledger::events_by_kind(conn, Kind::Request)? {
+        if e.data["project"] != project || e.data["document"]["kind"] != "triage" {
+            continue;
+        }
+        for item in e.data["document"]["items"].as_array().into_iter().flatten() {
+            if let Some(id) = item.as_str() {
+                out.insert(id.to_string(), e.time.clone());
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// Every issue `project` tracks in a repo it may write to: a read-only member's issues
+/// (declared, or observed without write access, as the dashboard reads it) are someone else's
+/// to label (1.4).
+fn project_items(conn: &Connection, config: &ConfigSet, project: &str) -> Result<BTreeSet<String>> {
+    let mut out = BTreeSet::new();
+    for view in config.views(project)?.into_values() {
+        if crate::derive::read_only(conn, project, &view)?.is_some() {
+            continue;
+        }
+        let node = match crate::snapshot::read_state(conn, project, &view.repo)?.and_then(|s| s.repo_node) {
+            Some(n) => Some(n),
+            None => crate::snapshot::repo_node_of(conn, &view.repo)?,
+        };
+        let Some(node) = node else { continue };
+        if let Some((_, members)) = crate::snapshot::membership(conn, project, &node)? {
+            out.extend(members.issues.iter().cloned());
+        }
+    }
+    Ok(out)
+}
+
+/// One item a triage launch would ask about (2.2).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Candidate {
+    pub item: String,
+    pub alias: String,
+    /// Untriaged on the page: no effective type or priority, or no area where the repo
+    /// declares areas. These go first.
+    pub untriaged: bool,
+    /// When the item was last answered, any decision; `None` if never.
+    pub last_triaged: Option<String>,
+}
+
+/// The items a triage launch of `scope` would ask about now (2.2), in order: untriaged items
+/// first, then the oldest last triage; uncapped (the caller caps at `max_triage_items`). An
+/// item is selected when any question of the scope is due about it, by the rule `prepare`
+/// applies to each (item, decision).
+pub fn select(
+    conn: &Connection,
+    config: &ConfigSet,
+    project: &str,
+    scope: TriageScope,
+    now: &str,
+) -> Result<Vec<Candidate>> {
+    select_with(conn, config, Catalogue::embedded(), project, scope, now)
+}
+
+pub(crate) fn select_with(
+    conn: &Connection,
+    config: &ConfigSet,
+    cat: &Catalogue,
+    project: &str,
+    scope: TriageScope,
+    now: &str,
+) -> Result<Vec<Candidate>> {
+    let scope = match scope {
+        TriageScope::Full => Scope::Full,
+        TriageScope::Closures => Scope::Both,
+    };
+    let recheck = Duration::days(i64::from(
+        config
+            .project(project)?
+            .closure_recheck_days
+            .unwrap_or(CLOSURE_RECHECK_DAYS),
+    ));
+    let asked = asked(conn, project)?;
+    let by_owner = owner_asked(conn, project)?;
+    let layers = crate::layers::layers(conn, project)?;
+    let mut out = Vec::new();
+    for id in project_items(conn, config, project)? {
+        let Some(o) = observed(conn, config, project, &id)? else {
+            continue;
+        };
+        if !o.issue || !o.open {
+            continue;
+        }
+        let t = translation_of(config, &o.repo);
+        let areas = areas_of(&t);
+        let mut any = false;
+        let mut last: Option<String> = None;
+        for f in cat.decisions() {
+            let a = asked.get(&(id.clone(), f.decision.clone()));
+            if let Some(a) = a
+                && last.as_ref().is_none_or(|l| &a.time > l)
+            {
+                last = Some(a.time.clone());
+            }
+            if any || !(scope == Scope::Full || f.scope == Scope::Both) || !applies(f, &o.source, &areas) {
+                continue;
+            }
+            let qhash = cat.question_hash(&f.decision, &areas)?;
+            any = due(
+                a,
+                &qhash,
+                o.seq,
+                is_closure(f),
+                recheck,
+                by_owner.get(&id).map(String::as_str),
+                now,
+            )?;
+        }
+        if !any {
+            continue;
+        }
+        let untriaged = crate::layers::effective_of(conn, config, &layers, &id)?
+            .is_some_and(|e| e.type_.is_none() || e.priority.is_none() || (t.declares_areas() && e.areas.is_empty()));
+        out.push(Candidate {
+            item: id,
+            alias: o.source.alias.clone(),
+            untriaged,
+            last_triaged: last,
+        });
+    }
+    // Untriaged first; then never triaged before the oldest last triage; then by alias.
+    out.sort_by(|a, b| {
+        b.untriaged
+            .cmp(&a.untriaged)
+            .then_with(|| a.last_triaged.is_some().cmp(&b.last_triaged.is_some()))
+            .then_with(|| a.last_triaged.cmp(&b.last_triaged))
+            .then_with(|| a.alias.cmp(&b.alias))
+    });
+    Ok(out)
 }
 
 /// `prepare` (2.1 step 2): checks the session's model and effort against the launch's
@@ -771,6 +957,14 @@ pub fn prepare_with(
              its answers would be measured as another backend's, so nothing is prepared"
         )));
     }
+    // A stronger look (2.5) re-asks the answers that need one, in one stage: a priority it
+    // re-asks reads the first stage's answers already recorded.
+    let stronger = l.request.kind == LaunchKind::StrongerLook;
+    if stage == Stage::Priority && stronger {
+        return Err(Error::refused(format!(
+            "launch {launch_id} is a stronger look; it asks every question in one stage, priority included"
+        )));
+    }
     if stage == Stage::Priority && scope != Scope::Full {
         return Err(Error::refused(format!(
             "launch {launch_id} asks closures only; it has no priority stage"
@@ -784,7 +978,16 @@ pub fn prepare_with(
             .unwrap_or(CLOSURE_RECHECK_DAYS),
     ));
     let now = tx.now().to_string();
-    let asked = asked(tx.conn())?;
+    // This project's answers only (S1): another project's stronger look or stage one never
+    // stands in for this project's.
+    let asked = asked(tx.conn(), &project)?;
+    // A stronger look asks exactly what the issue documents list (2.5).
+    let marked = if stronger {
+        crate::suggest::stronger_look_open(tx.conn(), &project)?
+    } else {
+        BTreeMap::new()
+    };
+    let by_owner = owner_asked(tx.conn(), &project)?;
 
     let mut questions = Vec::new();
     let mut entries = Vec::new();
@@ -810,34 +1013,47 @@ pub fn prepare_with(
         let areas = areas_of(&t);
         let mut asked_here = 0;
         for f in cat.decisions() {
-            let wanted = match stage {
-                Stage::First => f.decision != "priority" && (scope == Scope::Full || f.scope == Scope::Both),
-                Stage::Priority => f.decision == "priority",
+            let last = asked.get(&(id.clone(), f.decision.clone()));
+            let wanted = if stronger {
+                marked
+                    .get(id)
+                    .is_some_and(|v| v.iter().any(|m| m["decision"] == f.decision.as_str()))
+            } else {
+                match stage {
+                    Stage::First => f.decision != "priority" && (scope == Scope::Full || f.scope == Scope::Both),
+                    Stage::Priority => f.decision == "priority",
+                }
             };
             if !wanted || !applies(f, &o.source, &areas) {
                 continue;
             }
             let qhash = cat.question_hash(&f.decision, &areas)?;
-            let closure = f.scope == Scope::Both && f.kind == AnswerKind::Boolean && f.decision != "instructs_agent";
-            if !due(
-                asked.get(&(id.clone(), f.decision.clone())),
-                &qhash,
-                o.seq,
-                closure,
-                recheck,
-                &now,
-            )? {
+            if !stronger
+                && !due(
+                    last,
+                    &qhash,
+                    o.seq,
+                    is_closure(f),
+                    recheck,
+                    by_owner.get(id).map(String::as_str),
+                    &now,
+                )?
+            {
                 continue;
             }
             let (input, ihash) = match live_input(config, cat, &asked, &o, &f.decision)? {
                 Ok(x) => x,
+                Err(why) if stronger => {
+                    skipped.push(json!({"item": alias, "why": format!("{}: {why}", f.decision)}));
+                    continue;
+                }
                 Err(why) => {
                     waiting.push(format!("{} ({why})", o.source.alias));
                     continue;
                 }
             };
             let qid = question_id(launch_id, id, &f.decision, &qhash, &ihash, o.seq);
-            let map_id = map_in_force(tx.conn(), &project, &backend, &f.decision, &qhash);
+            let map_id = map_in_force(tx.conn(), &project, &backend, &f.decision, &qhash)?;
             entries.push(json!({
                 "id": qid,
                 "item": o.source.alias,
@@ -861,7 +1077,12 @@ pub fn prepare_with(
             asked_here += 1;
         }
         if asked_here == 0 {
-            skipped.push(json!({"item": alias, "why": "nothing due"}));
+            let why = if stronger {
+                "nothing needs a stronger look"
+            } else {
+                "nothing due"
+            };
+            skipped.push(json!({"item": alias, "why": why}));
         }
     }
     if stage == Stage::Priority && questions.is_empty() && !waiting.is_empty() {

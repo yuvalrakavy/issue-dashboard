@@ -384,6 +384,100 @@
               ]
             }
           }
+        },
+        "current": {
+          "description": "A type, area or priority answer: the item's effective value when it was recorded (triage spec 4.1); type and priority a string or null, area the set (empty: none). The card shows while the value is still this one, and an accept refuses once it is not (4.2).",
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "array",
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          ]
+        },
+        "second_opinion": {
+          "description": "The answer confidently disagrees with the current value (triage spec 4.1): its calibrated probability is at most 0.2 (area: one of the current areas'). Names the current value and the false-alarm rate the map's evaluation measured.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "current",
+            "p_current",
+            "false_alarm_rate"
+          ],
+          "properties": {
+            "current": {
+              "anyOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "type": "string",
+                  "minLength": 1
+                },
+                {
+                  "type": "array",
+                  "uniqueItems": true,
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              ]
+            },
+            "p_current": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "false_alarm_rate": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "minimum": 0,
+              "maximum": 1
+            },
+            "flagged": {
+              "description": "Area: the current areas at or below 0.2.",
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        },
+        "rubric_level": {
+          "description": "Priority: the level the rubric table gives the first stage's top answers (triage spec 1.5); null when the table does not know one.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/priority"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reply": {
+          "description": "A support_question answered true: the reply drafted for the reporter, which the owner's close sheet opens with (triage spec 1.4).",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 10000
+        },
+        "needs_stronger_look": {
+          "description": "A priority, type, duplicate or likely_fixed answer whose calibrated top probability was below stronger_look_below when recorded (triage spec 2.5); a stronger look's own answer never is.",
+          "const": true
         }
       },
       "allOf": [
@@ -450,7 +544,9 @@
             "write_failed",
             "session_seen",
             "session_gone",
-            "prepared"
+            "prepared",
+            "evaluated",
+            "truth_tag"
           ]
         },
         "subject": {
@@ -471,6 +567,52 @@
         "data": {
           "type": "object"
         }
+      }
+    },
+    "estimatesEdit": {
+      "description": "A Details edit of the estimates (triage spec 4.1): the fields the owner set, shown over the recorded estimates; never a label and never truth. Sites go with the commit they were read at.",
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "sites": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "read_at": {
+          "$ref": "#/$defs/commit"
+        },
+        "tier": {
+          "enum": [
+            "T0",
+            "T1",
+            "T2",
+            "T3"
+          ]
+        },
+        "blast": {
+          "type": "string",
+          "minLength": 1
+        },
+        "effort": {
+          "enum": [
+            "S",
+            "M",
+            "L"
+          ]
+        }
+      },
+      "dependentRequired": {
+        "sites": [
+          "read_at"
+        ],
+        "read_at": [
+          "sites"
+        ]
       }
     }
   }

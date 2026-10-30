@@ -79,6 +79,18 @@
         "session": {
           "type": "string",
           "minLength": 1
+        },
+        "card": {
+          "description": "The card an accept or edit was made on (triage spec 4.6).",
+          "$ref": "common.schema.json#/$defs/docId"
+        },
+        "component": {
+          "description": "Which part of the card: a combined card's type or priority (triage spec 4.6).",
+          "enum": [
+            "type",
+            "area",
+            "priority"
+          ]
         }
       }
     },
@@ -101,6 +113,10 @@
         },
         "routing": {
           "$ref": "common.schema.json#/$defs/routing"
+        },
+        "bulk": {
+          "description": "An accept_suggestion made by apply all (triage spec 4.3): owner_bulk, never ground truth (3.1).",
+          "type": "boolean"
         },
         "closed_at": {
           "description": "The close a dismiss_closed dismisses: the item's closed_at as the page showed it (5.8).",
@@ -143,6 +159,34 @@
               "duplicate_of"
             ]
           }
+        },
+        "severity": {
+          "description": "A Details edit (triage spec 4.2).",
+          "enum": [
+            "cosmetic",
+            "degraded",
+            "wrong_result",
+            "hang_or_data_loss"
+          ]
+        },
+        "reach": {
+          "description": "A Details edit (triage spec 4.2).",
+          "enum": [
+            "one_corner",
+            "one_subsystem",
+            "most",
+            "all"
+          ]
+        },
+        "detectability": {
+          "description": "A Details edit (triage spec 4.2).",
+          "enum": [
+            "silent",
+            "visible"
+          ]
+        },
+        "estimates": {
+          "$ref": "common.schema.json#/$defs/estimatesEdit"
         }
       }
     },
@@ -293,8 +337,7 @@
           "action": {
             "enum": [
               "accept_suggestion",
-              "dismiss_suggestion",
-              "edit_suggestion"
+              "dismiss_suggestion"
             ]
           }
         }
@@ -360,6 +403,65 @@
             ]
           }
         }
+      }
+    },
+    {
+      "description": "An edit names its suggestion; a Details edit of severity, reach, detectability or the estimates may instead name only its item (triage spec 4.1-4.2).",
+      "if": {
+        "properties": {
+          "action": {
+            "const": "edit_suggestion"
+          }
+        }
+      },
+      "then": {
+        "anyOf": [
+          {
+            "properties": {
+              "target": {
+                "required": [
+                  "suggestion"
+                ]
+              }
+            }
+          },
+          {
+            "properties": {
+              "target": {
+                "required": [
+                  "item"
+                ]
+              },
+              "value": {
+                "anyOf": [
+                  {
+                    "required": [
+                      "severity"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "reach"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "detectability"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "estimates"
+                    ]
+                  }
+                ]
+              }
+            },
+            "required": [
+              "value"
+            ]
+          }
+        ]
       }
     }
   ]

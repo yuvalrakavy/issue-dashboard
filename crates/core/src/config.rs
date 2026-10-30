@@ -120,7 +120,8 @@ pub struct RepoEntry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub docs: Option<Vec<String>>,
     /// The repo's own way to triage and batch closures, relative to `local_path`; a
-    /// recommender applies it (5.8). Without one it follows the generic procedure.
+    /// triage session applies it to closures (5.8). Without one it follows the closing
+    /// procedure of the triage-session skill.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub campaign_skill: Option<String>,
 }
@@ -202,7 +203,7 @@ pub struct TimeLimits {
 }
 
 /// `<root>/projects/<project>.toml`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Project {
     pub schema: u32,
@@ -248,7 +249,32 @@ pub struct Project {
     /// How many days a closure answer holds before triage asks it again (triage spec 2.2).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub closure_recheck_days: Option<u32>,
+    /// The most items one triage launch names (triage spec 2.2); 40 when unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_triage_items: Option<u32>,
+    /// A priority, type, duplicate or likely_fixed answer whose calibrated top probability is
+    /// below this needs a stronger look (triage spec 2.5); [`STRONGER_LOOK_BELOW`] when unset.
+    /// The schema keeps it in (0, 1].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stronger_look_below: Option<f64>,
+    /// How many days `eval refresh-history` reads back (triage spec 3.2); 730 when unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub eval_history_days: Option<u32>,
+    /// The most tuning items a replay asks about (3.2); 120 when unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub eval_tuning: Option<u32>,
+    /// The most held-out items a replay asks about (3.4); 120 when unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub eval_sample: Option<u32>,
+    /// Truth provenances every evaluation drops unless told otherwise (3.5), e.g.
+    /// `bulk_review:oct-22`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub eval_exclude: Option<Vec<String>>,
 }
+
+// The one float, `stronger_look_below`, is schema-checked to (0, 1]: never NaN, so equality
+// is reflexive.
+impl Eq for Project {}
 
 /// `.issue-dashboard.toml` at the root of a repo you own.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -532,6 +558,45 @@ impl ConfigSet {
 
 /// The pool a read-only launch (a recommender) takes its slot from (10.7).
 pub const READ_ONLY_RECIPE: &str = "read-only";
+
+/// How many items one triage launch names when the project does not say (triage spec 2.2).
+pub const MAX_TRIAGE_ITEMS: u32 = 40;
+
+/// `stronger_look_below` when the project does not say (triage spec 2.5).
+pub const STRONGER_LOOK_BELOW: f64 = 0.6;
+
+/// The routing of a launch kind when the project's `routing` table does not name it (triage
+/// spec 5.3): triage on Opus 5.5 at medium, a stronger look on the strongest model at high.
+/// An eval has none: its routing is the backend it measures.
+pub fn default_routing(kind: &str) -> Option<crate::docs::Routing> {
+    let (model, effort) = match kind {
+        "triage" => ("claude-opus-5-5", "medium"),
+        "stronger_look" => ("claude-fable-5-1", "high"),
+        _ => return None,
+    };
+    Some(crate::docs::Routing {
+        model: model.to_string(),
+        effort: effort.to_string(),
+        workspace: None,
+        reason: Some("the tracker's default routing (triage spec 5.3)".to_string()),
+    })
+}
+
+impl ConfigSet {
+    /// The routing a launch of `kind` gets in `project`: the project's `routing` entry for the
+    /// kind, else [`default_routing`] (triage spec 5.3). A changed routing is a new backend.
+    pub fn routing(&self, project: &str, kind: &str) -> Result<crate::docs::Routing> {
+        let p = self.project(project)?;
+        if let Some(r) = p.routing.as_ref().and_then(|t| t.get(kind)) {
+            return Ok(r.clone());
+        }
+        default_routing(kind).ok_or_else(|| {
+            Error::refused(format!(
+                "project {project} has no routing for {kind} launches; add one under [routing.{kind}]"
+            ))
+        })
+    }
+}
 
 /// Expands a leading `~/` to the home directory.
 pub fn expand_home(path: &str) -> PathBuf {

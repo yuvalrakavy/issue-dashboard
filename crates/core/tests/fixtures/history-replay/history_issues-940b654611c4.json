@@ -1,0 +1,411 @@
+{
+  "name": "history_issues",
+  "response": {
+    "data": {
+      "repository": {
+        "issues": {
+          "nodes": [
+            {
+              "author": {
+                "login": "yuvalrakavy"
+              },
+              "authorAssociation": "OWNER",
+              "body": "## Observed\n\nChanging a playlist's `CrossfadeSeconds` while it is playing has no effect on the running\nsession. To hear the new value you must stop and restart playback:\n\n```\n# store-cli script --store TLV <file>\npl.CrossfadeSeconds = 5.0;   # was 2.0\nra.Stop = true;\nra.Play = true;              # only now does the 5 s overlap apply\n```\n\nObserved live on 2026-08-02 driving `/Home/Apartment/GuestsRoom/Audio` against a real\nreceiver: the property write alone changed nothing audible; the Stop/Play restarted the\ntrack and the new overlap took effect.\n\n## Expected\n\nEditing the crossfade length should take effect at the *next track transition*, without\ninterrupting the track that is currently playing. Same ergonomics as a volume edit.\n\n## Confirmed\n\n- `PlaylistSource::new` (src/playlist.rs) computes `overlap_frames` ONCE at construction\n  and moves it into the producer thread (`run_playlist(track_rx, overlap_frames, ...)`).\n  Nothing can change it for the life of the source.\n- The store side copies `CrossfadeSeconds` onto the `AudioSession` in `set_source`\n  (data/frameworks/media/modules/media/air_zone_audio.sdl in the Store repo), i.e. at\n  source-selection time only — a later edit to the playlist object does not republish.\n\n## The two halves of a fix\n\n**Store half — easy, has an exact precedent.** `SessionMember.on PropertyChanged(DesiredVolume)`\nalready bubbles a live member edit into `sync_session`. The same shape on the playlist's\n`CrossfadeSeconds` (walking the same playlist → category → catalog hierarchy `set_source`\nuses) would republish the desired doc on an edit.\n\n**Daemon half — the substantive part.** `overlap_frames` has to become a live-readable\nvalue (e.g. an `Arc<AtomicUsize>` the producer reads per transition) that the converge\nloop updates when the desired doc changes, INSTEAD of a construction argument.\n\nThe trap to avoid: making the converge loop treat a changed `CrossfadeSeconds` as a\nmaterial source change would REOPEN the source and restart the current track — which is\nworse than today's explicit Stop/Play, because it would happen silently on every edit.\nThe overlap must be updatable in place.\n\n## Notes\n\n- Same treatment probably wants to apply to `Shuffle` and `Loop`, which are baked in at\n  the same point and have the same \"edit does nothing until restart\" behaviour. Worth\n  confirming before scoping.\n- Not a correctness bug; nothing is wrong or lost. This is an ergonomics improvement,\n  raised by the user during the 2026-08-02 by-ear session.\n",
+              "closedAt": "2026-08-09T19:08:37Z",
+              "comments": {
+                "nodes": [
+                  {
+                    "author": {
+                      "login": "yuvalrakavy"
+                    },
+                    "authorAssociation": "OWNER",
+                    "body": "Node **MP-305** in the Store repo's media port DAG (`docs/media-port-dag.md`) — part of the MP-3xx reliability band of the live-frontier mission.",
+                    "createdAt": "2026-08-03T10:23:50Z"
+                  },
+                  {
+                    "author": {
+                      "login": "yuvalrakavy"
+                    },
+                    "authorAssociation": "OWNER",
+                    "body": "## Daemon half shipped — `557a856`. Leaving open for the store half.\n\n`overlap_frames` is now an `Arc<AtomicUsize>` the producer reads **once per transition**, so a republished doc with a new `CrossfadeSeconds` lands at the next track boundary and never disturbs the one now playing. That is what this issue calls \"the substantive part\".\n\n**The trap you named is asserted, not trusted.** The update is applied in place and is deliberately not part of the source-change comparison; the test holds the ORIGINAL `Arc` across the edit and requires the session clock unchanged, the same cell still installed, and **zero RTSP methods** issued. Negative-controlled by actually implementing the trap — folding the crossfade into the source comparison reddens exactly the \"must be KEPT\" assertion.\n\nShape follows `skip_flag`: a defaulted `Source` method handing back the `Arc`, captured at open because the source is moved into the producer thread. A single file returns `None` — a crossfade means nothing there.\n\n## Why the store half is not just \"the easy one\"\n\nThis issue describes it as easy with an exact precedent (`SessionMember.on PropertyChanged(DesiredVolume)` → `sync_session`). The precedent is real, but it does not transfer directly: a `SessionMember` **is a child of the session**, so `bubble` walks up two parents and calls `sync_session`. A playlist is not — it is a catalog object, and any number of sessions (or none) may be playing it.\n\nSo the bubble needs to answer \"which sessions are playing THIS source?\", and **the session does not record its source**. That is the missing link named in the title of Store [#105](https://github.com/yuvalrakavy/Store/issues/105) (MP-207: *\"editing a Mix while it plays does nothing - no republish bubble, and AudioSession does not record its source\"*).\n\nSame prerequisite, same fix. Doing them together avoids building the lookup twice, and #105's Mix case is the harder one — a Mix edit has to reach sessions playing the Mix, which is where the traversal actually needs designing.\n\n**In the meantime:** the value is live the moment ANYTHING republishes the desired doc, so a member edit or a re-select already carries a new crossfade through without a Stop/Play.",
+                    "createdAt": "2026-08-09T10:29:44Z"
+                  },
+                  {
+                    "author": {
+                      "login": "yuvalrakavy"
+                    },
+                    "authorAssociation": "OWNER",
+                    "body": "## Closed — both halves shipped\n\n**Daemon half** — airzoned `557a856`. `overlap_frames` is an `Arc<AtomicUsize>` the producer reads once per transition, so a new value lands at the next track boundary and never disturbs the one playing. The trap this issue names is asserted rather than trusted: the test holds the original `Arc` across the edit and requires the session clock unchanged, the same cell installed, and **zero RTSP methods** — negative-controlled by actually implementing the trap.\n\n**Store half** — Store `2b54d461`. This is where the issue's estimate was off, and usefully so.\n\nIt called the store half *\"easy, has an exact precedent\"* — `SessionMember.on PropertyChanged(DesiredVolume)` bubbling to `sync_session`. The precedent is real but does not transfer: a `SessionMember` **is a child of the session**, so its bubble walks up two parents. A playlist is a catalog object, and any number of sessions may be playing it — so the bubble first has to answer *\"which sessions are playing me?\"*, and the session did not record its source.\n\nThat is the model decision Store #105 identified, and it had to be made first: `AudioSession.SourceRef` now records the origin, and the reverse index answers the question directly — not the scan #105 rejected as *\"fine with three sessions and badly with thirty\"*.\n\n## Why the parameter edit is safe, stated because it is the load-bearing part\n\nA Crossfade/Shuffle/Loop edit leaves the expansion **byte-identical**, so the daemon keeps the session (it hard-cuts only on a changed source list) and the daemon half applies the new value live. The two halves interlock exactly there.\n\nA Mix **membership** change does alter `Sources` and would restart the current track by that same rule — which is why #105's own case is deliberately not wired to this yet. It is a UX decision, not an implementation detail.",
+                    "createdAt": "2026-08-09T19:08:37Z"
+                  }
+                ],
+                "totalCount": 3
+              },
+              "createdAt": "2026-08-02T14:53:25Z",
+              "id": "I_kwDOTBQnEM8AAAABLJYMxQ",
+              "labels": {
+                "nodes": [
+                  {
+                    "name": "enhancement"
+                  }
+                ],
+                "totalCount": 1
+              },
+              "number": 1,
+              "repository": {
+                "nameWithOwner": "yuvalrakavy/airzoned"
+              },
+              "state": "CLOSED",
+              "stateReason": "COMPLETED",
+              "timelineItems": {
+                "nodes": [
+                  {
+                    "__typename": "LabeledEvent",
+                    "actor": {
+                      "login": "yuvalrakavy"
+                    },
+                    "createdAt": "2026-08-02T14:53:26Z",
+                    "id": "LE_lADOTBQnEM8AAAABLJYMxc8AAAAGt6LxuQ",
+                    "label": {
+                      "name": "enhancement"
+                    }
+                  }
+                ],
+                "totalCount": 1
+              },
+              "title": "CrossfadeSeconds (and Shuffle/Loop) only take effect after a Stop/Play",
+              "updatedAt": "2026-08-09T19:08:37Z"
+            },
+            {
+              "author": {
+                "login": "yuvalrakavy"
+              },
+              "authorAssociation": "OWNER",
+              "body": "Stopping playback and starting it again on the SAME speaker leaves the receiver wedged:\nyou hear roughly half a second of audio and then silence, while the daemon believes it is\nplaying normally.\n\nReproduced three times in a row on 2026-08-02 against a real Yamaha receiver\n(`00A0DE91CBCB@BZm Yuval O`, 10.0.2.158:1024, RAOP port 1024).\n\n## Observed\n\nDrive a room's `RoomAudio` (Store side), with a local `.m3u` playlist source:\n\n```\nra.Stop = true;\n# ~3 seconds later\nra.Play = true;\n```\n\nDaemon log:\n\n```\n[engine] member m33558669: stop — fading out over 22050 frames, retiring\n[engine] reap-before-connect: tearing down a member still retiring on 10.0.2.158\n[engine] member m33558669: connected — receiver Audio-Latency = 4096 frames (~92 ms)\n[airzoned] decode: ffmpeg fallback for /Volumes/Media/Music/.../03 ....wma\n```\n\nResult: about half a second of audio out of the speaker, then silence. The daemon stays\nhealthy — a stack sample (`sample <pid> 4`) shows every stage alive and paced:\n\n- `send_loop` (engine/member.rs:403) mostly in its pacing sleep, periodically inside\n  `AlacStream::encode` (member.rs:383) — i.e. still encoding and sending RTP\n- `engine::producer::produce` (engine/producer.rs:88) in its pacing sleep, pulling on schedule\n- `run_playlist` producer parked in `Packetizer::push` (playlist.rs:381) — frame channel full\n- `run_fetcher` parked in `tx.send` (playlist.rs:136) — track channel full\n\nBoth are normal backpressure: the pipeline is full and moving at real-time rate. The RTSP\nTCP connection to 10.0.2.158:1024 stays ESTABLISHED and the RTP sockets stay open. Nothing\nis logged as an error.\n\nThe Store-side observed state also still reads `Transport = 4` (playing) throughout, so a\npanel would show \"playing\" over silence.\n\n## The control arm (this is what makes it a real finding, not a one-off)\n\nWith NO retiring member to collide with, the identical Play works and audio plays normally:\n\n```\n1. clear the session (Stop)\n2. SIGTERM the daemon      -> graceful RTSP TEARDOWN, exits cleanly in ~2 s\n3. wait ~12 s\n4. start a fresh daemon\n5. Play ONCE (no Stop before it)\n```\n\nLog shows a clean connect with `reap-before-connect` count = 0, and the user confirmed\naudio plays. So the discriminating variable is the presence of a retiring member on the\nsame speaker at connect time, not the receiver, the network, or the source.\n\n## Expected\n\nStop followed by Play on the same speaker should play normally. This is the most basic\nthing a wall panel does, and it is on the M1 \"tap the wall, music plays\" path.\n\n## Confirmed\n\n- A retiring member deliberately KEEPS STREAMING to its speaker until reaped —\n  `engine/member.rs` synthesizes a silence packet when the ring runs dry while `retiring`,\n  with the rationale that \"a STALLED stream wedges the receiver's session ... which is the\n  stop→replay-after-the-grace wedge\". So during the retire grace there is a live RTP stream\n  to that speaker.\n- `reap-before-connect` exists precisely to tear that down before a new member connects,\n  and it DOES fire (see the log above) — yet the wedge still occurs. So either the teardown\n  is not complete before the new SETUP/RECORD reaches the receiver, or the receiver needs\n  longer than the reap takes to release the session.\n\n## Hypotheses — UNVERIFIED, do not trust\n\n- The reap and the new connect race: the reap issues TEARDOWN but does not wait for the\n  receiver to actually release before the new session's ANNOUNCE/SETUP/RECORD arrives, so\n  the receiver briefly holds two sessions and ends up rendering neither.\n- The receiver may need a settling interval after TEARDOWN before it will accept a new\n  session cleanly; if so the fix is to make reap-before-connect synchronous plus a small\n  enforced gap, rather than best-effort.\n- Not checked: whether the same wedge occurs when the new member targets a DIFFERENT\n  speaker than the retiring one (which would separate \"receiver session state\" from\n  \"daemon-side member bookkeeping\").\n\nReproduce first and let the evidence lead; do not assume the above.\n\n## Notes\n\n- Pre-existing: the retire logic predates the 2026-08-02 commits (gapless decode-ahead,\n  ffmpeg fallback, ALAC buffer fix, graceful shutdown). Those commits are not the cause,\n  though the added decode CPU load during connect may widen the window.\n- Related design context: this is spec risk #7 \"cross-session speaker contention\" in\n  `docs/superpowers/specs/2026-06-19-airzone-player-design.md` (Store repo).\n- Also relevant: the Store-side observed `Transport` never changes, so there is no honest\n  transport feedback for this failure. Spec section 11.1 requires exactly that\n  (\"never a blank now-playing screen\"). A fix should surface the failure, not only avoid it.\n",
+              "closedAt": "2026-08-02T15:58:03Z",
+              "comments": {
+                "nodes": [
+                  {
+                    "author": {
+                      "login": "yuvalrakavy"
+                    },
+                    "authorAssociation": "OWNER",
+                    "body": "Grounded the issue's claims against the code before designing a fix. **The leading hypothesis in\nthe original report is WRONG** and should not be worked from.\n\n## What the original report got wrong\n\nIt assumed the receiver REFUSES the new session (\"interruption not allowed\") because the reap\nraces the new connect. It does not. In the captured log the new connect **succeeds** — it\nreturns `Audio-Latency = 4096 frames (~92 ms)`, which only comes back from a completed\nRTSP handshake. So the receiver accepts the session and then fails to render it. That is a\ndifferent bug with a different fix, and the reap/connect race is not it.\n\n## What is now confirmed (traced to code, not comments)\n\n- `RetiringPool` logic is correct and unit-tested against a mock: `park` evicts a prior member on\n  the same IP, `reap` removes and tears down by IP, `sweep` respects deadlines (`engine/retire.rs`).\n- reap-before-connect really is ordered correctly and synchronously on the real path:\n  `engine/mod.rs:193` calls `self.retiring.reap(addr.ip())` immediately before\n  `MemberSender::connect_and_spawn(...)`, same thread, sequential.\n- `MemberSender::teardown` (`engine/member.rs:256`) is fully synchronous: clears `running`, joins\n  the send/timing/control threads, then issues `rtsp.teardown()`.\n- `Session::new` (`engine/mod.rs:139-153`) mints a FRESH `SessionClock` per session, so a genuinely\n  new session cannot inherit a stale RTP timeline.\n\nSo every element the original report suspected is behaving as designed.\n\n## New hypothesis — UNVERIFIED\n\nThe Store reuses the SAME session name across a stop/start: both the wedged run and the clean run\nused `/Services/AirZone/m33558669` (the id derives from the RoomAudio object, not the play\nepisode). In the first occurrence the trigger was two back-to-back micro-transactions with no gap:\n\n```\nra.Stop = true;\nra.Play = true;\n```\n\nIf the retained desired doc is cleared and re-published within milliseconds, the daemon's converge\nloop may never observe the session as ABSENT — so it would keep the SAME `Session` (same clock,\nsame ring, same producer wiring) and merely see the member set change: remove -> retire -> re-add.\nThe new member then starts at `clock.target_now() + JOIN_LEAD_PKTS` against a ring whose contents\nand producer state belong to the previous play episode. That is consistent with the observed\nsymptom (a fraction of a second of audio, then silence) in a way that \"the receiver refused us\"\nis not.\n\nNote the clean run that WORKED had a full daemon restart between stop and play, which destroys the\nSession unambiguously — so the two arms differ in session lifetime, not only in retire state. That\nweakens the original \"retiring member collides\" reading further.\n\n## How to discriminate (not yet done)\n\nInstrument rather than reason: log session create/destroy with the clock's `start_instant` and the\nring's committed seq, then reproduce both arms —\n\n1. `Stop; Play` back-to-back (no gap) — the original trigger.\n2. `Stop`, wait past `RetireGrace` (5 s), then `Play` — retire fully drained, same session id.\n3. `Stop`, restart the daemon, `Play` — known-good control.\n\nIf (2) plays cleanly and (1) does not, the cause is session reuse / timeline, not the retiring\nmember. If (2) also wedges, the retiring member is back in scope.\n\nNot yet run: reproducing needs a real receiver and a listener, since there is no programmatic\nsignal for \"the speaker is actually making sound\" — worth adding one (the observed `Transport`\nnever leaves \"playing\" through the whole failure, which is the separate honest-feedback gap noted\nin the report).\n",
+                    "createdAt": "2026-08-02T15:15:23Z"
+                  },
+                  {
+                    "author": {
+                      "login": "yuvalrakavy"
+                    },
+                    "authorAssociation": "OWNER",
+                    "body": "## ROOT CAUSE CONFIRMED — mid-fade teardown\n\nIsolated by a four-arm A/B against the real receiver on 2026-08-02, with instrumentation added\nto make session/member lifecycle visible (`[player] session=… CREATED/KEPT/STOPPING/CLEAR`,\n`[engine] member … JOINED/REMOVED` with ring lag and live seq).\n\n| Arm | `LeaveFade` | Stop→Play gap | Fade state when reaped | Audio |\n|---|---|---|---|---|\n| 1 | 500 ms | 0 (back-to-back) | **still ramping** | **SILENT** (reproduced twice) |\n| 1 | **0** | 0 (back-to-back) | nothing to interrupt | plays |\n| 1b | 500 ms | 2 s | complete | plays |\n| 2 | 500 ms | 9 s | complete | plays |\n\nExactly one variable separates a wedge from a clean replay: **whether the outgoing member's\nfade-out envelope had finished when `reap-before-connect` tore it down.** Setting `LeaveFade = 0`\nmakes the identical back-to-back sequence work, which rules out every timing explanation that is\nnot the fade — same code path, same near-zero TEARDOWN→SETUP gap, same everything else.\n\n`reap-before-connect` issues the RTSP TEARDOWN while the receiver still holds real, non-silent\naudio queued from the in-progress fade. The immediately-following SETUP for the new session then\nleaves the receiver accepting the session (the handshake succeeds and returns\n`Audio-Latency = 4096 frames`) but never rendering it.\n\n## Both earlier hypotheses are dead\n\n- \"The receiver refuses the second session as an interruption\" — no: the handshake SUCCEEDS.\n- \"The daemon reuses a stale session / stale timeline\" — no: the instrumentation shows a fresh\n  `Session` with a new id and a new clock every time (`CREATED`, `session_age≈1.4s`,\n  `ring_lag≈123`, i.e. a full ~1 s of program buffered at join). The daemon-side pipeline is\n  healthy and IDENTICAL in the wedged and the working arms.\n- Also dead: \"the TEARDOWN→SETUP gap is the variable\". Arms 1 and 1b have the same ~0 gap and\n  differ in outcome.\n\n## The underlying defect is an unenforced invariant\n\n`engine/member.rs`'s retiring path synthesizes silence once the ring runs dry, on the stated\nassumption that \"the gain is already faded to 0\". Nothing enforces that: `Session::remove` calls\n`snd.request_stop(leave_fade_frames)` and then IMMEDIATELY `retiring.park(...)`, so a member can\nbe parked — and reaped — while its envelope has barely started to ramp. The comment describes an\ninvariant the code does not maintain.\n\n## Fix shapes (not yet chosen)\n\n1. **Wait for the fade at reap.** Record a `fade_done_at` alongside `reap_at` in `RetiringMember`;\n   `reap()` waits until that instant before `shutdown()`. Cost is paid ONLY on a same-speaker\n   collision (the rare path), bounded by `LeaveFade`. Smallest change that addresses the actual\n   cause.\n2. **Make the invariant true at park time.** Do not consider a member parked until its fade has\n   played out. Cleanest conceptually — it makes the documented assumption true for every consumer\n   (`reap`, `sweep`, `drain`) — but pays the fade latency on every removal, not just collisions.\n3. **Warm reuse** (already named in `retire.rs`'s module doc as the M1 seam). Do not\n   teardown+setup at all: reactivate the parked member for the new session (FLUSH + fade-in).\n   Eliminates the RTSP churn entirely and gives the best UX (no gap at all), but is the largest\n   change.\n\nRecommendation: (1) now, (3) as the M1 evolution. (2) is tempting but taxes the common path to fix\na rare one.\n\n## Note for whoever implements this\n\nThere is still no programmatic signal for \"the speaker is actually rendering\" — every arm above\nhad to be judged by ear, and the Store-side observed `Transport` read \"playing\" throughout all of\nthem, including the silent ones. That is the honest-feedback gap from spec section 11.1 and it is\nwhat made this take four arms instead of one. Worth fixing alongside, or this class of bug stays\near-only forever.\n",
+                    "createdAt": "2026-08-02T15:42:31Z"
+                  },
+                  {
+                    "author": {
+                      "login": "yuvalrakavy"
+                    },
+                    "authorAssociation": "OWNER",
+                    "body": "Fixed in 3df4b60 and verified on the real receiver.\n\n`park()` now records `fade_done_at`, and a shared `shutdown_after_fade` helper refuses to tear a\nmember down before its fade has played out — applied on every teardown path (`reap`, `park`\neviction, `sweep`, `drain`), capped at 2 s so a pathological config cannot stall the converge\nthread.\n\nVerification, both arms:\n\n* The reproduction in the report no longer reproduces. The identical back-to-back\n  `ra.Stop = true; ra.Play = true` with `LeaveFade = 500 ms` — which produced ~0.5 s of audio then\n  silence three separate times — now plays through, confirmed by ear.\n* The mechanism is observably firing:\n  `reap-before-connect: tearing down a member still retiring on 10.0.2.158 (waiting 366.482375ms\n  for its fade to finish first)`, followed by a clean connect and rejoin.\n* Four unit tests, negative-controlled: with the wait disabled, exactly the three that pin the\n  rule go red; the fourth pins the opposite edge so a finished fade cannot introduce a needless\n  stall.\n\nLeft deliberately open as separate work, both noted in the thread: there is still no programmatic\nsignal for \"the speaker is actually rendering\" (the Store-side observed `Transport` read \"playing\"\nthroughout every silent arm), which is the spec section 11.1 honest-feedback obligation and is what\nmade this take four hardware arms to isolate.",
+                    "createdAt": "2026-08-02T15:58:02Z"
+                  }
+                ],
+                "totalCount": 3
+              },
+              "createdAt": "2026-08-02T14:55:11Z",
+              "id": "I_kwDOTBQnEM8AAAABLJYoqQ",
+              "labels": {
+                "nodes": [
+                  {
+                    "name": "bug"
+                  }
+                ],
+                "totalCount": 1
+              },
+              "number": 2,
+              "repository": {
+                "nameWithOwner": "yuvalrakavy/airzoned"
+              },
+              "state": "CLOSED",
+              "stateReason": "COMPLETED",
+              "timelineItems": {
+                "nodes": [
+                  {
+                    "__typename": "LabeledEvent",
+                    "actor": {
+                      "login": "yuvalrakavy"
+                    },
+                    "createdAt": "2026-08-02T14:55:12Z",
+                    "id": "LE_lADOTBQnEM8AAAABLJYoqc8AAAAGt6OSEA",
+                    "label": {
+                      "name": "bug"
+                    }
+                  }
+                ],
+                "totalCount": 1
+              },
+              "title": "reap-before-connect tears down a member mid-fade, wedging the receiver",
+              "updatedAt": "2026-08-02T15:58:03Z"
+            },
+            {
+              "author": {
+                "login": "yuvalrakavy"
+              },
+              "authorAssociation": "OWNER",
+              "body": "## Observed\n\nRaising `LeaveFade` in `{Root}/Config` from 500 ms to 4500 ms produces an ABRUPT stop, not a\n4.5 s fade. Verified live on 2026-08-02 against a real receiver.\n\nThe config round-trips correctly and the engine believes it is honouring it:\n\n```\n[airzoned] config applied: preroll=1000ms silence_lead=1022ms join_fade=750ms\n           leave_fade=4500ms retire_grace=5000ms volume=-8dB\n[engine] member m33558669: stop — fading out over 198450 frames, retiring\n```\n\n198450 frames is exactly 4500 ms x 44.1, so the envelope really is armed for 4.5 s. What the\nlistener hears is a hard cut.\n\n## Expected\n\n`LeaveFade = 4500` should produce an audible 4.5 s musical fade-out. Failing that, the config\nlane should refuse or clamp the value with a warning rather than accept it and silently degrade\nto a cut.\n\n## Confirmed\n\nThe fade can only be as long as the audio still buffered in the ring when the session's producer\nis dropped at Stop, and that is ~0.5 s:\n\n- `engine/mod.rs`: `PREROLL_LEAD_PKTS = 64` (~0.5 s) — the producer keeps the ring filled only to\n  `clock.target_now() + lead`, and `produce()` paces itself with `thread::sleep(BURST_PERIOD)`.\n  A stack sample during playback showed the producer 3140/3151 samples inside that sleep, i.e.\n  it stays at its small lead and never runs far ahead.\n- `engine/mod.rs`: `RING_CAPACITY_PKTS = 768` (~6 s). The ring is big enough for a long fade; it\n  simply is never filled that far ahead, because the producer is paced, not eager.\n- `engine/member.rs` (the `retiring` + `ReadOutcome::NotYetCommitted` arm): once the ring runs\n  dry the retiring member synthesizes `[[0.0; 2]; FPP]` silence, with the comment \"the gain is\n  already faded to 0\". That assumption is TRUE for a 500 ms fade and FALSE for anything longer\n  than the producer's lead.\n\nSo the previous default was not arbitrary: `LeaveFade = 500 ms` matched `PREROLL_LEAD_PKTS`\nalmost exactly, which is why the fade completed to zero inside the buffered audio. At 4500 ms\nyou get ~0.5 s of fade (full down to roughly 89% gain — inaudible as a fade) followed by ~4 s\nof silence.\n\n## Two defects, not one\n\n1. **The engine cannot honour a fade longer than the producer lead.** The stop path drops the\n   session producer immediately, so there is no further real audio to fade.\n2. **The config lane accepts the value anyway and degrades silently.** Nothing warns, and the\n   log line (\"fading out over 198450 frames\") actively suggests it worked. Whatever is decided\n   about (1), the silent degradation is its own bug.\n\n## Fix shape (not yet designed — needs a decision)\n\nThe correct fix is to keep the session producer alive through the fade: at Stop, arm the\nenvelope, keep producing real audio until the fade has fully played out, and only then drop the\nproducer and enter the silence/retire phase. The retire phase's \"gain is already faded to 0\"\ncomment then becomes true by construction instead of by coincidence.\n\nInteraction to check before implementing: `RetireGrace` (currently 5000 ms) must remain greater\nthan `LeaveFade`, and a longer fade means a retiring member streams to its speaker for longer —\nwhich widens the window for the stop-then-play wedge in #2. These two issues should probably be\ndesigned together.\n\nCheap interim mitigation if the full fix is deferred: clamp `LeaveFade` to the producer lead at\nconfig-apply time and WARN when clamping, so the value cannot silently lie.\n\n## Notes\n\nRaised by the user during the 2026-08-02 by-ear session (\"Stop fade-out should also be 4-5\nseconds\"), then reproduced and root-caused. `LeaveFade` has been reverted to 500 ms in the\nmeantime so the short fade works correctly.\n",
+              "closedAt": "2026-08-02T16:12:01Z",
+              "comments": {
+                "nodes": [
+                  {
+                    "author": {
+                      "login": "yuvalrakavy"
+                    },
+                    "authorAssociation": "OWNER",
+                    "body": "Correction to my own report: **I cited the wrong constant.**\n\nThe producer lead is `PRODUCTION_AHEAD_PKTS = 128` (~1 s) — `engine/mod.rs:38`, \"Packets the\nproducer keeps written ahead of live\", and it is the value actually passed to `spawn_producer`\nat `player.rs:215`.\n\n`PREROLL_LEAD_PKTS = 64` (~0.5 s), which the report cited, is a DIFFERENT quantity: \"Packets a\njoiner starts ahead of live\", i.e. the new member's join offset. I matched it by name\nresemblance instead of checking which constant the call site passes.\n\nWhat changes:\n\n* The producer lead is **~1 s**, not ~0.5 s.\n* The claim that `LeaveFade = 500 ms` \"matched `PREROLL_LEAD_PKTS` almost exactly, which is why\n  the fade completed\" is wrong. The real reason a 500 ms fade works is simply that it fits\n  comfortably inside the ~1 s of audio the producer keeps buffered ahead.\n\nWhat does NOT change: the defect. A 4500 ms fade still cannot be honoured, because the producer\nis dropped at Stop and only ~1 s of real audio remains in the ring — so ~1 s of fade is followed\nby ~3.5 s of synthesized silence. The fix shape (keep the producer alive through the fade) and\nthe interim mitigation (clamp `LeaveFade` to the lead and WARN) are unaffected.\n",
+                    "createdAt": "2026-08-02T15:22:49Z"
+                  },
+                  {
+                    "author": {
+                      "login": "yuvalrakavy"
+                    },
+                    "authorAssociation": "OWNER",
+                    "body": "Fixed in 1dd554a and verified on hardware — a 4.5 s fade now sounds like a fade (\"stopped nicely\").\n\nThe producer is DETACHED at stop rather than dropped with the session: `stop_session` takes its\nhandle, marks the session `producer_detached` so `Drop` leaves it alone, and hands it to a stopper\nthat clears the running flag after the fade and joins it. The parked members hold their own ring\n`Arc` and clock `Copy`, so the ring keeps being filled once the session object is gone.\n\nBecause the member drains in real time and the producer fills in real time, the ring never has to\nhold the whole fade — so the ceiling on fade length is gone entirely, not merely raised. It is now\nbounded only by `RetireGrace`, which must stay greater than `LeaveFade`.\n\nVerification: `LeaveFade = 4500` -> `CREATED … leave_fade_frames=198450` ->\n`producer LINGERING 4.5s so the fade has real audio` -> a real 4.5 s fade by ear. Afterwards the\ndaemon is back to 2 threads at 0% CPU with the producer stopped and joined, so the detached producer\ndoes not leak.\n\nAlso corrected here: the report originally cited `PREROLL_LEAD_PKTS` (~0.5 s) as the producer lead.\nThe lead is `PRODUCTION_AHEAD_PKTS` = 128 (~1 s), confirmed empirically by the new instrumentation\n(`ring_lag≈123..127` at join).\n\nTwo follow-ups deliberately left open:\n\n* A replay issued DURING a long fade now waits for that fade before the new session can connect,\n  since the reap must not tear down mid-fade (see #2). Safe, but at 4.5 s it reads as an\n  unresponsive panel. Cutting the fade short on an explicit replay is the likely answer; it is a UX\n  decision, not a code one.\n* The \"clamp and warn\" mitigation is no longer needed for the ring-capacity reason, but a\n  `LeaveFade >= RetireGrace` config is still nonsense and is not currently rejected.",
+                    "createdAt": "2026-08-02T16:12:00Z"
+                  }
+                ],
+                "totalCount": 2
+              },
+              "createdAt": "2026-08-02T15:06:25Z",
+              "id": "I_kwDOTBQnEM8AAAABLJbldg",
+              "labels": {
+                "nodes": [
+                  {
+                    "name": "bug"
+                  }
+                ],
+                "totalCount": 1
+              },
+              "number": 3,
+              "repository": {
+                "nameWithOwner": "yuvalrakavy/airzoned"
+              },
+              "state": "CLOSED",
+              "stateReason": "COMPLETED",
+              "timelineItems": {
+                "nodes": [
+                  {
+                    "__typename": "LabeledEvent",
+                    "actor": {
+                      "login": "yuvalrakavy"
+                    },
+                    "createdAt": "2026-08-02T15:06:26Z",
+                    "id": "LE_lADOTBQnEM8AAAABLJblds8AAAAGt6ejow",
+                    "label": {
+                      "name": "bug"
+                    }
+                  }
+                ],
+                "totalCount": 1
+              },
+              "title": "LeaveFade longer than the producer lead (~0.5s) degrades silently to an abrupt cut",
+              "updatedAt": "2026-08-02T16:12:01Z"
+            },
+            {
+              "author": {
+                "login": "yuvalrakavy"
+              },
+              "authorAssociation": "OWNER",
+              "body": "> **Status 2026-10-23:** still open, checked against `7b4623f`. Note: the daemon now *sends* `SET_PARAMETER progress` (Store #88 / MP-107) as a sender-to-receiver push; that is **not** the signal this issue wants, and nothing is read back. The unbuilt candidate is `GET_PARAMETER progress` (see the `timing_loop` doc, `src/engine/member.rs:862-876`). The two instrument defects in the 2026-08-02 comment are at `connect_attempt_begins` (`src/engine/mod.rs:549-559`): it logs before the handshake, and formats with `{since:?}` (Debug units). They could be split off as a small self-contained task.\n\n## Observed\n\nThe daemon cannot tell whether a receiver is ACTUALLY RENDERING. Every local stage can look\nperfectly healthy — RTSP socket ESTABLISHED, send loop encoding on schedule, ring full, member\njoined — while the room is silent.\n\nThis is not hypothetical: it is what made the mid-fade wedge (#2) take four hardware A/B arms and a\nlistener to isolate. Throughout every silent arm the Store-side observed `Transport` read \"Playing\".\n\n## What was tried, and what it does NOT cover\n\n2ae3113 added a receiver heartbeat: `timing_loop` records when the receiver last asked us for\ntiming, and a member that goes quiet past `TIMING_SILENCE_UNHEALTHY_MS` (8 s, chosen from a measured\n~2.0–2.5 s request period) publishes observed `Failed`.\n\nThat catches a receiver that is GONE — powered off, standby, off the network, crashed — which was\npreviously invisible and is a real gain.\n\n**It does not catch a receiver that is present but not rendering.** Established by experiment, not\nassumed: the wedge was deliberately re-induced by disabling the fade-wait, the room was silent for\n30 s, and the timing requests kept arriving the whole time. The threshold was never crossed. A\nheartbeat proves liveness; liveness is not playback.\n\n## Expected\n\nA signal that distinguishes \"rendering\" from \"connected but silent\", so this failure class is\ndiagnosable from the logs and the Store instead of from a person in the room. Spec section 11.1\nrequires honest transport feedback and is currently only partly met.\n\n## Hypotheses — UNVERIFIED\n\n* **RTSP `GET_PARAMETER progress`** is the most promising: RAOP receivers report a playback position\n  for scrub bars. Polling it and checking that it ADVANCES would answer the question directly.\n  Unverified: whether this particular Yamaha implements it, what it returns while wedged (it may\n  report a frozen position, which is exactly the signal we want — or it may not respond at all), and\n  what the polling cost is.\n* Retransmit requests are NOT a candidate: they only appear on packet loss, so their absence proves\n  nothing.\n\nVerify against real hardware before designing around any of this — the heartbeat idea looked\nobviously right too, and was wrong.\n\n## Why it matters beyond debugging\n\nOnce this exists, the wedge class (and any future variant) fails LOUDLY. The panel can then honour\nthe section 11.1 contract — \"never a blank now-playing screen\" — and offer a recovery instead of\nshowing \"Playing\" over silence.\n\n---\n\n<!-- media-port-dag:relationships -->\n### Position in the media-port DAG\n\n**Depends on** — must land first\n- yuvalrakavy/Store#72 — **MP-004** · ✔ done\n\n**Blocks** — waiting on this\n- _nothing_\n\n<sub>Generated from [`docs/media-port-dag.md`](https://github.com/yuvalrakavy/Store/blob/main/docs/media-port-dag.md) — the DAG is the source of truth; edit it there and re-run <code>scripts/dag-sync-issues.py</code>. Edges point from dependency to dependent.</sub>\n<!-- /media-port-dag:relationships -->\n\n",
+              "closedAt": null,
+              "comments": {
+                "nodes": [
+                  {
+                    "author": {
+                      "login": "yuvalrakavy"
+                    },
+                    "authorAssociation": "OWNER",
+                    "body": "The pre-merge gate on `feat/m3-streaming-sources` sharpened why this matters, judging the new logging as a requirement rather than decoration.\n\nThat branch added the two intervals that bracket a wedge — silence→TEARDOWN and TEARDOWN→SETUP — so that a recurrence produces numbers instead of another uncontrolled A/B. But **neither line records whether that instance actually wedged.** A field recurrence therefore yields two intervals and no outcome, and correlating them still needs a human ear or `scripts/listen.sh`.\n\nThat is this issue: there is no rendering signal. `unhealthy_members` explicitly cannot serve as one — the timing heartbeat kept arriving through 30 s of deliberately induced silence, so liveness is not playback.\n\nThe candidate the code already names is RTSP `GET_PARAMETER progress`, polled for advancement. If that advances only while the receiver is really rendering, it converts every one of these logs from \"here are two intervals\" into \"here are two intervals AND whether it worked\", which is what makes the data self-interpreting.\n\nTwo smaller instrument defects found alongside, worth folding in whenever this is picked up:\n\n* The SETUP-side line fires *before* `connect_and_spawn`, which does TCP connect + `auth_setup` + ANNOUNCE first — so the reported gap understates the true TEARDOWN→SETUP interval by an unmeasured handshake, and nothing logs that handshake's duration.\n* The intervals print with `Duration`'s `Debug`, so units vary between runs (`950ms`, `1.02s`, `9.974258042s`). Hostile to sweeping across runs, and inconsistent with the daemon's own `... {} ms` convention.\n",
+                    "createdAt": "2026-08-02T21:31:27Z"
+                  },
+                  {
+                    "author": {
+                      "login": "yuvalrakavy"
+                    },
+                    "authorAssociation": "OWNER",
+                    "body": "Node **MP-304** in the Store repo's media port DAG (`docs/media-port-dag.md`) — part of the MP-3xx reliability band of the live-frontier mission.",
+                    "createdAt": "2026-08-03T10:23:49Z"
+                  }
+                ],
+                "totalCount": 2
+              },
+              "createdAt": "2026-08-02T16:36:57Z",
+              "id": "I_kwDOTBQnEM8AAAABLJzwTg",
+              "labels": {
+                "nodes": [
+                  {
+                    "name": "todo"
+                  },
+                  {
+                    "name": "p2"
+                  },
+                  {
+                    "name": "media-port"
+                  },
+                  {
+                    "name": "receiver"
+                  }
+                ],
+                "totalCount": 4
+              },
+              "number": 4,
+              "repository": {
+                "nameWithOwner": "yuvalrakavy/airzoned"
+              },
+              "state": "OPEN",
+              "stateReason": null,
+              "timelineItems": {
+                "nodes": [
+                  {
+                    "__typename": "LabeledEvent",
+                    "actor": {
+                      "login": "yuvalrakavy"
+                    },
+                    "createdAt": "2026-08-02T16:36:59Z",
+                    "id": "LE_lADOTBQnEM8AAAABLJzwTs8AAAAGt8jnQQ",
+                    "label": {
+                      "name": "enhancement"
+                    }
+                  },
+                  {
+                    "__typename": "UnlabeledEvent",
+                    "actor": {
+                      "login": "yuvalrakavy"
+                    },
+                    "createdAt": "2026-10-23T20:22:34Z",
+                    "id": "UNLE_lADOTBQnEM8AAAABLJzwTs8AAAAH79nrKQ",
+                    "label": {
+                      "name": "enhancement"
+                    }
+                  },
+                  {
+                    "__typename": "LabeledEvent",
+                    "actor": {
+                      "login": "yuvalrakavy"
+                    },
+                    "createdAt": "2026-10-23T20:22:34Z",
+                    "id": "LE_lADOTBQnEM8AAAABLJzwTs8AAAAH79nrhA",
+                    "label": {
+                      "name": "todo"
+                    }
+                  },
+                  {
+                    "__typename": "LabeledEvent",
+                    "actor": {
+                      "login": "yuvalrakavy"
+                    },
+                    "createdAt": "2026-10-23T20:22:34Z",
+                    "id": "LE_lADOTBQnEM8AAAABLJzwTs8AAAAH79nr2g",
+                    "label": {
+                      "name": "p2"
+                    }
+                  },
+                  {
+                    "__typename": "LabeledEvent",
+                    "actor": {
+                      "login": "yuvalrakavy"
+                    },
+                    "createdAt": "2026-10-23T20:22:34Z",
+                    "id": "LE_lADOTBQnEM8AAAABLJzwTs8AAAAH79nsHA",
+                    "label": {
+                      "name": "receiver"
+                    }
+                  },
+                  {
+                    "__typename": "LabeledEvent",
+                    "actor": {
+                      "login": "yuvalrakavy"
+                    },
+                    "createdAt": "2026-10-23T20:22:34Z",
+                    "id": "LE_lADOTBQnEM8AAAABLJzwTs8AAAAH79nsUg",
+                    "label": {
+                      "name": "media-port"
+                    }
+                  }
+                ],
+                "totalCount": 6
+              },
+              "title": "No signal for 'the receiver is actually rendering' — heartbeat proves liveness, not playback",
+              "updatedAt": "2026-10-23T20:22:34Z"
+            },
+            {
+              "author": {
+                "login": "yuvalrakavy"
+              },
+              "authorAssociation": "OWNER",
+              "body": "Pre-merge gate on `origin/main..2ae3113` (three fresh-context finders, 2026-08-02) found five defects\nthat are ONE root cause: the teardown wait is ESTIMATED from wall-clock deadlines and its ownership is\nsplit between two actors. Filing them together because patching them separately is what produced them.\n\n**This surface has now been revised twice and a gate found holes both times.** That is the signal to\nchange the shape, not to add a third set of rules.\n\n## Confirmed defects (all traced to code)\n\n**A. `reap` silently no-ops while `sweep` owns the entry, so SETUP races an in-flight TEARDOWN.**\n`sweep()` (`engine/retire.rs`) removes the entry from the map and THEN runs `shutdown_after_fade` with\nthe lock released. In that window the entry is absent-but-alive, so a converge-thread `reap(ip)` finds\n`None` and returns immediately, and `connect_and_spawn` issues ANNOUNCE/SETUP while the old member's\nTEARDOWN has not been sent. Window ≈1.05 s (send-thread join ≤50 ms + timing and control joins ≤500 ms\neach, then TEARDOWN), starting at `park + retire_grace` ±250 ms of reaper tick. The module doc claims\nthis cannot happen; that claim is true of map ownership and false of the invariant it exists to protect.\nConsequence: receiver refuses, `add` marks the member `pending`, and NOTHING retries when\n`mdns_realm` is unset (`retry_unresolved`'s only caller is the mDNS branch) — silent dead room while\n`reconcile` publishes `Playing`.\n\n**B. The wait blocks the converge thread AFTER the new session's clock has started, dropping audio.**\nIn `reconcile`, `create_session` starts the clock and the producer (writing from seq 0), and only then\ndoes `converge → add → reap → sleep`. The join cursor is computed after the sleep\n(`clock.target_now(now) + JOIN_LEAD_PKTS`), so everything written during it is skipped — no `Evicted`,\nno log line. With `LeaveFade=4500` and a replay 0.5 s after stop, ≈3.5 s of the track is dropped\n(worse for Playlist/Stream sources, which have no silence lead). The daemon also processes no desired\ndocs and runs no health check for that whole window.\n\n**C. The wait covers the fade being SENT, not RENDERED.** `fade_done_at = park + leave_fade` is the\ninstant the last faded packet goes on the wire. The receiver renders it `RTP_PREROLL` (1 s) plus its\nown Audio-Latency later. `record()` MEASURES that Audio-Latency, logs it, and discards it. So any\nreplay in `(fade_done_at, fade_done_at + preroll + audio_latency)` still tears down mid-render. Note\nthe four-arm A/B arm that worked used a 2 s gap ≈ preroll + fade — consistent with pipeline drain,\nnot fade completion, being the operative mechanism.\n\n**D. `LeaveFade >= RetireGrace` inverts the bound and re-arms the original wedge.** `until =\nmin(fade_done_at, reap_at)`. Both are free admin knobs over `{Root}/Config` with no validation. With\n`LeaveFade=6000, RetireGrace=5000` (default grace is 5000, and the producer-linger was built for a\n4500 fade — 500 ms of headroom), `sweep`'s due-filter checks only `reap_at`, so at the tick where\n`now >= reap_at` the remaining wait is ZERO and TEARDOWN fires a full second before the fade ends, on\nEVERY natural stop. A second path reaches the same place without misconfiguration: any fade above\n`MAX_FADE_WAIT` (10 s) is truncated by the cap. The claim that the producer-linger \"removes the\nceiling on how long a fade can be\" is therefore false past ~10 s — the linger is uncapped and the\nteardown wait is capped, and the teardown wins.\n\n**E. `sweep` acts on a stale due-set.** The due list is computed under one lock and each entry removed\nunder a second, with no re-check of `reap_at`. A `park` during the first teardown can install a fresh\nmember at a later index, which is then reaped honouring its fade but discarding its grace.\n\n## Proposed shape — stop estimating, observe\n\nThe member already emits `StopComplete` when its envelope reaches zero, and `record()` already learns\nthe receiver's real Audio-Latency. The teardown condition should be \"the fade has been RENDERED\" =\n`StopComplete` + `RTP_PREROLL` + that measured latency — not a guessed sleep on the converge thread.\n\nThat collapses A, C, D and E into one mechanism and deletes `MAX_FADE_WAIT` entirely. B is independent\nand is fixed by performing the reap BEFORE `create_session`, so any wait precedes the clock start.\n\nAlso unresolved and needing a decision: a replay issued during a long fade must either wait it out\n(unresponsive) or cut it short (needs the \"receiver holds no real audio\" guarantee re-established some\nother way — force gain to zero, then drain). This is a UX call.\n\n## Test gaps to close in the same pass\n\nEvery existing fade-wait test calls `reap()` immediately after `park()`, never through the natural\nsweep-at-deadline path, and never with `fade > grace` — so none of them can catch D. They also assert\nonly LOWER bounds: dropping `fade_done_at` from the `min` makes every reap block for the full grace,\nand the suite went from 0.36 s to 20 s while still reporting green. Upper-bound assertions needed.\n",
+              "closedAt": "2026-08-02T21:32:31Z",
+              "comments": {
+                "nodes": [
+                  {
+                    "author": {
+                      "login": "yuvalrakavy"
+                    },
+                    "authorAssociation": "OWNER",
+                    "body": "The pre-merge gate found that `restart-daemon.sh` waited 3s for the old daemon and launched regardless, while a normal shutdown takes 6-16s. Two daemons overlapped routinely; the newcomer's retiring pool is empty (different process) so it SETUPs over the incumbent's live session, which then receives the incumbent's TEARDOWN and goes silent — indistinguishable from this issue at the speaker.\n\n**The settle A/B was run through that script.** So the '2s still wedges' arm is contaminated, and the apparent gap threshold in (2s, 15s] is suspiciously exactly the old daemon's shutdown budget. Those arms must be re-run on the fixed script (`658aee7`) before anything is concluded from them.\n\nWhat survives: the ~1ms replay wedged with the drain provably satisfied, inside ONE process, no restart involved. This issue is real; only the gap-length story is in doubt.",
+                    "createdAt": "2026-08-02T21:31:28Z"
+                  }
+                ],
+                "totalCount": 1
+              },
+              "createdAt": "2026-08-02T17:07:59Z",
+              "id": "I_kwDOTBQnEM8AAAABLJ7uUQ",
+              "labels": {
+                "nodes": [
+                  {
+                    "name": "bug"
+                  }
+                ],
+                "totalCount": 1
+              },
+              "number": 5,
+              "repository": {
+                "nameWithOwner": "yuvalrakavy/airzoned"
+              },
+              "state": "CLOSED",
+              "stateReason": "COMPLETED",
+              "timelineItems": {
+                "nodes": [
+                  {
+                    "__typename": "LabeledEvent",
+                    "actor": {
+                      "login": "yuvalrakavy"
+                    },
+                    "createdAt": "2026-08-02T17:08:00Z",
+                    "id": "LE_lADOTBQnEM8AAAABLJ7uUc8AAAAGt9MApA",
+                    "label": {
+                      "name": "bug"
+                    }
+                  }
+                ],
+                "totalCount": 1
+              },
+              "title": "Redesign the teardown wait: observe render completion instead of estimating deadlines (5 gate findings, one root cause)",
+              "updatedAt": "2026-08-02T21:32:31Z"
+            }
+          ],
+          "pageInfo": {
+            "endCursor": "Y3Vyc29yOnYyOpK0MjAyNi0wOC0wMlQxNzowNzo1OVrPAAAAASye7lE=",
+            "hasNextPage": true
+          }
+        }
+      }
+    }
+  },
+  "variables": {
+    "after": null,
+    "first": 5,
+    "name": "airzoned",
+    "owner": "yuvalrakavy",
+    "since": "2024-10-29T12:00:00.000Z"
+  }
+}

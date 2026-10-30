@@ -88,6 +88,8 @@ fn event_examples_have_the_identity_this_crate_computes_and_typed_data() {
         "event-launch",
         "event-outcome",
         "event-prepared",
+        "event-evaluated",
+        "event-truth-tag",
         "event-exported",
         "event-session-seen",
         "event-session-gone",
@@ -103,6 +105,7 @@ fn event_examples_have_the_identity_this_crate_computes_and_typed_data() {
                 Kind::Decided => round_trip::<DecidedData>(&what, &event.data),
                 Kind::Observed => round_trip::<ObservedData>(&what, &event.data),
                 Kind::Prepared => round_trip::<PreparedData>(&what, &event.data),
+                Kind::Evaluated => round_trip::<issue_dashboard_core::eval::EvaluatedData>(&what, &event.data),
                 _ => {}
             }
             checked += 1;
