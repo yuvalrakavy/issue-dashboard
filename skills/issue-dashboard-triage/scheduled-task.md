@@ -4,7 +4,7 @@ description: Daily at 06:00: request one issue-dashboard triage launch for Villa
 schedule: "0 6 * * *"
 ---
 
-Model routing (owner's choice, triage spec 5.2): this is a mechanical job — run it on Haiku at low effort. It never answers a triage question; the session the dispatcher starts does, at the project's configured routing.
+Model routing (owner's choice, triage spec 5.2): this is a mechanical job — run it on Haiku (a scheduled task's effort cannot be set; it runs at medium). It never answers a triage question; the session the dispatcher starts does, at the project's configured routing.
 
 Run ONE daily triage request by following the skill file /Users/yuval/Documents/Projects/issue-dashboard/skills/issue-dashboard-triage/SKILL.md exactly (read it first with the Read tool). Its inputs for this job:
 
