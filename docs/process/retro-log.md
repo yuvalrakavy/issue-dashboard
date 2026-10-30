@@ -226,3 +226,17 @@ Template:
   format when nothing changes?" (the S3: the skip-unchanged optimisation from 2026-10-24 froze
   the old format in place); and an issue filed from a gate finding quotes the finding's
   `file:line` and is checked against the code before filing, not written from the summary.
+
+## 2026-10-30 page search box (T1)
+- time: memo ~10%, implement ~35%, tests, mutants and browser check ~35%, review and fixes ~20%;
+  friction ~10 min (a synthetic keydown on `document` threw in the fixture, a test artifact; the
+  Playwright screenshot root).
+- catches: self-review=1 (`41` matched #410 as a substring before the exact-number rule)
+  gate=reader: 2 S2 + 1 S1 user=0 post-merge=1 (the republish found the triage page, #31-#35,
+  had never been published; v10 put it live with the search box).
+- DG=n/a IG=7 post-merge=0
+- tier-call: right (T1: one page feature on an existing harness).
+- delegation: one reader, Sonnet medium (found the closed-row actions, which no test drove).
+- unconsolidated: 12
+- improve: a merged page PR is not live until republished, so the merge step for a `page/`
+  change names the republish, and the publish checks that the live `core.js` hash equals `main`'s.
