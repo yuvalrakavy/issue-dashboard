@@ -50,9 +50,16 @@ by a dispatcher. A wrong claimer is refused with both names. `Routing` (`docs.rs
 
 ## 2. The read-only flow
 
-2.1 Per launch: **reserve → strict start → wait for verified routing → prepare → stage
-rounds → `launch_result` → apply the result (2.6) → archive (confirmed) → provider `release`
-(phase 2, confirmed) → `launch-ended`.** `launch-ended` is always the LAST step: `ended()`
+2.1 Per launch: **reserve → (phase 2: provider `claim`) → strict start → wait for verified
+routing → prepare → stage rounds → `launch_result` → apply the result (2.6) → (phase 2:
+`gate` → land per 5.6, which may hold as "ready to land" → `post_land`) → archive (confirmed)
+→ provider `release` (phase 2, confirmed) → `launch-ended`.** A launch that fails at any point
+takes the failure tail instead: archive → provider `release` as abandoned, evidence exported
+(5.1) → `launch-ended failed`. The runner never writes `Unconfirmed`; a runner launch is
+Reserved until `started`. `ended()` (`launch.rs:721`) accepts only a Started launch; it gains a
+runner-owned path from **Reserved**, recording AgentBridge's status body as evidence, for a
+launch whose worker finished or was archived before `started` was written.
+`launch-ended` is always the LAST step: `ended()`
 records Ended and Released in one transaction (`launch.rs:720`), and a released launch leaves
 the held-launch scan (`State::holds()`, `launch.rs:149`), so ending earlier would strand an
 unarchived worker and its AgentBridge write fence after a crash. The launch keeps its slot
@@ -84,11 +91,13 @@ fourth failure ends the launch `failed`, keeping every round's content.
 2.6 **Applying a result** reuses existing commands: `record-suggestions`
 (`suggest.rs:605-617`, idempotent by launch) for triage, `eval score` for eval. `eval score` is
 NOT idempotent by launch today: `Dedupe::Latest` compares only the latest event
-(`ledger.rs:279`), its `distinct` has no launch id, and the calibration map is written before
-that check (`eval.rs:1235-1250`), so A → B → retry A records A again and overwrites B's map. It
-gains a **launch-scoped application receipt**, recorded in the same transaction as the score
-and checked before the map is written; a launch with a receipt is a no-op. Then the cleanup
-steps of 2.1.
+(`ledger.rs:279`) and its `distinct` has no launch id (`eval.rs:1235-1250`), so A → B → retry
+A records A again as the key's latest evaluation over B. It gains a **receipt**: a ledger event
+`eval_applied`, subject = launch id, written in the same `tx` as the `evaluated` event. The
+runner path checks for the receipt before anything else, including the map's `fs::write`; a
+launch with a receipt is a no-op. The map file is content-addressed (`map_path`,
+`eval.rs:259`, by `Map::id()` hash), so a crash between the map write and the `tx` leaves a
+harmless orphan file and a retry rewrites the same file. Then the rest of 2.1.
 
 ## 3. Recovery
 
@@ -103,12 +112,12 @@ acts:
 
 | # | Answer (fields) | Action |
 |---|---|---|
-| 1 | call fails, connector unreachable | hold, retry with backoff (1 s doubling to 5 min) |
+| 1 | call fails: connector unreachable; or any error other than `unknown tracker token` (`token job missing`, `start intent missing`, `store.rs:1311-1316`) | unreachable: hold, retry with backoff (1 s doubling to 5 min); other errors: hold, shown to the owner |
 | 2 | error `unknown tracker token`, ledger state **Reserved** (never recorded started) | identical start (AgentBridge replays the original selection) |
 | 3 | error `unknown tracker token`, ledger state **Started or later** | rollback evidence (3.4): stop the runner loudly |
-| 4 | `never_started: true` | `release_never_started(token)` (3.2) |
-| 5 | `result` non-null | apply it (2.6), then the remaining cleanup of 2.1 |
-| 6 | `state: archived`, `result` null | if the ledger shows cleanup in progress, finish it (2.1); otherwise end `failed` |
+| 4 | `result` non-null | resume 2.1 at the first undone step, each read from its own evidence: applied (2.6 receipt / `record-suggestions` record), landed (`origin/main` contains `head_sha`, by `git`), archived (`state: archived`), released (provider `inspect`) |
+| 5 | `state: archived`, `result` null | failure tail of 2.1 (provider release as abandoned, then `launch-ended failed`) |
+| 6 | `never_started: true` | provider release if a workspace was claimed, then `release_never_started(token)` (3.2) |
 | 7 | `state: queued` | stay reserved; wait for an answer with a native session |
 | 8 | `state` started / awaiting_caller with `native_session_id` and matching `routing` | record `started` if missing, resume the flow |
 | 9 | `state` started / awaiting_caller, routing absent or mismatched | as 2.2: mismatch → archive + `failed`; absent → stay reserved |
@@ -129,7 +138,9 @@ workspace, `launch-ended` last — so re-running the derived position never doub
 3.4 **Rollback guard:** a restored or swapped AgentBridge state is detected by the ledger, not
 by a cursor: AgentBridge's `wait(after)` returns only newer events (`store.rs:1153`) and no call
 reports its high-water mark, so a lower cursor is unobservable. The evidence is a token the
-ledger recorded as started that AgentBridge no longer knows (3.1 row 3). The runner then stops
+ledger recorded as started that AgentBridge no longer knows (3.1 row 3); AgentBridge never
+deletes a `token_jobs` row (only inserted, `store.rs:345`), so this has no innocent cause short
+of a reset the owner made. The runner then stops
 loudly and does not resume until the owner runs `runner pin --accept-rollback`; an identical
 start there would run the same work twice. No AgentBridge change is needed.
 
@@ -236,15 +247,17 @@ action (`runner land <launch>`), which runs steps 1–3.
 | 5 | unknown token for a Started launch stops the runner; for a Reserved one starts identically | fake client | unit |
 | 6 | 3 corrections then `failed` | fake client | unit |
 | 7 | provider: same `request_id` → same workspace; release refuses dirty/unknown; unknown action outcome held; one gate at a time per gate clone; a claim refused after `free` keeps the launch reserved | fake provider + real `slots` on a temp dir | unit + integration |
-| 8 | landing: moved main → rebase + re-gate; conflict → worker; 3 refusals → hold; bad `head_sha` → failed; no verdict → held "ready to land"; verdict for another SHA → held; rebase with equal patch-id keeps the verdict, unequal one re-reviews | local bare repo as `origin` | integration |
-| 9 | `eval score` A → B → retry A records nothing new and leaves B's map | eval store | core unit |
+| 8 | landing (phase 2): no verdict → held "ready to land"; `runner land`: moved main → rebase + re-gate, conflict → worker, 3 refusals → hold, bad `head_sha` → failed; crash between `land` and `post_land` resumes at `post_land`; a held launch is never archived or released | local bare repo as `origin` | integration |
+| 8b | automatic landing (when review launches exist): verdict for another SHA → held; rebase with equal patch-id keeps the verdict, unequal one re-reviews | local bare repo + fake verdict | integration, with the harness implementation |
+| 9 | `eval score` A → B → retry A records nothing new and B stays the latest evaluation | eval store | core unit |
+| 9b | `ended` from Reserved: runner-owned only, records the evidence; a dispatcher launch is refused | core | unit |
 | 10 | second `bridge-serve` refuses | `runner.lock` | integration |
 | 11 | `release_never_started` refuses for dispatcher-owned launches and has no timer | core | unit |
 | A | one real eval launch end to end, small model, low effort | live system | manual, recorded in the retro |
 
 6.2 **Phasing.**
 1. **Runner phase 1 (read-only):** ledger changes (`Routing.harness`, claim rule, claimer
-   filter, `release_never_started`, `runner_status`, the `eval score` receipt), the service
+   filter, `release_never_started`, `runner_status`, the `eval score` receipt, `ended` from Reserved), the service
    (LaunchAgent, lock, `init`/`pin`), the flow (§2), recovery (§3), concurrency (§4). Ends with
    acceptance row A; triage then closures enabled by config afterwards.
 2. **Runner phase 2 (workspaces):** §5, with owner-triggered landing (`runner land`).

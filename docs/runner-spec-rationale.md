@@ -60,8 +60,8 @@ only the decisions.
 - `capacity` per recipe (`config.rs:91`, `config.rs:406`).
 - `record-suggestions` is idempotent by launch (`suggest.rs:605-617`). `eval score` is not:
   `Dedupe::Latest` compares only the latest event (`ledger.rs:279`), `distinct` = {manifest
-  hash, answers hash} with no launch id, and the map is written first (`eval.rs:1235-1250`).
-  Hence the receipt (2.6). This line said "idempotent" until the design gate (F5).
+  hash, answers hash} with no launch id (`eval.rs:1235-1250`). Maps are content-addressed
+  (`map_path`, `eval.rs:259`). Hence the receipt (2.6). This line said "idempotent" until the design gate (F5).
 - AgentBridge `token_status` (`src/dashboard/store.rs:1308-1372`): `unknown tracker token` is
   an error; otherwise `state` by precedence archived > result > queued > awaiting_caller >
   waiting_user > preflight-blocked (`error`) > failure (`error` if `never_started`, else
@@ -80,6 +80,17 @@ only the decisions.
 | F3 | S3 | automatic landing had no positive, revision-bound review requirement | fixed (owner chose A): 5.6 requires a harness-spec review verdict bound to `head_sha`, patch-id across rebase; owner-triggered `runner land` until then |
 | F4 | S3 | the cursor rollback guard could not observe a rollback | fixed: 3.4 + 3.1 rows 2-3, ledger-based evidence; no AgentBridge change |
 | F5 | S2 | `eval score` not idempotent by launch | fixed: launch-scoped receipt (2.6); test 9 A → B → retry A |
+
+Confirming reader (sonnet, medium, over 68641b7), verdict "fix 4", no S3:
+
+| # | Sev | Finding | Disposition |
+|---|---|---|---|
+| C1 | S2 | `ended()` accepts only Started; a result found while the ledger is Reserved could not end | fixed: runner-owned `ended` from Reserved (2.1); test 9b |
+| C2 | S2 | row "archived, no result" named a ledger state that does not exist and skipped provider release | fixed: failure tail of 2.1; rows reordered |
+| C3 | S2 | gate, ready-to-land hold, land and post_land were missing from the step order, so a restart could archive a held launch | fixed: 2.1 order; row 4 resumes at the first undone step by its own evidence |
+| C4 | S1 | `never_started` row ahead of `result` | fixed: result and archived rows first |
+| C5 | S1 | Unconfirmed + unknown token and other `token_status` errors unclassified | fixed: the runner never writes Unconfirmed; other errors hold (row 1) |
+| C6 | S1 | patch-id and other-SHA test rows unexercisable before review launches; no row for `runner land` | fixed: test rows 8 / 8b |
 
 Loop escape, mechanism: F1 and F5 both described an external answer by its name, not its
 fields and dedupe rule. Rule for later specs: an API answer a spec relies on is cited by field
