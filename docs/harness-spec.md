@@ -1,6 +1,6 @@
 # Harnesses, phase estimates and model choice — design spec
 
-Status: **chapters 1–6 approved 2026-11-02; revised after the design gate** (dispositions in
+Status: **approved by the owner 2026-11-02, after three cross-family design passes** (dispositions in
 the rationale). T2. Extends `docs/spec.md` §6.3, §6.8, §7.4 and `docs/triage-spec.md` §1.1;
 this file is newer, and they are corrected when it lands. Alternatives and reasons:
 [harness-spec-rationale.md](harness-spec-rationale.md). Learning arithmetic is a later spec:
