@@ -1,9 +1,8 @@
 # Harnesses, phase estimates and model choice — design spec
 
-Status: **chapters 1–6 approved 2026-11-02; revised the same day after the cross-family design
-gate** (20 findings, folded below; dispositions in the rationale). T2. Extends `docs/spec.md`
-§6.3, §6.8 and §7.4 and `docs/triage-spec.md` §1.1; where they differ, this file is newer and
-they are corrected when it lands. Alternatives and reasons:
+Status: **chapters 1–6 approved 2026-11-02; revised after the design gate** (dispositions in
+the rationale). T2. Extends `docs/spec.md` §6.3, §6.8, §7.4 and `docs/triage-spec.md` §1.1;
+this file is newer, and they are corrected when it lands. Alternatives and reasons:
 [harness-spec-rationale.md](harness-spec-rationale.md). Learning arithmetic is a later spec:
 [harness-learning-spec.md](harness-learning-spec.md). **Implementation waits for the bridge
 runner** (its own T2, designed and landed first).
@@ -15,13 +14,10 @@ sizes into a ranked choice of (harness, model, effort) per phase, with estimated
 subscription quota, and the owner picks from a dropdown. Every phase's real usage and every
 review's verified findings are recorded, so a later spec can calibrate estimates and quality.
 
-**Settled with the owner:** design and implementation share one session unless the
-implementation is large, which gets its own; review is always a separate launch on another
-model family (5.3). Cost is shown as $ and as quota share (3.3). Tracker code ranks; the owner
-chooses. Capability and cost are separate axes; intelligence is not assumed to follow price
-(2.2). Design and review only read and deliver a document; only implementation needs write
-access (2.5). Grades are probed per repo, not declared. Missing estimates are re-triaged
-automatically (1.6). The runner comes first.
+**Settled with the owner:** design and implementation share a session unless implementation
+is large; review is a separate launch on another family (5.3); cost is $ and quota share;
+code ranks, the owner chooses; capability and cost are separate axes (2.2); only
+implementation writes (2.5); grades are probed per repo; missing estimates re-triage (1.6).
 
 **Non-goals:** the bridge runner; AgentBridge per-launch worktree writes (handoff 3) — so
 **implementation on a bridge harness is unavailable** in this spec (2.5); the learning
@@ -67,7 +63,7 @@ changed after prepare is recorded with `stale: true` and the item stays estimate
 left out twice in a row is skipped by selection for 7 days. Old estimates are not converted.
 
 1.7 **Effective estimate and edits.** Effective = the latest `estimates` entry for the item
-with the owner's Details edits merged over it (`docs.rs:195-229`). `EstimatesEdit` drops
+not marked `stale`, with the owner's Details edits merged over it (`docs.rs:195-229`). `EstimatesEdit` drops
 `effort` and gains `phases` (each phase optional); an old entry with `effort` and no `phases`
 reads as phases-unknown. An edit is refused if the merged result fails `estimate::check`. The
 sheet's size controls are edits of this kind, applied to that one launch request only.
@@ -98,9 +94,11 @@ list, the sheet, overrides and `reserve`:
 | overridable | below minimum; unleveled; unpriced; past 100 % quota; review on the implementation's family | listed after the launchable ones with the reason; picking it asks the owner to confirm, and the override and reason are recorded on the launch |
 | forbidden | not ready; missing or expired grade; bridge implementation (2.5); runner absent | listed greyed with reason; `reserve` refuses it |
 
-The family rule uses the **observed** family (strict routing for bridge, the session's model
-for app). A review slot whose implementation is not yet picked takes the family of the
-sheet's current implementation pick.
+The **family rule is per slot**: a design review differs from the designer's family; a T3
+second design reviewer differs from the designer's and the first reviewer's; code and
+confirming review differ from the implementer's. It uses the **observed** family (strict
+routing for bridge, the session's model for app); a slot whose judged slot is not yet picked
+takes the family of the sheet's current pick for it.
 
 2.5 **Grades, probed per key** (harness, profile, model, repo, executable sha256, profile
 config hash, recipe hash, process-skill hash):
@@ -113,8 +111,7 @@ config hash, recipe hash, process-skill hash):
 The app harness holds both grades by its recipe, without a probe; its key is the dispatcher
 skill hash (2.1).
 
-The harness's folder must hold the repo's checkout; without it the probe fails "no checkout".
-A probe is launch kind `probe`: read-only, holds no items, takes a read-only slot; its result
+Without the repo's checkout in its folder the probe fails "no checkout". A probe is kind `probe`: read-only, holds no items, takes a read-only slot; its result
 is a ledger `grade` record (key, steps passed, evidence, date) or a `grade_failed` record with
 the failing step. A grade **expires** when any key part changes, after 30 days, or on the
 owner's `revoke`. Demotion is not automatic in this spec.
@@ -144,8 +141,8 @@ scripts cost minutes, not $.
 
 3.2 **Offers are computed per queued item and per batch suggestion at each publish**, never
 on the page. An offer is keyed by (item or batch, effective estimate, repo) and holds, per
-plan slot (3.5), a ranked list for each size the owner may pick for that phase, and review
-lists per implementation family present in the implementation lists. Each list is ranked as
+plan slot (3.5), a ranked list for each size the owner may pick for that phase; each review
+slot has one list per family present in the lists of the slot(s) it is constrained by (2.4). Each list is ranked as
 if alone; the plan total and `reserve` check the plan as a whole.
 
 3.3 **Two figures per option:** $ (on a subscription harness "≈ $X on subscription") and
@@ -161,9 +158,9 @@ review slot (T2) or two from two families (T3), implementation, code review, con
 (priced, marked conditional). A same-session design + implementation (5.4) is one launch with
 two slots. The plan total = Σ slots, per subscription and in $, plus gate minutes.
 
-3.6 **Quota consumption** is a ledger record per (launch, subscription): at `reserve` a
-**hold** at the slot's estimate; at each usage checkpoint (5.4) and at the outcome the hold is
-**replaced** by the measured figure (or kept as an estimate when usage is unknown, never 0).
+3.6 **Quota consumption** is a ledger record per (launch, slot, subscription): at `reserve` a
+**hold** at each slot's estimate; at that slot's checkpoint (5.4) or at the outcome its hold
+alone is **replaced** by the measured figure — a later slot of the same launch keeps its hold (or kept as an estimate when usage is unknown, never 0).
 Consumption counts in the window containing its timestamp. `reserve` takes the quota check
 and the hold in one transaction, so two concurrent reserves cannot both pass on one headroom.
 
@@ -174,8 +171,8 @@ and the hold in one transaction, so two concurrent reserves cannot both pass on 
 4.1 **Sheet:** a row per plan slot, each with an editable size (an edit per 1.7) and a
 dropdown from the embedded offer; **Split design** toggle when the best deliver-enabled design
 option is cheaper than the best write-enabled one, already on for a large implementation;
-plan total ($, quota per subscription, gate). Changing the implementation pick switches the
-review lists to that family's. 4.2 `reserve` recomputes the offer: a forbidden pick is refused
+plan total ($, quota per subscription, gate). Changing a pick switches the lists of the
+review slots it constrains. 4.2 `reserve` recomputes the offer: a forbidden pick is refused
 with its reason and the sheet reopens; a pick that only moved down, or an overridable pick the
 owner confirmed, is allowed.
 
@@ -186,9 +183,9 @@ members on top, points per 1.5. 4.6 Phone width: full-width list, two-line entri
 
 4.7 **Harnesses view** (beside Queue and Inbox): a row per (harness, model) — ready, strict
 routing, network read, cancel, archive, deliver-enabled, write-enabled, last probe and expiry,
-level, cost band. **Every missing capability shows its reason and its source** (AgentBridge
-capabilities, health, probe step and date, config) and the known fix. **Refresh** (no model
-turn) and **Re-probe** (a `probe` launch, its estimated cost shown).
+level, cost band. **Every missing capability shows its reason, its source** (capabilities,
+health, probe step and date, config) **and the known fix.** **Refresh** (no model turn);
+**Re-probe** (a `probe` launch, cost shown).
 
 ## 5. The launch group
 
@@ -232,9 +229,11 @@ findings {id, severity S1–S3, `file:line`, claim, evidence}. Findings and thei
 are **append-only ledger events**, never edits to an outcome: `finding` and
 `finding_disposition` {verified: yes | no | disputed, disposition: fixed | declined | filed}.
 A disputed finding goes to the owner and counts in no verdict until decided. A later round's
-finding the implementer marks as the same as an earlier one links to its id (`repeat_of`). The **round
-verdict** comes from verified findings: none ≥ S2 → pass; S2 → revise; S3 or a reviewer
-`reject` → **failed**.
+finding the implementer marks as the same as an earlier one links to its id (`repeat_of`). A
+round is **pending** until every slot's result is in and every finding is verified `yes`/`no`
+or decided by the owner; only then is its **verdict** final, from verified findings: none ≥ S2
+→ pass; S2 → revise; S3 → **failed**. A reviewer's `reject` is a claim like a finding: it
+fails the round only when verified or upheld by the owner.
 
 5.8 **Confirming review** covers the fix delta of a revise round; it is skipped only when the
 delta touches no code and, for a design, no decision text. A confirming round that finds a
@@ -279,21 +278,22 @@ here. Existing refusals stay. The learning spec decides how these feed estimates
 | quota | two concurrent reserves on one headroom: one refused; measured usage replaces the hold, never adds; unknown stays at estimate; fixed window rolls at its timezone |
 | groups | review member holds no item; group keeps items across a member's end; result for an old revision refused; approval of a stale hash refused; verdict from verified findings only; disputed counts nothing |
 | transitions | each 5.10 row, including replayed and out-of-order events (a result before its round's input event) |
+| gate-2 cases | design reviewer of the designer's family overridable even when the implementer differs; T3 second reviewer of the first's family overridable; round with a missing slot or unverified S3 stays pending; unverified `reject` fails nothing; `design_ready` checkpoint keeps the implementation hold; stale answer leaves the item estimate-due |
 | page | size edit switches list; review list follows implementation family; phone-width entries; Harnesses reasons with source |
 
 6.3 **Phasing** (each lands alone, after the runner; each ships its own skill and doc
 changes): (1) phased estimate, `estimate::check`, obligations, edits — triage skill;
 (2) pool config, app and bridge ingestion, deliver-enabled probe via the runner, Harnesses
 view — config reference; (3) usage checkpoints, quota consumption, outcome fields, finding
-events; (4) offers, eligibility, sheet — `spec.md` §6.3/§7.4; (5) launch groups with app
-implementation and cross-family bridge review, transitions — dispatcher skill (groups,
-`design_ready`, relaying), `spec.md` §6.8. Before (4), launches keep today's single routing.
+events; (4) offers, eligibility, sheet **for the implementation slot only** (one routing,
+one launch, as today) — `spec.md` §6.3/§7.4; (5) launch groups: the other slots, plan
+expansion and per-slot `reserve`, app implementation with cross-family bridge review,
+transitions — dispatcher skill (groups, `design_ready`, relaying), `spec.md` §6.8. Before (4),
+launches keep today's routing.
 
-6.4 **Hazards** (`docs/process/hazards.md`): *end states* — every 5.10 row ends in a named
-state; a rejected design stays visible; a grade expires unattended at 30 days. *Freshness* —
-offers are recomputed at reserve; grades are keyed by every input that can change them;
-results and approvals are keyed by revision. *One source* — `pool::eligible` for every
-eligibility question, `estimate::check` for every estimate, the group for item ownership.
+6.4 **Hazards** (`docs/process/hazards.md`): end states are 5.10's; freshness is 2.5's keys,
+4.2's recompute and 5.2's revisions; one source each — `pool::eligible`, `estimate::check`,
+the group for item ownership.
 
 ## As built
 

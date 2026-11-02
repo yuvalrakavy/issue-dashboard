@@ -72,6 +72,12 @@ itself holds only the decisions.
 | 19 | S2 | cost inputs missing; wrong gate source | 1.5, 2.2, 3.1 |
 | 20 | S2 | tests permit these failures | 6.2 |
 
+**Confirming pass** (Codex gpt-6.1-sol, medium, on 137cff6): 14 resolved, 6 partial, plus
+N1 S3 review family is per slot (2.4), N2 S3 a round stays pending until every slot and
+finding is settled; `reject` is a claim (5.7), N3 S2 holds are per slot (3.6), N4 S2 stale
+answers leave the effective estimate (1.7), R1 S2 phase 4 is implementation-slot only (6.3);
+each has a row under "gate-2 cases" (6.2).
+
 Verified against code before folding: #1 (`docs.rs:49`, `launch.rs:496`), #7 (AgentBridge
 `store.rs:196`), #14 (`docs.rs:199`), #19 (`config.rs:81`).
 
