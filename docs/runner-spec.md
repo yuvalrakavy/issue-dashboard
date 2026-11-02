@@ -62,8 +62,10 @@ a mismatch archives the worker and ends the launch `failed` with both values.
 then `triage`, then closures, each after clean real runs. A disabled kind stays queued with
 reason `kind disabled`.
 
-2.4 **Briefs** come from `briefs/<kind>.md` in the issue-dashboard repo; the runner records
-the brief's SHA-256 with the start. **GitHub data is fetched by the runner** (`gh`, off the
+2.4 **Briefs** are built by `brief.rs`, the same code the dispatcher uses, so its trust
+boundaries hold (facts-only task sentence, issue text only in author-headed fenced blocks); the
+runner records the brief's SHA-256 with the start. A new kind is a new `brief.rs` template,
+never a file. **GitHub data is fetched by the runner** (`gh`, off the
 event loop) and attached as staged files; the worker has no network.
 
 2.5 **Stage rounds:** the runner validates each `stage_result` by code (schema, required
@@ -120,7 +122,7 @@ reason shown on the page:
 | 3 | kind enabled | 2.3 |
 | 4 | harness healthy | AgentBridge `health`, read live |
 | 5 | `[runner.harness.<name>] max_active` (default 1) not reached | counted from the ledger |
-| 6 | (implementation) a free workspace and a free gate lane | provider `claim`, 5.3 |
+| 6 | (implementation) a free workspace and a free gate location (lane or gate clone) | provider `free(recipe)`, 5.1 |
 
 4.3 **One event loop** waits on the child's events (`wait`); a 5 s poll finds newly queued
 launches. `gh` and `prepare` run on worker threads and post completions back to the loop. State
@@ -136,7 +138,11 @@ machines are rebuilt from the ledger, never held only in memory.
 | `action(ws, name)` | runs a named recipe action; returns exit status, log ref, operation id |
 | `inspect(ws)` | Git state (head, clean/dirty, unpushed) and runtime state |
 | `release(ws)` | only when landed or abandoned with evidence exported; refuses on dirty/unknown state; never deletes on a guess |
+| `free(recipe)` | advisory count of claimable workspaces and gate locations, for admission (4.2 #6) |
 
+`claim` runs after `reserve`, with `request_id` = the reservation token. A claim refused
+despite `free` (a human took the lane) leaves the launch reserved, retried each loop, shown
+"waiting for workspace"; it never returns to queued and never takes a lane in use.
 Operation ids are kept in the ledger; an action with an unknown outcome is held, never rerun
 (3.1 applies).
 
@@ -145,6 +151,7 @@ Operation ids are kept in the ledger; an action with an unknown outcome is held,
 
 | Action | Store | issue-dashboard |
 |---|---|---|
+| `gate_at` (a setting, interim provider only) | `lane` | `clone` |
 | `prefetch` | `cargo fetch` | `cargo fetch` |
 | `worker_checks` | build, clippy, nextest, data_lint | clippy, nextest |
 | `gate` | `scripts/pre-merge-check.sh --quick` + derived set | clippy + nextest |
@@ -156,10 +163,11 @@ membership's `worker_write_roots` (AgentBridge refuses linked worktrees, `DASHBO
 `claim` resets the slot to `base_sha` (`git fetch`, `reset --hard`, `clean -fdx -e target/`)
 so builds stay warm; workspace id = slot id + claim counter. The runner runs `prefetch` with
 network; the worker gets `network: none` with `CARGO_HOME` and `TMPDIR` inside the slot.
-**Gate split:** the worker runs `worker_checks`; the runner claims a **dev-track lane**
-(`store-cli dev-track claim`, for Store), fetches the worker's commit into it, and runs `gate`
-and `land` there, then releases the lane. A lane held by the runner is released only by the
-runner. No free slot or lane ⇒ queued (4.2 #6).
+**Gate split:** the worker runs `worker_checks`; the runner fetches the worker's commit into
+the recipe's `gate_at` location and runs `gate` and `land` there. `lane`: a **dev-track lane**
+it claims (`store-cli dev-track claim`) and releases afterwards; a runner-held lane is released
+only by the runner. `clone`: a runner-owned **gate clone** `<root>/gate/<repo>`, one gate at a
+time per repo, reset like a slot. No free slot, lane or gate clone ⇒ queued (4.2 #6).
 
 5.4 **Future provider `wsmanager`:** `claim` → `wsmanager claim`, the worker starts inside the
 workspace (`start-worker` action), `gate` runs in-workspace and the split disappears. It needs
@@ -193,7 +201,7 @@ group is held for the owner. The runner never resolves a conflict itself.
 | 4 | crash between any two steps + restart never doubles a start or a record | step hook aborting after step N | runner test, loop over N |
 | 5 | cursor rollback stops the runner | fake client | unit |
 | 6 | 3 corrections then `failed` | fake client | unit |
-| 7 | provider: same `request_id` → same workspace; release refuses dirty/unknown; unknown action outcome held | fake provider + real `slots` on a temp dir | unit + integration |
+| 7 | provider: same `request_id` → same workspace; release refuses dirty/unknown; unknown action outcome held; one gate at a time per gate clone; a claim refused after `free` keeps the launch reserved | fake provider + real `slots` on a temp dir | unit + integration |
 | 8 | landing: moved main → rebase + re-gate; conflict → worker; 3 refusals → hold; bad `head_sha` → failed | local bare repo as `origin` | integration |
 | 9 | `eval score` applied twice records once | eval store | core unit |
 | 10 | second `bridge-serve` refuses | `runner.lock` | integration |

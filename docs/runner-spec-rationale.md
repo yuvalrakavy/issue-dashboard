@@ -20,6 +20,11 @@ only the decisions.
   for editing and a lane only for the gate (split B). Option C (make a full clone into a lane)
   was rejected: lanes carry per-index ports, `.dev-track` markers and a shared target dir that
   `store-cli` manages, and duplicating that is the parallel-mechanism red flag.
+- **2.4 Briefs from `briefs/<kind>.md` files** (approved in ch. 2, withdrawn at self-review):
+  `brief.rs` already builds briefs by code to hold the trust boundaries (4.2); a file template
+  would bypass them.
+- **5.3 Gate in a lane for every repo.** Only Store has lanes; issue-dashboard gates in a
+  runner-owned clone instead, chosen per recipe by `gate_at`.
 - **Ch. 5 Design workspaces concretely for slots.** Replaced by the seam at the owner's choice
   (A): Workspace Manager (Codex proposal v0.8, 2026-10-28) will replace lanes, so the runner
   speaks its vocabulary now and the swap is a provider change.
