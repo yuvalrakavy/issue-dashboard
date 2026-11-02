@@ -91,7 +91,7 @@ list, the sheet, overrides and `reserve`:
 | Verdict | When | Effect |
 |---|---|---|
 | launchable | ready, right grade, level ≥ minimum, family rule met, under 100 % quota | ranked (3.4) |
-| overridable | below minimum; unleveled; unpriced; past 100 % quota; review on the implementation's family | listed after the launchable ones with the reason; picking it asks the owner to confirm, and the override and reason are recorded on the launch |
+| overridable | below minimum; unleveled; unpriced; past 100 % quota; a review breaking its family rule | listed after the launchable ones with the reason; picking it asks the owner to confirm, and the override and reason are recorded on the launch |
 | forbidden | not ready; missing or expired grade; bridge implementation (2.5); runner absent | listed greyed with reason; `reserve` refuses it |
 
 The **family rule is per slot**: a design review differs from the designer's family; a T3
@@ -142,7 +142,8 @@ scripts cost minutes, not $.
 3.2 **Offers are computed per queued item and per batch suggestion at each publish**, never
 on the page. An offer is keyed by (item or batch, effective estimate, repo) and holds, per
 plan slot (3.5), a ranked list for each size the owner may pick for that phase; each review
-slot has one list per family present in the lists of the slot(s) it is constrained by (2.4). Each list is ranked as
+slot has one list per **combination** of the families of the slots constraining it (2.4) —
+for a T3 second reviewer, per (designer family, first-reviewer family) pair. Each list is ranked as
 if alone; the plan total and `reserve` check the plan as a whole.
 
 3.3 **Two figures per option:** $ (on a subscription harness "≈ $X on subscription") and
@@ -153,8 +154,8 @@ current window (3.6).
 stable name order. A launch that would pass 80 % of its window drops below the launchable
 options under 80 %, labelled. Until the learning spec, $ is the plain seed $.
 
-3.5 **The plan is expanded before pricing** into its slots: design (if split), one design
-review slot (T2) or two from two families (T3), implementation, code review, confirming review
+3.5 **The plan is expanded before pricing** into its slots: design (every non-`none` design; splitting
+decides only whether it is a separate launch), one design review slot (T2) or two from two families (T3), implementation, code review, confirming review
 (priced, marked conditional). A same-session design + implementation (5.4) is one launch with
 two slots. The plan total = Σ slots, per subscription and in $, plus gate minutes.
 
@@ -278,7 +279,7 @@ here. Existing refusals stay. The learning spec decides how these feed estimates
 | quota | two concurrent reserves on one headroom: one refused; measured usage replaces the hold, never adds; unknown stays at estimate; fixed window rolls at its timezone |
 | groups | review member holds no item; group keeps items across a member's end; result for an old revision refused; approval of a stale hash refused; verdict from verified findings only; disputed counts nothing |
 | transitions | each 5.10 row, including replayed and out-of-order events (a result before its round's input event) |
-| gate-2 cases | design reviewer of the designer's family overridable even when the implementer differs; T3 second reviewer of the first's family overridable; round with a missing slot or unverified S3 stays pending; unverified `reject` fails nothing; `design_ready` checkpoint keeps the implementation hold; stale answer leaves the item estimate-due |
+| gate-2 cases | design reviewer of the designer's family overridable even when the implementer differs; T3 second reviewer of the first's family overridable; round with a missing slot or unverified S3 stays pending; unverified `reject` fails nothing; `design_ready` checkpoint keeps the implementation hold; stale answer leaves the item estimate-due; T3 second-reviewer list keyed by the family pair; shared-session design priced and held |
 | page | size edit switches list; review list follows implementation family; phone-width entries; Harnesses reasons with source |
 
 6.3 **Phasing** (each lands alone, after the runner; each ships its own skill and doc

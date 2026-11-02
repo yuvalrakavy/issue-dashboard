@@ -76,7 +76,10 @@ itself holds only the decisions.
 N1 S3 review family is per slot (2.4), N2 S3 a round stays pending until every slot and
 finding is settled; `reject` is a claim (5.7), N3 S2 holds are per slot (3.6), N4 S2 stale
 answers leave the effective estimate (1.7), R1 S2 phase 4 is implementation-slot only (6.3);
-each has a row under "gate-2 cases" (6.2).
+each has a row under "gate-2 cases" (6.2). **Third pass** (Codex, high, on 40a9c97): N2–N4
+and R1 resolved, trimming lost nothing; two S2 — T3 second-reviewer lists keyed by the family
+pair and every family-rule breach overridable (2.4, 3.2), and every non-`none` design is a
+plan slot whether split or not (3.5).
 
 Verified against code before folding: #1 (`docs.rs:49`, `launch.rs:496`), #7 (AgentBridge
 `store.rs:196`), #14 (`docs.rs:199`), #19 (`config.rs:81`).
