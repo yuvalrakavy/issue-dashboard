@@ -1,7 +1,7 @@
 # The bridge runner (`issue-dashboard bridge-serve`) — design spec
 
-Status: **chapters 1–6 approved by the owner 2026-11-02; awaiting the cross-family design
-gate.** T2. Alternatives and reasons: [runner-spec-rationale.md](runner-spec-rationale.md).
+Status: **chapters 1–6 approved by the owner 2026-11-02; cross-family design gate (Codex)
+folded 2026-11-03 (F1–F5, dispositions in the rationale); awaiting the owner's approval.** T2. Alternatives and reasons: [runner-spec-rationale.md](runner-spec-rationale.md).
 Lands before [harness-spec.md](harness-spec.md), whose non-goal "implementation on a bridge
 harness is unavailable" this spec's phase 2 retires.
 
@@ -16,7 +16,8 @@ model is used only for judgment.
 **Settled with the owner:** one service per ledger (Q2); recovery acts only on a definite
 AgentBridge answer, never on a timer (Q3); one generic read-only flow, eval first (Q4);
 workspaces in runner phase 2 behind a provider seam that Workspace Manager will later fill
-(Q5, ch. 5); landing is automatic while the owner is the sole developer (Q5b); the ledger is
+(Q5, ch. 5); landing is automatic while the owner is the sole developer (Q5b), once a
+positive cross-family review verdict for the exact change exists (5.6); the ledger is
 authoritative and a full queue keeps a launch queued, never failed (Q6). No auto-cancel
 anywhere.
 
@@ -50,13 +51,20 @@ by a dispatcher. A wrong claimer is refused with both names. `Routing` (`docs.rs
 ## 2. The read-only flow
 
 2.1 Per launch: **reserve → strict start → wait for verified routing → prepare → stage
-rounds → `launch_result` → archive.** Archive frees the slot. A worker that runs long is
-shown "overdue" on the page; overdue never cancels.
+rounds → `launch_result` → apply the result (2.6) → archive (confirmed) → provider `release`
+(phase 2, confirmed) → `launch-ended`.** `launch-ended` is always the LAST step: `ended()`
+records Ended and Released in one transaction (`launch.rs:720`), and a released launch leaves
+the held-launch scan (`State::holds()`, `launch.rs:149`), so ending earlier would strand an
+unarchived worker and its AgentBridge write fence after a crash. The launch keeps its slot
+through cleanup. A worker that runs long is shown "overdue" on the page; overdue never
+cancels.
 
 2.2 **Strict start** uses the reservation token as AgentBridge `operation_id`, the launch's
 routing (harness, model, effort), `access: read-only`, and `network: none`. The runner records
-`started` only after AgentBridge reports the actual model/effort equal to the requested ones;
-a mismatch archives the worker and ends the launch `failed` with both values.
+`started` only when `status(token)` carries a `native_session_id` and a `routing` whose actual
+model/effort equal the requested ones; a mismatch archives the worker and ends the launch
+`failed` with both values. A `queued` answer has no native session yet and never records
+`started`.
 
 2.3 **Kinds are config**, `[runner.kinds.<kind>] enabled = bool`. Order of enablement: `eval`,
 then `triage`, then closures, each after clean real runs. A disabled kind stays queued with
@@ -74,37 +82,56 @@ validation errors, replying on that stage's reply reference. At most **3 correct
 fourth failure ends the launch `failed`, keeping every round's content.
 
 2.6 **Applying a result** reuses existing commands: `record-suggestions`
-(`suggest.rs:605-617`, idempotent by launch) for triage, `eval score` for eval (already
-idempotent: `Dedupe::Latest`, `eval.rs:1250`; test row 6.1/9 pins it). Then `launch-ended`.
+(`suggest.rs:605-617`, idempotent by launch) for triage, `eval score` for eval. `eval score` is
+NOT idempotent by launch today: `Dedupe::Latest` compares only the latest event
+(`ledger.rs:279`), its `distinct` has no launch id, and the calibration map is written before
+that check (`eval.rs:1235-1250`), so A → B → retry A records A again and overwrites B's map. It
+gains a **launch-scoped application receipt**, recorded in the same transaction as the score
+and checked before the map is written; a launch with a receipt is a no-op. Then the cleanup
+steps of 2.1.
 
 ## 3. Recovery
 
 3.1 On start, and after any child restart, the runner derives each held launch's position
-from the ledger plus `status(token)` (AgentBridge `src/dashboard/store.rs:1307-1372`), and
-acts only on that answer:
+from the ledger plus `status(token)` (AgentBridge `src/dashboard/store.rs:1308-1372`), and
+acts only on that answer. The answer is read by its **fields**, never by the `state` name
+alone: `state` is one value chosen by a precedence (archived, result, queued,
+awaiting_caller, waiting_user, preflight-blocked→`error`, failure→`error`|`unknown`, …),
+while `never_started` is a separate boolean that accompanies `state: error`, and `result` is
+non-null even when `state` is `archived`. The rows are evaluated **in order**; the first match
+acts:
 
-| Answer | Action |
-|---|---|
-| `unknown tracker token` | identical start (AgentBridge replays the original selection) |
-| live (queued / started / awaiting_caller) | record `started` if missing, resume the flow |
-| `never_started` | `release_never_started(token)` (3.2) |
-| `result` | apply it (2.6) |
-| archived, no result | end `failed` |
-| `waiting_user` | show the question on the page; no action |
-| `error` / `unknown` / uncertain | hold; only the owner's Cancel acts |
-| unreachable | hold, retry with backoff (1 s doubling to 5 min) |
+| # | Answer (fields) | Action |
+|---|---|---|
+| 1 | call fails, connector unreachable | hold, retry with backoff (1 s doubling to 5 min) |
+| 2 | error `unknown tracker token`, ledger state **Reserved** (never recorded started) | identical start (AgentBridge replays the original selection) |
+| 3 | error `unknown tracker token`, ledger state **Started or later** | rollback evidence (3.4): stop the runner loudly |
+| 4 | `never_started: true` | `release_never_started(token)` (3.2) |
+| 5 | `result` non-null | apply it (2.6), then the remaining cleanup of 2.1 |
+| 6 | `state: archived`, `result` null | if the ledger shows cleanup in progress, finish it (2.1); otherwise end `failed` |
+| 7 | `state: queued` | stay reserved; wait for an answer with a native session |
+| 8 | `state` started / awaiting_caller with `native_session_id` and matching `routing` | record `started` if missing, resume the flow |
+| 9 | `state` started / awaiting_caller, routing absent or mismatched | as 2.2: mismatch → archive + `failed`; absent → stay reserved |
+| 10 | `state: waiting_user` | show the question on the page; no action |
+| 11 | anything else (`error` without `never_started`, `unknown`) | hold; only the owner's Cancel acts |
+
+Tests drive these rows with response bodies copied from `token_status`'s real shape, including
+a launch queued at restart that preflight then rejects (`queued` → `error` + `never_started`).
 
 3.2 **`release_never_started(token)`** is a new ledger transition: runner-owned launches only,
 no `SETTLE_AFTER` wait (`launch.rs:36`), records AgentBridge's evidence (the `never_started`
 status body). The dispatcher's `release` (`launch.rs:746`) is unchanged.
 
 3.3 **Every step is idempotent** — start by token, `started` by (token, session), result
-application by launch, archive by worker — so re-running the derived position never doubles
-an effect.
+application by launch (2.6's receipt for eval), archive by worker, provider release by
+workspace, `launch-ended` last — so re-running the derived position never doubles an effect.
 
-3.4 **Cursor rollback guard:** `runner_status` keeps the highest connector cursor seen. A child
-reporting a lower one (a restored or swapped AgentBridge state) stops the runner loudly; it does
-not resume until the owner runs `runner pin --accept-cursor`.
+3.4 **Rollback guard:** a restored or swapped AgentBridge state is detected by the ledger, not
+by a cursor: AgentBridge's `wait(after)` returns only newer events (`store.rs:1153`) and no call
+reports its high-water mark, so a lower cursor is unobservable. The evidence is a token the
+ledger recorded as started that AgentBridge no longer knows (3.1 row 3). The runner then stops
+loudly and does not resume until the owner runs `runner pin --accept-rollback`; an identical
+start there would run the same work twice. No AgentBridge change is needed.
 
 ## 4. Concurrency
 
@@ -178,11 +205,18 @@ not change.
 brief "local commits only; return `head_sha`". The runner verifies `head_sha` with its own
 `git` (exists, descends from `base_sha`, tree clean); a mismatch fails the launch.
 
-5.6 **Landing (automatic, Q5b)** when the gate is green, no S3 finding is open, and the
-item's design is owner-approved: (1) if `origin/main` moved, rebase and re-run `gate`;
-(2) `land`, then `post_land`; (3) `release`. A rebase conflict goes back to the worker as a
-stage round; a push refused because main moved again repeats (1), at most **3 times**, then the
-group is held for the owner. The runner never resolves a conflict itself.
+5.6 **Landing (automatic, Q5b)** requires all of: the gate green; the item's design
+owner-approved; and a **positive review verdict** (`pass`, no S3 open) from the harness spec's
+review launches (harness-spec 5.3–5.7: a `group_review` on another family over a frozen
+bundle) **bound to the exact `head_sha`** being landed. "No S3 open" alone never suffices: it
+is also true when nobody reviewed. Steps: (1) if `origin/main` moved, rebase and re-run `gate`;
+the verdict still stands only if `git patch-id --stable` of the rebased change equals the
+reviewed one's, otherwise a new review round runs; (2) `land`, then `post_land`; (3)
+`release`. A rebase conflict goes back to the worker as a stage round; a push refused because
+main moved again repeats (1), at most **3 times**, then the group is held for the owner. The
+runner never resolves a conflict itself. **Until the harness implementation provides review
+launches**, a green result is held, shown "ready to land", and the owner lands it with one
+action (`runner land <launch>`), which runs steps 1–3.
 
 5.7 **`runner probe <harness>`** is the paid write probe: a synthetic repo, one commit,
 `head_sha` verified, workspace released; its result feeds the harness's write grade
@@ -197,23 +231,25 @@ group is held for the owner. The runner never resolves a conflict itself.
 |---|---|---|---|
 | 1 | claim rule both ways | `reserve` | core unit |
 | 2 | each 4.2 check keeps the launch queued with its reason | `reserve_next` + check context | core unit, one row per check |
-| 3 | each 3.1 row → its action | `AgentBridgeClient` trait, scripted fake | runner unit, one row per answer |
-| 4 | crash between any two steps + restart never doubles a start or a record | step hook aborting after step N | runner test, loop over N |
-| 5 | cursor rollback stops the runner | fake client | unit |
+| 3 | each 3.1 row → its action, in order, from real `token_status` bodies; queued at restart → preflight rejected → released | `AgentBridgeClient` trait, scripted fake | runner unit, one row per answer |
+| 4 | crash between any two steps (including between apply, archive, release and `launch-ended`) + restart never doubles a start or a record and never strands a worker | step hook aborting after step N | runner test, loop over N |
+| 5 | unknown token for a Started launch stops the runner; for a Reserved one starts identically | fake client | unit |
 | 6 | 3 corrections then `failed` | fake client | unit |
 | 7 | provider: same `request_id` → same workspace; release refuses dirty/unknown; unknown action outcome held; one gate at a time per gate clone; a claim refused after `free` keeps the launch reserved | fake provider + real `slots` on a temp dir | unit + integration |
-| 8 | landing: moved main → rebase + re-gate; conflict → worker; 3 refusals → hold; bad `head_sha` → failed | local bare repo as `origin` | integration |
-| 9 | `eval score` applied twice records once | eval store | core unit |
+| 8 | landing: moved main → rebase + re-gate; conflict → worker; 3 refusals → hold; bad `head_sha` → failed; no verdict → held "ready to land"; verdict for another SHA → held; rebase with equal patch-id keeps the verdict, unequal one re-reviews | local bare repo as `origin` | integration |
+| 9 | `eval score` A → B → retry A records nothing new and leaves B's map | eval store | core unit |
 | 10 | second `bridge-serve` refuses | `runner.lock` | integration |
 | 11 | `release_never_started` refuses for dispatcher-owned launches and has no timer | core | unit |
 | A | one real eval launch end to end, small model, low effort | live system | manual, recorded in the retro |
 
 6.2 **Phasing.**
 1. **Runner phase 1 (read-only):** ledger changes (`Routing.harness`, claim rule, claimer
-   filter, `release_never_started`, `runner_status`), the service
+   filter, `release_never_started`, `runner_status`, the `eval score` receipt), the service
    (LaunchAgent, lock, `init`/`pin`), the flow (§2), recovery (§3), concurrency (§4). Ends with
    acceptance row A; triage then closures enabled by config afterwards.
-2. **Runner phase 2 (workspaces):** §5. The Store staleness line lands separately in Store.
+2. **Runner phase 2 (workspaces):** §5, with owner-triggered landing (`runner land`).
+   Automatic landing switches on when the harness implementation's review launches exist.
+   The Store staleness line lands separately in Store.
 3. **Docs and skills:** 6.3.
 
 Deep gate before each merge; the depth reader from another family (Codex).

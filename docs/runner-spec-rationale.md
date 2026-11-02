@@ -40,7 +40,12 @@ only the decisions.
   owner's Cancel acts on it.
 - **Two writers on one root.** AgentBridge's writer fence is host-local and released only by a
   confirmed archive; the runner never deletes a reservation to make a new launch pass.
-- **A restored AgentBridge state replaying old answers.** The cursor rollback guard (3.4).
+- **A restored AgentBridge state replaying old answers.** The rollback guard (3.4): a token
+  the ledger saw start that AgentBridge no longer knows.
+- **An answer read by its name.** `token_status` folds several facts into one `state` by
+  precedence; recovery reads the fields (3.1).
+- **Ending before cleanup.** `launch-ended` releases the slot and drops the launch from the
+  scan, so it is the last step (2.1).
 - **Model drift.** Routing is verified from AgentBridge's reported actual model/effort (2.2),
   not from the request.
 - **Lane theft.** A runner-held lane released by a human `dev-track release` would strand a
@@ -53,12 +58,32 @@ only the decisions.
   `SETTLE_AFTER` (`launch.rs:36`, 15 min).
 - `Routing{model, effort, workspace?, reason?}` has no harness (`docs.rs:17`).
 - `capacity` per recipe (`config.rs:91`, `config.rs:406`).
-- `record-suggestions` is idempotent by launch (`suggest.rs:605-617`); `eval score` records with
-  `Dedupe::Latest` and reports `repeat` (`eval.rs:1250`), so it is idempotent too; test row 9
-  pins it.
-- AgentBridge `token_status` (`src/dashboard/store.rs:1307-1372`) returns `unknown tracker
-  token` as an error, else archived / result / queued / awaiting_caller / waiting_user / error /
-  unknown / started, plus `never_started`.
+- `record-suggestions` is idempotent by launch (`suggest.rs:605-617`). `eval score` is not:
+  `Dedupe::Latest` compares only the latest event (`ledger.rs:279`), `distinct` = {manifest
+  hash, answers hash} with no launch id, and the map is written first (`eval.rs:1235-1250`).
+  Hence the receipt (2.6). This line said "idempotent" until the design gate (F5).
+- AgentBridge `token_status` (`src/dashboard/store.rs:1308-1372`): `unknown tracker token` is
+  an error; otherwise `state` by precedence archived > result > queued > awaiting_caller >
+  waiting_user > preflight-blocked (`error`) > failure (`error` if `never_started`, else
+  `unknown`) > uncertain (`unknown`) > native idle (`unknown`) > active (`started`) > `queued`.
+  Separate fields: `never_started` (bool), `result`, `routing`, `native_session_id`.
+- `ended()` records Ended and Released in one transaction (`launch.rs:720`); `holds()` is true
+  only for Reserved, Unconfirmed and Started (`launch.rs:149`).
+- AgentBridge `events(after, limit)` returns only sequences above `after` (`store.rs:1153`).
+
+## Design gate dispositions (Codex, 2026-11-03, verdict "fix then build")
+
+| # | Sev | Finding | Disposition |
+|---|---|---|---|
+| F1 | S3 | recovery could record `started` from a `queued` answer with no native session; `never_started` is a flag with `state: error`, not a state | fixed: 2.2 + 3.1 ordered rows over fields; test 3 uses real bodies |
+| F2 | S3 | a crash after `launch-ended` and before archive strands the worker and its write fence | fixed: `launch-ended` last (2.1); test 4 crashes between cleanup steps |
+| F3 | S3 | automatic landing had no positive, revision-bound review requirement | fixed (owner chose A): 5.6 requires a harness-spec review verdict bound to `head_sha`, patch-id across rebase; owner-triggered `runner land` until then |
+| F4 | S3 | the cursor rollback guard could not observe a rollback | fixed: 3.4 + 3.1 rows 2-3, ledger-based evidence; no AgentBridge change |
+| F5 | S2 | `eval score` not idempotent by launch | fixed: launch-scoped receipt (2.6); test 9 A → B → retry A |
+
+Loop escape, mechanism: F1 and F5 both described an external answer by its name, not its
+fields and dedupe rule. Rule for later specs: an API answer a spec relies on is cited by field
+and by the code of its dedupe/precedence.
 - AgentBridge 0.2.4: strict write is Codex full clone only; worktrees refused; OpenCode and
   Claude write refused at preflight; `network` none|fetch is all-or-nothing; fence host-local.
 - Store `dev-track land` already pushes `origin/main`; a claim refuses with unpushed local
