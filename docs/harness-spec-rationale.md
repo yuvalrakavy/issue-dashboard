@@ -110,3 +110,8 @@ Verified against code before folding: #1 (`docs.rs:49`, `launch.rs:496`), #7 (Ag
 - Whether a read-only Codex or OpenCode worker can read a checkout outside its bound folder.
   The deliver-enabled probe answers it; nothing assumes it.
 - Real token figures per (phase, size); seeds are guesses until outcomes exist.
+- Bridge implementation (AgentBridge handoff 3, reconciled 2026-11-02 in its
+  `docs/DASHBOARD-HANDOFF-3-REVIEW.md`, in progress): full clones first, linked worktrees
+  likely blocked (their git state is outside the root); OpenCode may stay unavailable for
+  unattended implementation (permission patterns are not an OS sandbox); dependency fetch is
+  not proven separable from push, so the runner should prefetch and build offline.
