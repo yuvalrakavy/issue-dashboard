@@ -58,6 +58,8 @@ MUTANTS = [
     ("triage: apply all never a second opinion (card)", "c.bulk_ok = !c.second && ", "c.bulk_ok = "),
     ("triage: apply all never a second opinion (fields)", "cards.filter((c) => c.bulk_ok && !c.second)", "cards.filter((c) => c.bulk_ok)"),
     ("triage: worst badge", "sort((a, b) => BADGES.indexOf(b) - BADGES.indexOf(a))[0]", "sort((a, b) => BADGES.indexOf(a) - BADGES.indexOf(b))[0]"),
+    # worstBadge serves the card and the row; the row's own call is controlled apart.
+    ("triage tab: a row takes its cards' worst badge", "badge: worstBadge(row.cards.map((c) => c.badge)),", "badge: row.cards[0].badge,"),
     ("triage: lone part relabelled", 'c.label = lone ? "Set " + answerText(c.parts[0].answer) :', "c.label ="),
     ("triage: opinions after untriaged", "cards.sort((a, b) => (a.second - b.second)\n", "cards.sort((a, b) => 0\n"),
     ("triage: apply all marks bulk", "if (bulk) f.value = { bulk: true };", ""),
@@ -85,6 +87,12 @@ MUTANTS = [
     ("estimates: the commit is hex", "if (!/^[0-9a-f]{7,40}$/.test(at)) return", "if (false) return"),
     ("estimates: an empty edit saves nothing", 'if (!Object.keys(e).length) return { error: "Nothing to save." };', ""),
     ("estimates: the edit shows over the recorded value", "e.edited && e.edited[k] !== undefined ? e.edited[k] :", ""),
+    # A second opinion never reaches eligibleCards' bulk_ok: "apply all never a second opinion (card)" controls it.
+    ("triage tab: eligible needs Bulk", "c.bulk_ok && c.confidence >= threshold", "c.confidence >= threshold"),
+    ("triage tab: the threshold narrows", "c.bulk_ok && c.confidence >= threshold", "c.bulk_ok"),
+    ("triage tab: a second opinion is its own row", 'c.issue.id + (c.second ? ":second" : "")', "c.issue.id"),
+    ("triage tab: a triaged untriaged issue leaves the Inbox", "untriaged(i) && !(triaged && triaged.has(i.id))", "untriaged(i)"),
+    ("triage tab: count by issue", "new Set(t.rows.concat(t.seconds).map((x) => x.issue.id)).size", "t.rows.length + t.seconds.length"),
 ]
 
 src = open(os.path.join(REPO, "page/core.js")).read()

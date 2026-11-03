@@ -24,7 +24,7 @@ yet" until the write engine exists.
 
 ## 2. Running a triage
 
-**On demand.** In the Inbox, **Run triage…** (yours alone; greyed out while a triage launch is
+**On demand.** On the Triage tab, **Run triage…** (yours alone; greyed out while a triage launch is
 live) opens the launch sheet:
 
 - *Scope*: **full** asks every decision; **closures** asks only the closure decisions (likely
@@ -79,15 +79,21 @@ something new since they were asked, and issues you asked about with **Request t
 ## 3. Reading a card
 
 Issue #512, *"Panel freezes after the broker reconnects"*, filed yesterday with no labels. It is in
-the Inbox under **Triage suggestions**:
+the **Triage** tab, one row for the issue, under **Suggestions**:
 
-> **Suggested · type · priority · 82% · evaluated**
-> The rubric gives p3.
-> "Freeze after reconnect; every panel on the floor; no workaround short of a restart."
+> **▸ Suggested · 82% · evaluated**
+> Store#512 Panel freezes after the broker reconnects
+> type — → **bug** 88% · priority — → **p1** 82%
 > [Set bug · p1] [Edit…] [Dismiss]
 
-- **One card for both** when an issue lacks type and priority; a single card when only one is
-  missing (§4.1).
+Each answer shows as the issue's current value → the suggested one. Tap the row for the reasons:
+here "The rubric gives p3." and "Freeze after reconnect; every panel on the floor; no workaround
+short of a restart."
+
+- **One row per issue**, its button setting every answer on it; behind it, one card for both when
+  an issue lacks type and priority, a single card when only one is missing (§4.1). A second opinion
+  is a row of its own under **Second opinions**. An untriaged issue with a row is on the Triage tab,
+  not in the Inbox.
 - **The percentage** is the calibrated confidence in the answer, after the correction described in
   section 5.
 - **The badge** says how far to trust it:
@@ -139,8 +145,10 @@ What wins when values conflict: **your override > an accepted suggestion > the G
 accept, edit or dismissal is refused when the item changed since the suggestion was made; the card
 comes back and you look again.
 
-**Apply all · n.** A button over the cards appears only when every card it would take is for an
-untriaged item, on a question that passes the **Bulk** bar and is not drifting. It records one accept
+**Apply eligible · n.** The bar over the rows has a confidence threshold (85% to start) and a button
+that takes the cards at or above it that are for an untriaged item, on a question that passes the
+**Bulk** bar and is not drifting; the threshold only narrows that set. With none, the bar says why
+("No triage question has passed the Bulk bar yet …") and offers **Evaluate…**. It records one accept
 per card, each undoable. A bulk accept is never used as truth for measuring the model, because you
 did not read those cards one by one. It never takes second opinions or closure cards.
 
@@ -152,7 +160,7 @@ drafted for the reporter as the comment: edit it or keep it; nothing is posted u
 
 **Needs a stronger look.** An answer on type, priority, duplicate or likely fixed whose top
 probability (after calibration) is below 0.6 is marked as unsure (`stronger_look_below` in the
-project config sets the bar). The Inbox lists those issues under **Needs a stronger look · n**, each
+project config sets the bar). The Triage tab lists those issues under **Needs a stronger look · n**, each
 with the unsure answers and their probability, and Details shows a *Stronger look* row. **Take a
 stronger look…** opens the launch sheet for an ordinary `stronger_look` launch over them, at the
 stronger routing (Fable 5.1 at high effort unless `[routing.stronger_look]` says otherwise). That

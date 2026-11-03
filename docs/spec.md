@@ -683,16 +683,19 @@ Revised 2026-10-23 after a UX review of the first mockup.
 
 **Status strip** (on every tab): the project name; the view or isolated scope in force as a
 chip (5.6); one freshness line ("all repos read 08:14 · rhai stale"), expanding to per-repo
-times on tap; the "hidden by this view" line; and summary tiles (p0 open, waiting on you,
-untriaged, over time limit, open). **Every tile is a link** to the tab and filter it counts.
+times on tap; the "hidden by this view" line; and summary tiles (waiting on you; to triage, the
+Triage tab's issues with their suggestion count; open; and p0 open and over time limit, shown only
+while nonzero). **Every tile is a link** to the tab and filter it counts.
 
 | Tab | Holds | Main actions |
 |---|---|---|
-| **Inbox** | everything that needs the owner, one card per item, oldest first: plans to approve (1.7), decisions, outside pull requests to review (4.4), stale overrides and GitHub-side changes (1.5), starving issues (6.8); then the triage suggestions with their confidence; then **Recently closed** (5.8) | the card's one main action; a `⋯` menu for the rest; accept or reject suggestions, singly or "accept all at or above a confidence"; Reopen or Dismiss a recent close |
+| **Inbox** | everything that needs the owner, one card per item, oldest first: plans to approve (1.7), decisions, outside pull requests to review (4.4), stale overrides and GitHub-side changes (1.5), starving issues (6.8), untriaged issues without a triage row; then closing recommendations (5.8); then **Recently closed** (5.8) | the card's one main action; a `⋯` menu for the rest; Reopen or Dismiss a recent close |
+| **Triage** | the triage suggestions, one row per issue showing each answer as current → suggested with its confidence and badge, opening to the reasons; second opinions and the stronger-look list as filters of their own (triage spec 4.1, 2.5) | the row's one main action setting every answer on it; Edit…, Dismiss; "Apply eligible" over the cards passing Bulk at or above a chosen confidence, or why none does with Evaluate…; Run triage… |
 | **Queue** | the next batch on top with its launch sheet; then open issues grouped by priority level; then pull requests and forks that are **not** already in the inbox | launch, set a priority, override, explain |
 | **Trends** | flow, time limits, outside response times, decision accuracy, session outcomes, each splittable by group or repo | change the period, isolate a group |
 
-**An item appears once.** Anything that needs a decision lives in the Inbox; the Queue and
+**An item appears once.** Anything that needs a decision lives in the Inbox, except an untriaged
+issue with a triage row, which lives on the Triage tab; the Queue and
 its lists show only what is not already there, and members of the next batch are not
 repeated in the level lists.
 
