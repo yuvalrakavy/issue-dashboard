@@ -752,3 +752,34 @@ pub fn write(root: &Path, out: &Outbox) -> Result<PathBuf> {
     fs::File::open(dir)?.sync_all()?;
     Ok(path)
 }
+
+/// How many outboxes of a project are kept: the newest, and two an overlapping sync may still
+/// be publishing.
+pub const KEEP_OUTBOXES: usize = 3;
+
+/// Removes every `<seq>.json` outbox of `project` but the newest `keep`, and returns how many it
+/// removed. Only the sync job reads an outbox, once, right after its cycle wrote it; an older
+/// sync that loses its file fails its read, and the newer one publishes (10.6). A temporary
+/// file of a cycle still writing is not an outbox and is left alone.
+pub fn prune(root: &Path, project: &str, keep: usize) -> Result<usize> {
+    let dir = root.join("outbox").join(project);
+    let mut seqs: Vec<(i64, PathBuf)> = Vec::new();
+    for e in fs::read_dir(&dir)? {
+        let path = e?.path();
+        let seq = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .and_then(|n| n.strip_suffix(".json"))
+            .and_then(|n| n.parse::<i64>().ok());
+        if let Some(seq) = seq {
+            seqs.push((seq, path));
+        }
+    }
+    seqs.sort_unstable_by_key(|s| std::cmp::Reverse(s.0));
+    let mut removed = 0;
+    for (_, path) in seqs.into_iter().skip(keep) {
+        fs::remove_file(path)?;
+        removed += 1;
+    }
+    Ok(removed)
+}
