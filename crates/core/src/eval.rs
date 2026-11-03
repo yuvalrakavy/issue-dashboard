@@ -829,7 +829,9 @@ pub fn two_stage(decision: &str) -> Result<bool> {
 
 /// What is wrong with `answers` against the manifest `eval prepare` wrote for `r` at `stage`,
 /// each reason as `score` would refuse it; empty when they are acceptable. The runner sends a
-/// non-empty list back to the worker as a correction round (runner spec 2.5).
+/// non-empty list back to the worker as a correction round (runner spec 2.5). `within` scopes
+/// the check to one part of the stage (as-built D6): only its questions may be answered, and
+/// all of them must be.
 pub fn answer_errors(
     root: &Path,
     config: &ConfigSet,
@@ -837,13 +839,30 @@ pub fn answer_errors(
     stage: EvalStage,
     answers: &[EvalAnswers],
     launch: &str,
+    within: Option<&[String]>,
 ) -> Result<Vec<String>> {
     let path = manifest_path(root, &r.project, &r.backend, &r.decision, r.repo.as_deref(), stage, Some(launch));
     let m = load_manifest(&path)?;
     let (_, mut errors) = answers_checked(Catalogue::embedded(), config, &m, answers)?;
     // The runner's worker answers every question: a gap is a correction, not a smaller score.
     let given: BTreeSet<&str> = answers.iter().flat_map(|f| &f.answers).map(|a| a.question.as_str()).collect();
-    let missing: Vec<&str> = m.questions.iter().map(|q| q.id.as_str()).filter(|id| !given.contains(id)).collect();
+    let asked: Vec<&str> = match within {
+        Some(ids) => ids.iter().map(String::as_str).collect(),
+        None => m.questions.iter().map(|q| q.id.as_str()).collect(),
+    };
+    if within.is_some() {
+        let part: BTreeSet<&str> = asked.iter().copied().collect();
+        let outside: Vec<&str> = given.iter().copied().filter(|id| !part.contains(id)).collect();
+        if !outside.is_empty() {
+            let shown = outside.iter().take(20).copied().collect::<Vec<_>>().join(", ");
+            let more = if outside.len() > 20 { ", …" } else { "" };
+            errors.push(format!(
+                "{} answers are for questions not in this part: {shown}{more}",
+                outside.len()
+            ));
+        }
+    }
+    let missing: Vec<&str> = asked.into_iter().filter(|id| !given.contains(id)).collect();
     if !missing.is_empty() {
         let shown = missing.iter().take(20).copied().collect::<Vec<_>>().join(", ");
         let more = if missing.len() > 20 { ", …" } else { "" };
