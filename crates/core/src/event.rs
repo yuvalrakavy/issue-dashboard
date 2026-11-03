@@ -41,6 +41,9 @@ pub enum Kind {
     Evaluated,
     /// A label event was tagged as part of a named bulk review (triage spec 3.3).
     TruthTag,
+    /// A launch's `eval score` of one key was applied (runner spec 2.6): the receipt that makes
+    /// a retry of that launch a no-op.
+    EvalApplied,
 }
 
 impl Kind {
@@ -66,6 +69,7 @@ impl Kind {
             Kind::Prepared => "prepared",
             Kind::Evaluated => "evaluated",
             Kind::TruthTag => "truth_tag",
+            Kind::EvalApplied => "eval_applied",
         }
     }
 

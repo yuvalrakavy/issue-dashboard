@@ -1543,3 +1543,50 @@ fn the_interval_is_the_5th_and_95th_percentile_of_the_resamples() {
     let (lo, hi) = eval::ece_interval(AnswerKind::Choice, &allowed, &e, 4);
     assert!(close(lo, 0.059) && close(hi, 0.227), "{lo} {hi}");
 }
+
+// --- A launch's score is applied once (runner spec 2.6) -------------------------------------
+
+fn score_as(t: &TempRoot, launch: &str, r: &EvalReplay, a: &EvalAnswers) -> Result<eval::ScoreReport> {
+    let c = ConfigSet::load(t.path()).unwrap();
+    t.root.mutate(now(), |tx| {
+        eval::score_for_launch(tx, t.path(), &c, r, std::slice::from_ref(a), launch)
+    })
+}
+
+#[test]
+fn a_launch_retried_after_another_launch_scored_records_nothing_and_the_other_stays_latest() {
+    let t = with_history(Vec::new());
+    let r = replay("type");
+    let m = manifest_of(&prepare_eval(&t, &r).unwrap());
+    let a = answers(&m, 0.6, |i| i % 3 != 2);
+    let b = answers(&m, 0.7, |i| i % 4 != 3);
+    let sa = score_as(&t, "LA", &r, &a).unwrap();
+    let sb = score_as(&t, "LB", &r, &b).unwrap();
+    assert!(!sa.repeat && !sb.repeat);
+    let map_a = sa.map.clone().unwrap();
+    fs::remove_file(&map_a).unwrap();
+    let again = score_as(&t, "LA", &r, &a).unwrap();
+    assert!(again.repeat, "A's receipt makes the retry a no-op");
+    assert_eq!(again.seq, sa.seq, "the retry reports A's own evaluation");
+    assert!(!map_a.exists(), "the receipt is read before the map is written");
+    let rec = t
+        .root
+        .read(|l| ledger::events_by_kind(l.conn(), Kind::Evaluated))
+        .unwrap();
+    assert_eq!(rec.len(), 2);
+    assert_eq!(rec.last().unwrap().seq, sb.seq, "B stays the latest evaluation");
+}
+
+#[test]
+fn one_launch_scores_each_of_its_keys_once() {
+    let t = with_history(Vec::new());
+    let r = replay("type");
+    let m = manifest_of(&prepare_eval(&t, &r).unwrap());
+    let mut one_repo = replay("type");
+    one_repo.repo = Some(AIRZONED.into());
+    let m1 = manifest_of(&prepare_eval(&t, &one_repo).unwrap());
+    let s = score_as(&t, "LA", &r, &answers(&m, 0.6, |i| i % 3 != 2)).unwrap();
+    let s1 = score_as(&t, "LA", &one_repo, &answers(&m1, 0.6, |i| i % 3 != 2)).unwrap();
+    assert!(!s.repeat && !s1.repeat, "a receipt covers its own key only");
+    assert!(score_as(&t, "LA", &one_repo, &answers(&m1, 0.7, |_| true)).unwrap().repeat);
+}

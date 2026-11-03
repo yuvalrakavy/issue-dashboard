@@ -30,6 +30,7 @@ pub mod outcome;
 pub mod publish;
 pub mod read;
 pub mod root;
+pub mod runner_status;
 pub mod schema;
 pub mod sessions;
 pub mod snapshot;

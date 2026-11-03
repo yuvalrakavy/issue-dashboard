@@ -1352,6 +1352,76 @@ pub fn score(
     )
 }
 
+/// An `eval_applied` receipt (runner spec 2.6): the evaluation a launch's score of one key
+/// recorded. Its subject is the launch; project, backend, decision and repo distinguish it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EvalAppliedData {
+    pub launch: String,
+    pub project: String,
+    pub backend: String,
+    pub decision: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo: Option<String>,
+    /// The `seq` of the `evaluated` event the score recorded, or repeated.
+    pub evaluated: i64,
+}
+
+/// [`score`] on behalf of a launch (runner spec 2.6), applied once per launch and key.
+/// `score` alone is not: its dedupe compares the key's LATEST evaluation, so launch A, then
+/// launch B, then a retry of A would record A again over B. The receipt is read before
+/// anything else, the map's write included, and is recorded in the same transaction as the
+/// evaluation, so a launch with a receipt is a no-op that reports its own evaluation.
+pub fn score_for_launch(
+    tx: &mut Tx<'_>,
+    root: &Path,
+    config: &ConfigSet,
+    r: &Replay,
+    answers: &[EvalAnswers],
+    launch: &str,
+) -> Result<ScoreReport> {
+    let mut distinct = json!({"project": r.project, "backend": r.backend, "decision": r.decision});
+    if let Some(repo) = &r.repo {
+        distinct["repo"] = json!(repo);
+    }
+    let receipt = ledger::events_of(tx.conn(), launch, Kind::EvalApplied)?
+        .into_iter()
+        .find(|e| e.distinct == distinct);
+    if let Some(e) = receipt {
+        let applied: EvalAppliedData = serde_json::from_value(e.data)?;
+        let ev = ledger::event_at(tx.conn(), applied.evaluated)?
+            .filter(|ev| ev.kind == Kind::Evaluated)
+            .ok_or_else(|| {
+                Error::refused(format!(
+                    "launch {launch}'s eval_applied receipt (seq {}) names evaluated event {}, which the ledger does not hold",
+                    e.seq, applied.evaluated
+                ))
+            })?;
+        let evaluated: EvaluatedData = serde_json::from_value(ev.data)?;
+        let map = evaluated.map_id.as_ref().map(|id| {
+            key_dir(root, &evaluated.project, &evaluated.backend)
+                .join(format!("{}-{}-{id}.json", evaluated.decision, evaluated.question_hash))
+        });
+        return Ok(ScoreReport {
+            seq: ev.seq,
+            repeat: true,
+            map,
+            evaluated,
+        });
+    }
+    let s = score(tx, root, config, r, answers)?;
+    let data = EvalAppliedData {
+        launch: launch.to_string(),
+        project: r.project.clone(),
+        backend: r.backend.clone(),
+        decision: r.decision.clone(),
+        repo: r.repo.clone(),
+        evaluated: s.seq,
+    };
+    tx.record_valid(Kind::EvalApplied, launch, distinct, serde_json::to_value(&data)?, Dedupe::Any)?;
+    Ok(s)
+}
+
 /// `eval score --live` (3.2): the recorded suggestions of a closure decision under `backend`,
 /// against the verdicts that followed, split by item; the map is fitted on the tuning items.
 pub fn score_live(

@@ -579,6 +579,7 @@ pub fn default_routing(kind: &str) -> Option<crate::docs::Routing> {
         effort: effort.to_string(),
         workspace: None,
         reason: Some("the tracker's default routing (triage spec 5.3)".to_string()),
+        harness: None,
     })
 }
 

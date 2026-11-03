@@ -9,9 +9,14 @@
 //! | `reserved` | `started` | [`started`] |
 //! | `reserved` | `unconfirmed` | [`unconfirm`], by the owning dispatcher |
 //! | `reserved`, `unconfirmed` | `released` | [`release`], by the owning dispatcher, after 15 min |
+//! | `reserved` | `released` | [`release_never_started`], by the runner, on AgentBridge's evidence |
 //! | `unconfirmed` | `started` | [`started`] |
-//! | `started` | `ended` | [`ended`] |
-//! | `ended` | `released` | [`ended`], in the same transaction |
+//! | `started` | `ended` | [`ended`], or [`runner_ended`] |
+//! | `reserved` | `ended` | [`runner_ended`], by the runner, on AgentBridge's evidence |
+//! | `ended` | `released` | [`ended`] or [`runner_ended`], in the same transaction |
+//!
+//! A launch whose routing names a harness is reserved only by [`RUNNER`]; any other only by a
+//! dispatcher (runner spec 1.4).
 //! | `requested`, `queued` | `withdrawn` | [`withdraw`] |
 //!
 //! Alongside a launch: `orphan` ([`started`], for a released token or a second session) and
@@ -34,6 +39,10 @@ use crate::{Error, Result};
 
 /// A session list is evidence of absence only for a reservation older than this (10.7).
 pub const SETTLE_AFTER: Duration = Duration::minutes(15);
+
+/// The claimer name of the bridge runner (runner spec 1.4). A launch whose routing names a
+/// harness is reservable only by it; any other launch only by a dispatcher.
+pub const RUNNER: &str = "runner";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -96,6 +105,10 @@ pub struct LaunchData {
     /// A triage launch's scope, on its `requested` transition (triage spec 4.6).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scope: Option<TriageScope>,
+    /// AgentBridge's status body that justified a runner transition taken without a session
+    /// (runner spec 2.1, 3.2): `release_never_started`'s release, or an end from `reserved`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evidence: Option<serde_json::Value>,
 }
 
 impl LaunchData {
@@ -111,6 +124,7 @@ impl LaunchData {
             decision: None,
             via: None,
             scope: None,
+            evidence: None,
         }
     }
 
@@ -379,6 +393,28 @@ fn check_owner(l: &Launch, dispatcher: &str) -> Result<()> {
     }
 }
 
+/// Whether `claimer` may reserve `l` (runner spec 1.4): the runner takes exactly the launches
+/// whose routing names a harness, a dispatcher exactly the others.
+fn may_claim(l: &Launch, claimer: &str) -> bool {
+    l.request.routing.harness.is_some() == (claimer == RUNNER)
+}
+
+fn check_claimer(l: &Launch, claimer: &str) -> Result<()> {
+    if may_claim(l, claimer) {
+        return Ok(());
+    }
+    Err(Error::refused(match &l.request.routing.harness {
+        Some(h) => format!(
+            "launch {} is routed to harness {h}; only the {RUNNER} reserves it, not {claimer}",
+            l.id
+        ),
+        None => format!(
+            "launch {} names no harness; it is a dispatcher's, and the {RUNNER} reserves only harness-routed launches",
+            l.id
+        ),
+    }))
+}
+
 /// Records a `requested` transition for a page launch document. A document whose id is
 /// already requested is a repeat if identical, and refused if different (launch documents
 /// are never changed, 5.3).
@@ -525,7 +561,7 @@ pub fn reserve(
         ))
     })?;
     match l.state {
-        State::Requested | State::Queued => {}
+        State::Requested | State::Queued => check_claimer(&l, dispatcher)?,
         State::Reserved | State::Unconfirmed | State::Started => {
             check_owner(&l, dispatcher)?;
             return Ok(Reservation::Reserved {
@@ -621,7 +657,9 @@ pub fn reserve_next(
     queued.sort_by_key(|l| l.queued_seq);
     let mut first_error = None;
     for l in queued {
-        if held_item(l, &all).is_some() {
+        // Only what this claimer may claim (runner spec 4.1). A launch it may not claim still
+        // counts as ahead of it in `try_reserve`: the pool is shared and first-in first-out.
+        if !may_claim(l, dispatcher) || held_item(l, &all).is_some() {
             continue;
         }
         // A launch whose recipe can no longer be resolved must not stop other recipes' queues;
@@ -812,4 +850,58 @@ pub fn settle_orphan(tx: &mut Tx<'_>, token: &str, session: &str) -> Result<Move
         LaunchData::new(Transition::OrphanSettled).token(token).session(session),
     )?;
     Ok(moved(&l, l.state, false))
+}
+
+fn check_runner_owned(l: &Launch, what: &str) -> Result<()> {
+    if l.dispatcher.as_deref() == Some(RUNNER) {
+        return Ok(());
+    }
+    Err(Error::refused(format!(
+        "launch {} is held by {}; only a launch the {RUNNER} reserved {what}",
+        l.id,
+        l.dispatcher.as_deref().unwrap_or("nobody")
+    )))
+}
+
+/// `release_never_started` (runner spec 3.2): frees a runner launch AgentBridge reports it
+/// never started, with that report as evidence. The evidence is direct, so there is no
+/// [`SETTLE_AFTER`] wait; a dispatcher's launch still settles through [`release`].
+pub fn release_never_started(tx: &mut Tx<'_>, token: &str, evidence: &serde_json::Value) -> Result<Moved> {
+    let l = by_token(tx.conn(), token)?;
+    match l.state {
+        State::Reserved => {
+            check_runner_owned(&l, "is released as never started")?;
+            let mut data = LaunchData::new(Transition::Released).token(token).dispatcher(RUNNER);
+            data.evidence = Some(evidence.clone());
+            record(tx, &l.id, data)?;
+            Ok(moved(&l, State::Released, false))
+        }
+        State::Released if l.end_state.is_none() => Ok(moved(&l, State::Released, true)),
+        other => Err(Error::refused(format!(
+            "launch {} is {other}; only a reserved launch is released as never started",
+            l.id
+        ))),
+    }
+}
+
+/// The runner's `launch-ended` (runner spec 2.1): as [`ended`], and also from `reserved` for a
+/// launch whose worker finished or was archived before `started` was recorded, with
+/// AgentBridge's status body as evidence. Only for a launch the runner reserved.
+pub fn runner_ended(
+    tx: &mut Tx<'_>,
+    token: &str,
+    end_state: EndState,
+    evidence: &serde_json::Value,
+) -> Result<Moved> {
+    let l = by_token(tx.conn(), token)?;
+    check_runner_owned(&l, "is ended by the runner")?;
+    if l.state != State::Reserved {
+        return ended(tx, token, end_state);
+    }
+    let mut data = LaunchData::new(Transition::Ended).token(token);
+    data.end_state = Some(end_state);
+    data.evidence = Some(evidence.clone());
+    record(tx, &l.id, data)?;
+    record(tx, &l.id, LaunchData::new(Transition::Released).token(token))?;
+    Ok(moved(&l, State::Released, false))
 }

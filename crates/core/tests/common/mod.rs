@@ -136,6 +136,7 @@ pub fn launch_doc(id: &str, project: &str, items: &[&str], recipe: &str) -> Laun
             effort: "medium".into(),
             workspace: None,
             reason: None,
+            harness: None,
         },
         suggested_routing: None,
         scope: None,
