@@ -446,6 +446,22 @@ pub mod fake {
                         Answer::Ok(body)
                     }
                     "wait" => Answer::Ok(json!([])),
+                    // A prepared file is ready at once, its manifest naming its key.
+                    "transfer" => match params["action"].as_str() {
+                        Some("prepare") => {
+                            let key = params["key"].as_str().unwrap_or_default();
+                            Answer::Ok(json!({"transfer_id": format!("t-{key}"), "state": "preparing"}))
+                        }
+                        Some("status") => {
+                            let id = params["transfer_id"].clone();
+                            Answer::Ok(json!({
+                                "transfer_id": id,
+                                "preparation": {"state": "ready", "error": null},
+                                "manifest": {"id": id, "name": "staged"},
+                            }))
+                        }
+                        _ => Answer::Ok(json!({})),
+                    },
                     _ => Answer::Ok(json!({})),
                 },
             };

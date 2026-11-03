@@ -276,3 +276,17 @@ before UI chapters".
 
 6.4 **Skills for the implementer:** `ways-of-working`, `agentbridge`, `issues-dashboard`;
 `using-dev-tracks` for the Store landing.
+
+## As built (phase 1)
+
+| § | Change | Why | Commit |
+|---|---|---|---|
+| 2.1, 2.4 | D1: the runner runs `eval refresh-history`, `prepare` and `score_for_launch`; a runner eval brief has the worker only answer staged files | a read-only, no-network worker cannot write the ledger | — |
+| 2.5 | D2: a stage per replay key (`type`, `area`, `priority-first`, `priority`; `area@<repo>` where asked per repo); a key with no held-out candidate is left out; files staged by `transfer`, key `<token>-<stage>-<file>` | `score` would refuse it; a correction re-attaches the same files | — |
+| 2.2 | start: profile = harness, access `read-only`, issue = first item else the launch id, revision = the request's `created_at`; the brief's SHA-256 is not recorded yet | `started` has no field for it | — |
+| 2.1, 2.6 | D3: a stage is scored as its result is accepted; a refusal is a correction round | progress lives in the ledger | — |
+| 3.1 | D4: each step derives from the ledger launch and `status(token)` alone | nothing only in memory | — |
+| 2.1 | D5: a finish message after the last stage; ends with `launch_result`'s outcome only if every stage applied, else `failed` | | — |
+| 4.2, 1.2 | pre-reserve checks before `reserve_next`; `wait`'s bound = connector timeout + 120 s | | 11a5623, 4f3e728 |
+| 4.2 | checks 3-5 (`runner::admission`) run before the slot check; a queued launch the runner may not admit is not "ahead" in its own claim (it still is for another claimer); check 1 never stops an eval (read-only kinds hold no issue) | an unadmittable launch would block its pool | — |
+| 2.2 | `network: none` is not sent | `start` has no network field; `read-only` access is the fence | — |

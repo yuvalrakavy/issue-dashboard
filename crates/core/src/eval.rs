@@ -763,6 +763,84 @@ pub struct Built {
     pub available: BTreeMap<Split, usize>,
 }
 
+/// The repos of `all` by the question hash `decision` is asked with there (area's differs per
+/// repo, 1.3).
+fn question_hashes(
+    config: &ConfigSet,
+    cat: &Catalogue,
+    decision: &str,
+    all: &[Candidate<'_>],
+) -> Result<BTreeMap<String, Vec<String>>> {
+    let mut hashes: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for c in all {
+        let areas = triage::areas_of(&triage::translation_of(config, &c.repo));
+        hashes
+            .entry(cat.question_hash(decision, &areas)?)
+            .or_default()
+            .push(c.repo.clone());
+    }
+    Ok(hashes)
+}
+
+/// The replays an eval of `project` under `backend` scores (runner spec as-built D2), in
+/// [`LABEL_DECISIONS`] order: one per decision, or one per repo where the decision is asked
+/// differently in different repos, as `build` would refuse it whole.
+pub fn replays(conn: &Connection, root: &Path, config: &ConfigSet, project: &str, backend: &str) -> Result<Vec<Replay>> {
+    let cat = Catalogue::embedded();
+    let history = history::project_history(root, config, project)?;
+    let exclude = exclusions(config, project, &[])?;
+    let mut out = Vec::new();
+    for decision in LABEL_DECISIONS {
+        let whole = Replay {
+            project: project.to_string(),
+            decision: decision.to_string(),
+            backend: backend.to_string(),
+            exclude: exclude.clone(),
+            repo: None,
+        };
+        let all = candidates(conn, config, &history, &whole)?;
+        // A replay with no held-out candidate has nothing `score` could measure: it is left out
+        // rather than asked.
+        let held_out = |repo: Option<&str>| {
+            all.iter()
+                .any(|c| !is_tuning(&c.item.id) && repo.is_none_or(|r| r.eq_ignore_ascii_case(&c.repo)))
+        };
+        let hashes = question_hashes(config, cat, decision, &all)?;
+        if hashes.len() <= 1 {
+            if held_out(None) {
+                out.push(whole);
+            }
+            continue;
+        }
+        let repos: BTreeSet<String> = hashes.into_values().flatten().collect();
+        out.extend(repos.into_iter().filter(|repo| held_out(Some(repo))).map(|repo| Replay {
+            repo: Some(repo),
+            ..whole.clone()
+        }));
+    }
+    Ok(out)
+}
+
+/// Whether `decision` is prepared in two stages (priority: its first stage, then itself).
+pub fn two_stage(decision: &str) -> Result<bool> {
+    Ok(!Catalogue::embedded().file(decision)?.reads.is_empty())
+}
+
+/// What is wrong with `answers` against the manifest `eval prepare` wrote for `r` at `stage`,
+/// each reason as `score` would refuse it; empty when they are acceptable. The runner sends a
+/// non-empty list back to the worker as a correction round (runner spec 2.5).
+pub fn answer_errors(
+    root: &Path,
+    config: &ConfigSet,
+    r: &Replay,
+    stage: EvalStage,
+    answers: &[EvalAnswers],
+) -> Result<Vec<String>> {
+    let path = manifest_path(root, &r.project, &r.backend, &r.decision, r.repo.as_deref(), stage);
+    let m = load_manifest(&path)?;
+    answers_checked(Catalogue::embedded(), config, &m, answers).map(|(_, errors)| errors)
+}
+
 /// Builds a replay's questions (3.2) from history and the ledger: the manifest's stage, its
 /// sample, and for priority's scored stage the first stage's answers.
 pub fn build(
@@ -791,14 +869,7 @@ pub fn build(
         (Split::HeldOut, p.eval_sample.unwrap_or(EVAL_SAMPLE) as usize),
     ]);
     let all = candidates(conn, config, history, r)?;
-    let mut hashes: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    for c in &all {
-        let areas = triage::areas_of(&triage::translation_of(config, &c.repo));
-        hashes
-            .entry(cat.question_hash(&r.decision, &areas)?)
-            .or_default()
-            .push(c.repo.clone());
-    }
+    let hashes = question_hashes(config, cat, &r.decision, &all)?;
     if hashes.len() > 1 {
         let repos: BTreeSet<&String> = hashes.values().flatten().collect();
         return Err(Error::refused(format!(
@@ -926,6 +997,23 @@ pub struct EvalAnswers {
 /// answer must answer one of its questions, once, under its backend, with valid probabilities;
 /// one that does not refuses the files with every reason listed.
 fn checked_answers(cat: &Catalogue, config: &ConfigSet, m: &Manifest, files: &[EvalAnswers]) -> Result<Answered> {
+    let (out, errors) = answers_checked(cat, config, m, files)?;
+    if !errors.is_empty() {
+        return Err(Error::refused(format!(
+            "the answers are refused: {}",
+            errors.join("; ")
+        )));
+    }
+    Ok(out)
+}
+
+/// [`checked_answers`]' answers and every reason it would refuse them.
+fn answers_checked(
+    cat: &Catalogue,
+    config: &ConfigSet,
+    m: &Manifest,
+    files: &[EvalAnswers],
+) -> Result<(Answered, Vec<String>)> {
     let by_id: BTreeMap<&str, &ManifestQuestion> = m.questions.iter().map(|q| (q.id.as_str(), q)).collect();
     let mut out = BTreeMap::new();
     let mut errors = Vec::new();
@@ -957,13 +1045,7 @@ fn checked_answers(cat: &Catalogue, config: &ConfigSet, m: &Manifest, files: &[E
             }
         }
     }
-    if !errors.is_empty() {
-        return Err(Error::refused(format!(
-            "the answers are refused: {}",
-            errors.join("; ")
-        )));
-    }
-    Ok(out)
+    Ok((out, errors))
 }
 
 /// What `eval prepare` wrote.
@@ -1367,6 +1449,28 @@ pub struct EvalAppliedData {
     pub evaluated: i64,
 }
 
+/// What distinguishes one key's `eval_applied` receipt among a launch's.
+fn receipt_key(r: &Replay) -> Value {
+    let mut distinct = json!({"project": r.project, "backend": r.backend, "decision": r.decision});
+    if let Some(repo) = &r.repo {
+        distinct["repo"] = json!(repo);
+    }
+    distinct
+}
+
+/// Launch `launch`'s `eval_applied` receipt for `r`'s key, if it scored it.
+fn receipt(conn: &Connection, launch: &str, r: &Replay) -> Result<Option<crate::Event>> {
+    let distinct = receipt_key(r);
+    Ok(ledger::events_of(conn, launch, Kind::EvalApplied)?
+        .into_iter()
+        .find(|e| e.distinct == distinct))
+}
+
+/// Whether launch `launch` has scored `r`'s key (its 2.6 receipt is recorded).
+pub fn applied(conn: &Connection, launch: &str, r: &Replay) -> Result<bool> {
+    Ok(receipt(conn, launch, r)?.is_some())
+}
+
 /// [`score`] on behalf of a launch (runner spec 2.6), applied once per launch and key.
 /// `score` alone is not: its dedupe compares the key's LATEST evaluation, so launch A, then
 /// launch B, then a retry of A would record A again over B. The receipt is read before
@@ -1380,14 +1484,8 @@ pub fn score_for_launch(
     answers: &[EvalAnswers],
     launch: &str,
 ) -> Result<ScoreReport> {
-    let mut distinct = json!({"project": r.project, "backend": r.backend, "decision": r.decision});
-    if let Some(repo) = &r.repo {
-        distinct["repo"] = json!(repo);
-    }
-    let receipt = ledger::events_of(tx.conn(), launch, Kind::EvalApplied)?
-        .into_iter()
-        .find(|e| e.distinct == distinct);
-    if let Some(e) = receipt {
+    let distinct = receipt_key(r);
+    if let Some(e) = receipt(tx.conn(), launch, r)? {
         let applied: EvalAppliedData = serde_json::from_value(e.data)?;
         let ev = ledger::event_at(tx.conn(), applied.evaluated)?
             .filter(|ev| ev.kind == Kind::Evaluated)

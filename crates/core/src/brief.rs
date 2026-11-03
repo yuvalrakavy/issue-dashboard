@@ -680,6 +680,9 @@ fn stronger_look(
 /// An eval (triage spec 3.2): one session answers a replay of each label decision for the
 /// backend this launch is routed to, and scores it.
 fn eval(b: &mut Builder, l: &Launch, cli: &str) {
+    if l.request.routing.harness.is_some() {
+        return runner_eval(b, l);
+    }
     let backend = crate::triage::backend(&l.request.routing);
     let project = &l.request.project;
     b.tracker(format!(
@@ -719,5 +722,39 @@ fn eval(b: &mut Builder, l: &Launch, cli: &str) {
     b.tracker(
         "## Reporting back\n\nYour final message lists each decision's result: n, accuracy, \
          ECE and whether it passed the Evaluated bar.",
+    );
+}
+
+/// An eval run by the bridge runner (runner spec as-built D1): the runner prepares each stage
+/// and scores it; the worker, read-only with no network, only answers the files it is sent.
+fn runner_eval(b: &mut Builder, l: &Launch) {
+    let backend = crate::triage::backend(&l.request.routing);
+    let project = &l.request.project;
+    b.tracker(format!(
+        "Evaluate backend {backend} for project {project}: answer a replay of each label \
+         decision, so the page can say how far this backend's suggestions can be trusted. The \
+         tracker prepares the questions and scores your answers; you run no command that \
+         writes and change nothing on GitHub or in any checkout. Done looks like: every stage \
+         answered and accepted, then a launch_result."
+    ));
+    b.tracker(format!(
+        "## Stages\n\nThe tracker sends you one stage_input per stage, its attachments holding \
+         the questions: a tuning file and a held-out file. Answer every question in both, and \
+         only those, then reply with a stage_result on the same stage and round whose content \
+         is `{{\"backend\": \"{backend}\", \"answers\": [...]}}`: one entry per question, with \
+         `question` (its id), `probabilities` (one per allowed answer) and `reason`. Then wait \
+         for the next stage_input.\n\nA stage_input with a higher round is a correction: its \
+         content lists what was refused. Fix those entries and reply with the whole answer set \
+         for that round again. Priority comes in two stages, priority-first and then priority, \
+         whose input holds your first-stage answers.\n\nAnswer from each input alone; you have \
+         no network and never read the issue on GitHub. Per question note the evidence for and \
+         against, then give a probability per allowed answer as how often you would be right \
+         across many issues like it."
+    ));
+    b.tracker(
+        "## Reporting back\n\nAfter the last stage the tracker asks you to finish: reply with a \
+         launch_result, outcome `landed`, whose summary says how many stages you answered and \
+         anything you could not judge. If you cannot go on, reply with a launch_result, outcome \
+         `failed`, saying why.",
     );
 }
