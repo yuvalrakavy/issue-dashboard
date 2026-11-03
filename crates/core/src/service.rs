@@ -295,7 +295,7 @@ pub fn tick(cx: &Ctx<'_>, refresher: &mut Refresher) -> Result<Tick> {
 /// that waits, holds or fails shows why; one that moves the launch on clears it.
 fn note(root: &Root, id: &str, r: &std::result::Result<Stepped, String>, now: DateTime<Utc>) -> Result<()> {
     let why = match r {
-        Ok(Stepped::Waiting(why) | Stepped::Held(why)) => Some(why.clone()),
+        Ok(Stepped::Waiting(why) | Stepped::Held(why) | Stepped::Blocked(why)) => Some(why.clone()),
         Err(e) => Some(format!("the last step failed: {e}")),
         Ok(_) => None,
     };
@@ -329,6 +329,7 @@ fn forget_stale_reasons(root: &Root, all: &[launch::Launch], now: DateTime<Utc>)
     root.mutate(now, |tx| {
         for id in &stale {
             runner_status::unhold(tx.conn(), id)?;
+            runner_status::not_asking(tx.conn(), id)?;
         }
         Ok(())
     })

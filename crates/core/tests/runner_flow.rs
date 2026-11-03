@@ -52,6 +52,11 @@ fn a_runner_eval_brief_has_the_worker_answer_staged_files_and_run_no_command() {
     for needed in ["stage_input", "stage_result", "\"answers\"", "launch_result", "correction"] {
         assert!(text.contains(needed), "the brief does not mention {needed}:\n{text}");
     }
+    // Run A's worker, told only that attachments hold the questions, read them with a shell and
+    // stalled on a permission prompt per stage: the brief names the one way to read them.
+    for needed in ["agentbridge_native_snapshot", "transfer", "offset", "no shell command"] {
+        assert!(text.contains(needed), "the brief does not say how to read attachments ({needed}):\n{text}");
+    }
     // The dispatcher's eval brief is unchanged: its session still runs the commands.
     let dispatcher = eval_brief(None);
     assert!(dispatcher.contains("issue-dashboard eval prepare"), "{dispatcher}");
@@ -705,6 +710,121 @@ fn the_worker_s_question_is_shown_as_the_launch_s_reason_until_it_moves_on() {
     tick_at(&r, &mut rf, now());
     let reasons = launch_reasons(&r);
     assert!(reasons.iter().all(|w| !w.contains("asked a question")), "{reasons:?}");
+}
+
+/// A `waiting_user` status as AgentBridge 0.2.4 sends it (`dashboard/store.rs` `token_status`):
+/// `reason` is null and the question is the worker's last observation, stamped with when it
+/// was observed, which changes on every observation of the same question.
+fn asking(r: &Run, question: &str, observed_at_ms: i64) {
+    r.status(asking_status(r, question, observed_at_ms, "ready"));
+}
+
+fn asking_status(r: &Run, question: &str, observed_at_ms: i64, session_state: &str) -> Value {
+    json!({
+        "operation_id": r.token, "state": "waiting_user", "session_state": session_state, "reason": null,
+        "question": {"observed_at_ms": observed_at_ms, "state": "waiting_user", "source": "opencode",
+                     "detail": "permission", "question": {"permission": question}},
+    })
+}
+
+fn started_run() -> (Run, Refresher) {
+    let r = run();
+    r.running(Value::Null);
+    assert_eq!(r.step(), Stepped::RecordedStarted);
+    (r, refresher(Arc::new(Mutex::new(true)), Arc::new(Mutex::new(Vec::new()))))
+}
+
+fn blocked(t: &Tick) -> bool {
+    matches!(&t.stepped[..], [(_, Ok(Stepped::Blocked(why)))] if why.contains("blocked on a prompt"))
+}
+
+/// Run A's worker sat on a permission prompt for half an hour holding the only read-only slot.
+#[test]
+fn a_worker_waiting_on_a_prompt_past_ten_minutes_is_archived_and_its_launch_ends_failed() {
+    let (r, mut rf) = started_run();
+    asking(&r, "read /tmp/a.json", 1);
+    tick_at(&r, &mut rf, now());
+    let shown = launch_reasons(&r);
+    assert!(shown.len() == 1 && shown[0].contains("read /tmp/a.json"), "the page shows the prompt: {shown:?}");
+    // The same question, observed again later: only its stamp differs.
+    asking(&r, "read /tmp/a.json", 2);
+    let t = tick_at(&r, &mut rf, now() + Duration::minutes(10) + Duration::seconds(1));
+    assert!(blocked(&t), "{t:?}");
+    assert_eq!(r.fake.calls_to("archive").len(), 1);
+    r.status(json!({"operation_id": r.token, "state": "archived", "result": null}));
+    let t = tick_at(&r, &mut rf, now() + Duration::minutes(11));
+    assert_eq!(t.stepped, vec![(r.token.clone(), Ok(Stepped::Ended(EndState::Failed)))]);
+}
+
+/// The bound runs from when the CURRENT question was asked: an earlier one the worker moved
+/// past does not count toward it.
+#[test]
+fn a_question_under_ten_minutes_old_keeps_waiting_however_long_the_launch_has_run() {
+    let (r, mut rf) = started_run();
+    asking(&r, "read /tmp/a.json", 1);
+    tick_at(&r, &mut rf, now());
+    // The worker moves on, and the launch shows another reason for over ten minutes before the
+    // worker asks the same question again.
+    r.status(json!({"operation_id": r.token, "state": "started", "native_session_id": SESSION, "routing": {"verified": false}}));
+    tick_at(&r, &mut rf, now() + Duration::minutes(2));
+    assert_eq!(launch_reasons(&r), ["routing not verified yet"]);
+    asking(&r, "read /tmp/a.json", 3);
+    tick_at(&r, &mut rf, now() + Duration::minutes(13));
+    let t = tick_at(&r, &mut rf, now() + Duration::minutes(20));
+    assert!(matches!(&t.stepped[..], [(_, Ok(Stepped::Waiting(_)))]), "{t:?}");
+    assert!(r.fake.calls_to("archive").is_empty());
+}
+
+/// A question answered and the next one asked between two ticks: no tick sees the worker
+/// running, and the new question starts its own ten minutes.
+#[test]
+fn a_new_question_asked_between_two_ticks_starts_its_own_ten_minutes() {
+    let (r, mut rf) = started_run();
+    asking(&r, "read /tmp/a.json", 1);
+    tick_at(&r, &mut rf, now());
+    asking(&r, "read /tmp/b.json", 2);
+    let t = tick_at(&r, &mut rf, now() + Duration::minutes(11));
+    assert!(matches!(&t.stepped[..], [(_, Ok(Stepped::Waiting(_)))]), "{t:?}");
+    assert!(r.fake.calls_to("archive").is_empty());
+    let t = tick_at(&r, &mut rf, now() + Duration::minutes(22));
+    assert!(blocked(&t), "{t:?}");
+}
+
+/// A rollback re-queues the launch under the same id: its next worker starts with no question.
+#[test]
+fn a_rollback_forgets_the_question_the_lost_worker_was_asking() {
+    let (r, mut rf) = started_run();
+    asking(&r, "read /tmp/a.json", 1);
+    tick_at(&r, &mut rf, now());
+    let id = by_token_id(&r);
+    assert!(r.t.root.read(|l| runner_status::asking(l.conn(), &id)).unwrap().is_some());
+    r.fake.tokens.lock().unwrap().clear();
+    assert!(matches!(r.step(), Stepped::Rollback(_)));
+    assert_eq!(r.t.root.read(|l| runner_status::asking(l.conn(), &id)).unwrap(), None);
+}
+
+fn by_token_id(r: &Run) -> String {
+    let all = r.t.root.read(|l| launch::all(l.conn())).unwrap();
+    all.into_iter().find(|l| l.token.as_deref() == Some(r.token.as_str())).unwrap().id
+}
+
+/// Once the bound is past it stays past: a failed archive call, and AgentBridge still reporting
+/// `waiting_user` while the archive it accepted is pending, are each retried at the next tick.
+#[test]
+fn an_expired_question_is_archived_again_each_tick_until_the_worker_is_archived() {
+    let (r, mut rf) = started_run();
+    asking(&r, "read /tmp/a.json", 1);
+    tick_at(&r, &mut rf, now());
+    r.fake.push("archive", Answer::Down);
+    let t = tick_at(&r, &mut rf, now() + Duration::minutes(11));
+    assert!(matches!(&t.stepped[..], [(_, Err(_))]), "{t:?}");
+    let t = tick_at(&r, &mut rf, now() + Duration::minutes(11) + Duration::seconds(15));
+    assert!(blocked(&t), "the failed archive is retried at once: {t:?}");
+    r.status(asking_status(&r, "read /tmp/a.json", 3, "archive_requested"));
+    let t = tick_at(&r, &mut rf, now() + Duration::minutes(11) + Duration::seconds(30));
+    assert!(blocked(&t), "still expired while the archive is pending: {t:?}");
+    let ids: Vec<Value> = r.fake.calls_to("archive").iter().map(|p| p["interaction_id"].clone()).collect();
+    assert!(ids.len() == 3 && ids.iter().all(|i| *i == ids[0]), "one interaction id, retried: {ids:?}");
 }
 
 #[test]
