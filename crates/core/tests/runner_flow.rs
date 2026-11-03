@@ -827,6 +827,133 @@ fn an_expired_question_is_archived_again_each_tick_until_the_worker_is_archived(
     assert!(ids.len() == 3 && ids.iter().all(|i| *i == ids[0]), "one interaction id, retried: {ids:?}");
 }
 
+/// An idle worker as AgentBridge 0.2.4 reports it (`dashboard/store.rs` `token_status`): the
+/// native session is idle and no terminal report arrived, so the state is `unknown`, with a
+/// reason it also gives a worker that died. Run A‴'s worker sat here waiting for its first stage.
+const IDLE: &str = "native_idle_or_unavailable_without_valid_terminal_report; original identity retained";
+
+fn idle_status(r: &Run, reason: &str, stage: Value, effort: &str) -> Value {
+    json!({
+        "operation_id": r.token, "state": "unknown", "task_state": "started", "session_state": "ready",
+        "never_started": false, "reason": reason, "native_session_id": SESSION, "result": null,
+        "stage": stage, "routing": {"verified": true, "model": "claude-opus-5-5", "effort": effort},
+    })
+}
+
+fn idle(r: &Run, stage: Value) {
+    r.status(idle_status(r, IDLE, stage, "medium"));
+}
+
+fn idle_blocked(t: &Tick) -> bool {
+    matches!(&t.stepped[..], [(_, Ok(Stepped::Blocked(why)))] if why.contains("idle"))
+}
+
+#[test]
+fn an_idle_worker_waiting_for_its_first_stage_is_sent_it() {
+    let (r, _) = started_run();
+    idle(&r, Value::Null);
+    assert_eq!(r.step(), Stepped::Sent { stage: "type".into(), round: 1 });
+}
+
+#[test]
+fn an_idle_worker_on_a_reserved_launch_is_recorded_started() {
+    let r = run();
+    idle(&r, Value::Null);
+    assert_eq!(r.step(), Stepped::RecordedStarted);
+    assert_eq!(r.state(), State::Started);
+}
+
+/// AgentBridge has not recorded the round yet: the same input again, and the bound keeps the
+/// time it was first seen idle.
+#[test]
+fn an_idle_worker_seen_twice_is_resent_the_same_input_and_its_bound_keeps_its_start() {
+    let (r, mut rf) = started_run();
+    idle(&r, Value::Null);
+    tick_at(&r, &mut rf, now());
+    tick_at(&r, &mut rf, now() + Duration::minutes(5));
+    let ids: Vec<Value> = r.sent().iter().map(|s| s["interaction_id"].clone()).collect();
+    assert!(ids.len() == 2 && ids[0] == ids[1], "{ids:?}");
+    let since = r.t.root.read(|l| runner_status::asking(l.conn(), &by_token_id(&r))).unwrap();
+    assert_eq!(since.map(|(_, at)| at), Some(now()));
+}
+
+/// A dead worker reports the same reason as an idle one: past the bound it is archived.
+#[test]
+fn a_worker_idle_past_ten_minutes_is_archived_and_its_launch_ends_failed() {
+    let (r, mut rf) = started_run();
+    assert_eq!(r.step(), Stepped::Sent { stage: "type".into(), round: 1 });
+    let m = r.sent().pop().unwrap()["message"].clone();
+    idle(&r, json!({"input": m, "result": null, "result_event_id": null}));
+    let t = tick_at(&r, &mut rf, now());
+    assert!(matches!(&t.stepped[..], [(_, Ok(Stepped::Waiting(_)))]), "{t:?}");
+    let t = tick_at(&r, &mut rf, now() + Duration::minutes(10) + Duration::seconds(1));
+    assert!(idle_blocked(&t), "{t:?}");
+    let ids: Vec<Value> = r.fake.calls_to("archive").iter().map(|p| p["interaction_id"].clone()).collect();
+    assert_eq!(ids, [json!(format!("{}-idle", r.token))]);
+    r.status(json!({"operation_id": r.token, "state": "archived", "result": null}));
+    let t = tick_at(&r, &mut rf, now() + Duration::minutes(11));
+    assert_eq!(t.stepped, vec![(r.token.clone(), Ok(Stepped::Ended(EndState::Failed)))]);
+}
+
+#[test]
+fn a_worker_that_wakes_and_idles_again_starts_its_own_ten_minutes() {
+    let (r, mut rf) = started_run();
+    idle(&r, Value::Null);
+    tick_at(&r, &mut rf, now());
+    r.running(Value::Null);
+    tick_at(&r, &mut rf, now() + Duration::minutes(5));
+    idle(&r, Value::Null);
+    tick_at(&r, &mut rf, now() + Duration::minutes(6));
+    let t = tick_at(&r, &mut rf, now() + Duration::minutes(12));
+    assert!(!idle_blocked(&t), "{t:?}");
+    let t = tick_at(&r, &mut rf, now() + Duration::minutes(17));
+    assert!(idle_blocked(&t), "{t:?}");
+}
+
+/// A prompt replaces the idle bound, and an idle worker does not inherit the prompt's.
+#[test]
+fn a_question_and_an_idle_spell_each_run_their_own_bound() {
+    let (r, mut rf) = started_run();
+    asking(&r, "read /tmp/a.json", 1);
+    tick_at(&r, &mut rf, now());
+    idle(&r, Value::Null);
+    tick_at(&r, &mut rf, now() + Duration::minutes(8));
+    let t = tick_at(&r, &mut rf, now() + Duration::minutes(12));
+    assert!(!idle_blocked(&t), "{t:?}");
+    asking(&r, "read /tmp/a.json", 2);
+    let t = tick_at(&r, &mut rf, now() + Duration::minutes(13));
+    assert!(matches!(&t.stepped[..], [(_, Ok(Stepped::Waiting(_)))]), "{t:?}");
+    assert!(r.fake.calls_to("archive").is_empty());
+}
+
+#[test]
+fn an_unknown_state_with_another_reason_still_holds() {
+    let (r, _) = started_run();
+    r.status(idle_status(&r, "launch_or_result_uncertain", Value::Null, "medium"));
+    assert!(matches!(r.step(), Stepped::Held(_)));
+    assert!(r.sent().is_empty());
+}
+
+#[test]
+fn an_idle_worker_on_the_wrong_routing_is_archived() {
+    let r = run();
+    r.status(idle_status(&r, IDLE, Value::Null, "high"));
+    assert_eq!(r.step(), Stepped::Archived);
+    assert_eq!(r.state(), State::Reserved);
+}
+
+#[test]
+fn a_rollback_forgets_the_idle_spell_of_the_lost_worker() {
+    let (r, mut rf) = started_run();
+    idle(&r, Value::Null);
+    tick_at(&r, &mut rf, now());
+    let id = by_token_id(&r);
+    assert!(r.t.root.read(|l| runner_status::asking(l.conn(), &id)).unwrap().is_some());
+    r.fake.tokens.lock().unwrap().clear();
+    assert!(matches!(r.step(), Stepped::Rollback(_)));
+    assert_eq!(r.t.root.read(|l| runner_status::asking(l.conn(), &id)).unwrap(), None);
+}
+
 #[test]
 fn a_reason_for_a_launch_that_no_longer_waits_is_forgotten() {
     let r = run();

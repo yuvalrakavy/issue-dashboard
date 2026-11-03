@@ -121,8 +121,9 @@ acts:
 | 7 | `state: queued` | stay reserved; wait for an answer with a native session |
 | 8 | `state` started / awaiting_caller with `native_session_id` and matching `routing` | record `started` if missing, resume the flow |
 | 9 | `state` started / awaiting_caller, routing absent or mismatched | as 2.2: mismatch → archive + `failed`; absent → stay reserved |
-| 10 | `state: waiting_user` | show the question on the page; no action |
-| 11 | anything else (`error` without `never_started`, `unknown`) | hold; only the owner's Cancel acts |
+| 10 | `state: waiting_user` | show the question on the page; past `QUESTION_BOUND_MINUTES` (10) on one question, archive the worker (`Blocked`), and row 5 ends the launch failed |
+| 10b | `state: unknown` with exactly the native-idle reason (`native_idle_or_unavailable_without_valid_terminal_report…`) | as row 8: an idle worker waiting for its next input is sent it. The same reason covers a dead worker, so past `IDLE_BOUND_MINUTES` (10) of one idle spell archive it (`Blocked`) and row 5 ends the launch failed |
+| 11 | anything else (`error` without `never_started`, any other `unknown`) | hold; only the owner's Cancel acts |
 
 Tests drive these rows with response bodies copied from `token_status`'s real shape, including
 a launch queued at restart that preflight then rejects (`queued` → `error` + `never_started`).
