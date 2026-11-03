@@ -270,3 +270,23 @@ the harness traps to a hook message or the build-brief template.
   states the same way?" (AgentBridge reports an idle worker and a dead one both as `unknown`,
   and only the reason text separates them); and an eval's stage inputs are sized for the
   smallest routed model before a live run (A⁵ stopped on 940 KB of pretty-printed JSON).
+
+## 2026-11-03 eval stages in parts (D6) + acceptance run A⁶ (T1)
+- time: memo + code + 9 tests about 2.5 h; gate about 1 h; A⁶ 66 min live (20:39Z → 21:45Z),
+  nobody acted. 59 parts over five stages (type 10, area Store 10, area logmon-mcp 1,
+  priority-first 27, priority 11); 19 parts took one correction, none a second; ended `landed`,
+  four `eval_applied` (type 0.87, area Store 0.48, area logmon-mcp 0.85, priority 0.31 accuracy).
+- catches: mutation=4 (M2 empty file, M6 repeated-stage re-read, M7 keep-before-check, M8
+  part/of) gate=Codex 1 S2 (a stage whose candidates left history recorded an empty cut and
+  stranded the launch) round 2 (Sonnet medium) clean. live run=0. post-merge=0.
+- DG=n/a IG=5 post-merge=0
+- deltas from the memo: the cut is recorded per stage (`parts/<stage>/cut.json`), not in
+  `plan.json`; no config override, a `Ctx.part_bytes` seam instead; transfer keys checked at
+  cut time; read window 64 KB.
+- tier-call: right (T1: a loop over an existing send/validate/score step).
+- delegation: depth Codex adversarial-review `--wait`; mutation via `mutants.sh`; confirming
+  Sonnet medium.
+- unconsolidated: 2
+- improve: `runner status` shows no waiting row between steps (seen 8 times in A⁶), so a watch
+  must not read a blank reason as a stop; and a watch's terminal-state list comes from
+  `launch.rs`'s `State` enum (`released` follows `ended` in one transaction), not from memory.
