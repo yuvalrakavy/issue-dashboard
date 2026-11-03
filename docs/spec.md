@@ -1520,7 +1520,10 @@ records suggestions, and the next cycle shows them.
 Each cycle writes `<root>/outbox/<project>/<seq>.json`: the complete set of tracker documents,
 stamped with the cycle's sequence number, plus the acknowledgements of the decisions it
 consumed (the `acks` collection: decision id → cycle). **The tracker never edits a page
-document**; the page shows a decision as pending until its ack arrives.
+document**; the page shows a decision as pending until its ack arrives. Once a cycle has written
+its outbox it removes the project's older ones, keeping the newest three (only the sync job reads
+an outbox, once; an older overlapping sync that loses its file fails its read, and the newer one
+publishes); a failure to remove one does not fail the cycle.
 
 An outbox is larger than one database batch can carry (a batch holds at most 50 documents),
 so it is published as an **immutable generation** and switched on by one pinned write:

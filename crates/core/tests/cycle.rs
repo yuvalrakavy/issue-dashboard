@@ -232,6 +232,57 @@ fn outbox_sequences_rise_and_acks_are_cumulative() {
     assert!(doc(&late)["acks"].as_array().unwrap().is_empty());
 }
 
+/// The names in `<root>/outbox/<project>/`, sorted.
+fn outbox_names(t: &TempRoot, project: &str) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(t.root.dir().join("outbox").join(project))
+        .unwrap()
+        .map(|e| e.unwrap().file_name().into_string().unwrap())
+        .collect();
+    names.sort();
+    names
+}
+
+#[test]
+fn a_cycle_keeps_only_the_newest_three_outboxes_of_its_project() {
+    let t = fixture_root();
+    let runs: Vec<CycleReport> = (0..5).map(|m| run(&t, &no_pages(), m * 10)).collect();
+    let mut newest: Vec<String> = runs[2..].iter().map(|r| format!("{}.json", r.sequence)).collect();
+    newest.sort();
+    assert_eq!(outbox_names(&t, "home"), newest);
+    assert!(runs[4].outbox.exists());
+}
+
+#[test]
+fn pruning_leaves_another_project_and_a_file_being_written_alone() {
+    let t = fixture_root();
+    let g = gh();
+    let kernel = cycle::cycle(&t.root, &g, "kernel", &no_pages(), &|| at(0), PAGE).unwrap();
+    run(&t, &no_pages(), 1);
+    let tmp = t.root.dir().join("outbox").join("home").join(".1.json.tmp");
+    std::fs::write(&tmp, "{}").unwrap();
+    for m in 2..7 {
+        run(&t, &no_pages(), m);
+    }
+    assert!(kernel.outbox.exists(), "another project's outbox was removed");
+    assert!(tmp.exists(), "a temporary file was removed");
+    assert_eq!(outbox_names(&t, "home").len(), 4, "three outboxes and the temporary file");
+}
+
+#[test]
+fn a_cycle_that_cannot_remove_an_old_outbox_still_succeeds() {
+    let t = fixture_root();
+    run(&t, &no_pages(), 0);
+    // A directory named like an outbox, older than any: removing it fails.
+    let stuck = t.root.dir().join("outbox").join("home").join("0.json");
+    std::fs::create_dir(&stuck).unwrap();
+    for m in 1..5 {
+        run(&t, &no_pages(), m);
+    }
+    assert!(stuck.exists());
+    let last = run(&t, &no_pages(), 6);
+    assert!(last.outbox.exists());
+}
+
 #[test]
 fn the_sequence_continues_after_a_rebuild() {
     let t = fixture_root();

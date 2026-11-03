@@ -148,6 +148,10 @@ pub fn cycle_full(
         |ledger, (repos, seq, taken_at)| {
             let out = derive::derive(ledger.conn(), &config, project, seq, taken_at)?;
             let path = derive::write(root.dir(), &out)?;
+            // The outbox is written; a failure to remove older ones must not fail the cycle.
+            if let Err(e) = derive::prune(root.dir(), project, derive::KEEP_OUTBOXES) {
+                eprintln!("outbox: older outboxes of {project} not removed: {e}");
+            }
             Ok(CycleReport {
                 project: project.to_string(),
                 ingest: ingested,
