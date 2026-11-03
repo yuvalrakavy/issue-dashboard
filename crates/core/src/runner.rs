@@ -8,6 +8,12 @@
 //! accepted result is checked and scored before the next is sent (D3): a refusal is a
 //! correction round, at most [`MAX_CORRECTIONS`] of them. After the last stage the worker is
 //! asked to finish (D5).
+//!
+//! A stage is sent in parts (D6) of at most [`PART_BYTES`] of questions, each an AgentBridge
+//! stage of its own, `<stage>#p<n>`, so what a worker must hold at once is one part, not the
+//! stage. Its cut is written when the stage is prepared and read back after; each accepted
+//! part's answers are kept beside it, and the stage is checked and scored from all of them
+//! when its last part is accepted.
 
 use std::collections::HashMap;
 use std::fs;
@@ -45,6 +51,11 @@ const IDLE_REASON: &str = "native_idle_or_unavailable_without_valid_terminal_rep
 /// with this, so the two bounds share the `runner_questions` row without mistaking each other.
 const IDLE_IDENTITY: &str = "idle:";
 
+/// The most bytes of compact question JSON in one part of a stage (D6). A stage of 240
+/// questions with 8,000-character bodies is about 900 KB, more than a small model holds; a
+/// part is about 25 questions, two 64 KB reads. A question larger than this is a part alone.
+pub const PART_BYTES: usize = 96_000;
+
 /// How long one step waits for a staged file to be ready before it leaves it to the next.
 const STAGING_WAIT: Duration = Duration::from_secs(30);
 
@@ -55,6 +66,8 @@ pub struct Ctx<'a> {
     /// The connector's `state_dir/files`: AgentBridge stages only files under it.
     pub files: &'a Path,
     pub now: &'a dyn Fn() -> DateTime<Utc>,
+    /// The most bytes in one part of a stage: [`PART_BYTES`] in service.
+    pub part_bytes: usize,
 }
 
 /// What one step did.
@@ -493,7 +506,7 @@ fn eval_step(cx: &Ctx<'_>, l: &Launch, token: &str, s: &Status) -> Result<Steppe
     };
     let Some(round) = active else {
         return match stages.first() {
-            Some(first) => send_stage(cx, &config, l, token, first, 1, &[], None, None),
+            Some(first) => send_part(cx, &config, l, token, first, 1, 1, &[], None, None),
             None => Ok(Stepped::Held(format!(
                 "project {} has no replay to evaluate",
                 l.request.project
@@ -507,47 +520,74 @@ fn eval_step(cx: &Ctx<'_>, l: &Launch, token: &str, s: &Status) -> Result<Steppe
             round.input.stage, round.input.round
         )));
     };
-    let Some(i) = stages.iter().position(|st| st.name == round.input.stage) else {
+    let position = part_of(&round.input.stage)
+        .and_then(|(name, n)| stages.iter().position(|st| st.name == name).map(|i| (i, n)));
+    let Some((i, n)) = position else {
         return Ok(Stepped::Held(format!(
-            "AgentBridge's active stage {} is not in this launch's recorded eval plan",
+            "AgentBridge's active stage {} is not a part of this launch's recorded eval plan",
             round.input.stage
         )));
     };
     let st = &stages[i];
-    let done = st.stage == EvalStage::Scored && cx.root.read(|led| eval::applied(led.conn(), &l.id, &st.replay))?;
-    let answers = if done {
-        None
-    } else {
-        let errors = match serde_json::from_value::<EvalAnswers>(result.content) {
-            Err(e) => (vec![format!("the content is not {{backend, answers}}: {e}")], None),
-            Ok(a) => (
-                eval::answer_errors(cx.root.dir(), &config, &st.replay, st.stage, std::slice::from_ref(&a), &l.id)?,
-                Some(a),
-            ),
-        };
-        match errors {
-            (errors, _) if !errors.is_empty() => {
-                if round.input.round > MAX_CORRECTIONS {
-                    return archive(cx, token);
-                }
-                let content = json!({"refused": errors});
-                return send_stage(cx, &config, l, token, st, round.input.round + 1, &[], Some(content), Some(&event));
-            }
-            (_, a) => a,
-        }
+    let Some(cut) = read_cut(cx, l, st)? else {
+        return Ok(Stepped::Held(format!("stage {} has an active part but no recorded cut", st.name)));
     };
-    if let (EvalStage::Scored, Some(a)) = (st.stage, &answers) {
+    let Some(ids) = cut.get(n - 1) else {
+        return Ok(Stepped::Held(format!(
+            "AgentBridge's active part {} is past stage {}'s {} parts",
+            round.input.stage,
+            st.name,
+            cut.len()
+        )));
+    };
+    let last = n == cut.len();
+    let done = last && st.stage == EvalStage::Scored && cx.root.read(|led| eval::applied(led.conn(), &l.id, &st.replay))?;
+    if !done {
+        let errors = match serde_json::from_value::<EvalAnswers>(result.content.clone()) {
+            Err(e) => vec![format!("the content is not {{backend, answers}}: {e}")],
+            Ok(a) => eval::answer_errors(
+                cx.root.dir(),
+                &config,
+                &st.replay,
+                st.stage,
+                std::slice::from_ref(&a),
+                &l.id,
+                Some(ids),
+            )?,
+        };
+        if !errors.is_empty() {
+            if round.input.round > MAX_CORRECTIONS {
+                return archive(cx, token);
+            }
+            let content = json!({"refused": errors});
+            return send_part(cx, &config, l, token, st, n, round.input.round + 1, &[], Some(content), Some(&event));
+        }
+        keep_part(cx, l, st, n, &result.content)?;
+    }
+    if !last {
+        return send_part(cx, &config, l, token, st, n + 1, 1, &[], None, Some(&event));
+    }
+    let answers = if done { Vec::new() } else { kept_parts(cx, l, st, cut.len())? };
+    if st.stage == EvalStage::Scored && !done {
+        // Every part was checked alone; the whole set is checked once more as `score` reads it.
+        let errors = eval::answer_errors(cx.root.dir(), &config, &st.replay, st.stage, &answers, &l.id, None)?;
+        if !errors.is_empty() {
+            return Ok(Stepped::Held(format!(
+                "stage {}'s accepted parts do not make a whole answer set: {}",
+                st.name,
+                errors.join("; ")
+            )));
+        }
         cx.root.mutate((cx.now)(), |tx| {
-            eval::score_for_launch(tx, cx.root.dir(), &config, &st.replay, std::slice::from_ref(a), &l.id)
+            eval::score_for_launch(tx, cx.root.dir(), &config, &st.replay, &answers, &l.id)
         })?;
     }
     match stages.get(i + 1) {
         // Priority's scored stage is prepared from its first stage's answers.
         Some(next) if st.stage == EvalStage::First => {
-            let first = answers.map(|a| vec![a]).unwrap_or_default();
-            send_stage(cx, &config, l, token, next, 1, &first, None, Some(&event))
+            send_part(cx, &config, l, token, next, 1, 1, &answers, None, Some(&event))
         }
-        Some(next) => send_stage(cx, &config, l, token, next, 1, &[], None, Some(&event)),
+        Some(next) => send_part(cx, &config, l, token, next, 1, 1, &[], None, Some(&event)),
         None => {
             // AgentBridge takes only an object; `text` is the field it reads a plain one by.
             let message = json!({
@@ -564,50 +604,191 @@ fn stage_dir(cx: &Ctx<'_>, token: &str, st: &Stage) -> PathBuf {
     cx.files.join("runner").join(token).join(st.name.replace('/', "_"))
 }
 
-/// Sends `st`'s round `round`: its files (prepared now for round 1, the same files again for a
-/// correction) and `content` (the refusals, for a correction).
-#[allow(clippy::too_many_arguments)]
-fn send_stage(
+/// The AgentBridge stage name of part `n` of `st` (D6).
+pub fn part_name(st: &Stage, n: usize) -> String {
+    format!("{}#p{n}", st.name)
+}
+
+/// The stage name and part number an AgentBridge stage name carries, if it is a part's.
+fn part_of(name: &str) -> Option<(&str, usize)> {
+    let (stage, n) = name.rsplit_once("#p")?;
+    let n: usize = n.parse().ok()?;
+    (n >= 1).then_some((stage, n))
+}
+
+/// `questions` cut into parts of at most `budget` bytes of compact JSON each, in order, by
+/// question id. A question over `budget` is a part alone; no part is empty.
+pub fn cut(questions: &[Value], budget: usize) -> Result<Vec<Vec<String>>> {
+    let mut parts: Vec<Vec<String>> = Vec::new();
+    let mut size = 0;
+    for q in questions {
+        let id = q["id"]
+            .as_str()
+            .ok_or_else(|| Error::refused(format!("a prepared question has no id: {q}")))?;
+        let n = serde_json::to_vec(q)?.len();
+        match parts.last_mut() {
+            Some(part) if size + n <= budget => part.push(id.to_string()),
+            _ => {
+                parts.push(vec![id.to_string()]);
+                size = 0;
+            }
+        }
+        size += n;
+    }
+    Ok(parts)
+}
+
+/// Where `st`'s cut and its accepted parts' answers are kept: beside the launch's plan.
+fn parts_dir(cx: &Ctx<'_>, l: &Launch, st: &Stage) -> PathBuf {
+    eval::launch_dir(cx.root.dir(), &l.request.project, &backend(l), &l.id)
+        .join("parts")
+        .join(st.name.replace('/', "_"))
+}
+
+/// `st`'s recorded cut, `None` before its first part is sent.
+fn read_cut(cx: &Ctx<'_>, l: &Launch, st: &Stage) -> Result<Option<Vec<Vec<String>>>> {
+    match fs::read_to_string(parts_dir(cx, l, st).join("cut.json")) {
+        Ok(text) => Ok(Some(serde_json::from_str(&text)?)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e.into()),
+    }
+}
+
+/// Writes `value` to `path` whole or not at all.
+fn write_atomic(path: &Path, value: &impl Serialize) -> Result<()> {
+    fs::create_dir_all(path.parent().expect("a kept file has a directory"))?;
+    let tmp = path.with_extension("json.tmp");
+    fs::write(&tmp, serde_json::to_string_pretty(value)? + "\n")?;
+    fs::rename(&tmp, path)?;
+    Ok(())
+}
+
+/// Keeps part `n`'s accepted answers, as the worker sent them.
+fn keep_part(cx: &Ctx<'_>, l: &Launch, st: &Stage, n: usize, content: &Value) -> Result<()> {
+    write_atomic(&parts_dir(cx, l, st).join(format!("{n}.json")), content)
+}
+
+/// The kept answers of parts 1 to `of`, one answer set per part.
+fn kept_parts(cx: &Ctx<'_>, l: &Launch, st: &Stage, of: usize) -> Result<Vec<EvalAnswers>> {
+    let dir = parts_dir(cx, l, st);
+    (1..=of)
+        .map(|n| {
+            let path = dir.join(format!("{n}.json"));
+            let text = fs::read_to_string(&path)
+                .map_err(|e| Error::refused(format!("{}: part {n}'s accepted answers are missing ({e})", path.display())))?;
+            Ok(serde_json::from_str(&text)?)
+        })
+        .collect()
+}
+
+/// The prepared question files of `st`, sorted by name: `(file name, its JSON)`.
+fn prepared_files(dir: &Path) -> Result<Vec<(String, Value)>> {
+    let mut names: Vec<PathBuf> = fs::read_dir(dir)?.map(|e| Ok(e?.path())).collect::<Result<_>>()?;
+    names.sort();
+    names
+        .into_iter()
+        .map(|path| {
+            let name = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .ok_or_else(|| Error::refused(format!("{} has no file name", path.display())))?
+                .to_string();
+            Ok((name, serde_json::from_str(&fs::read_to_string(&path)?)?))
+        })
+        .collect()
+}
+
+/// `st`'s cut: read back once recorded, else `st` is prepared now (from `first` for priority's
+/// scored stage), cut, and the cut recorded before any part is sent. Every part's transfer key
+/// is checked here, so a stage whose names are too long is refused before its first part.
+fn stage_cut(
     cx: &Ctx<'_>,
     config: &ConfigSet,
     l: &Launch,
     token: &str,
     st: &Stage,
+    first: &[EvalAnswers],
+) -> Result<Vec<Vec<String>>> {
+    let full = stage_dir(cx, token, st).join("full");
+    if let Some(cut) = read_cut(cx, l, st)? {
+        return Ok(cut);
+    }
+    cx.root.read(|led| eval::prepare(led.conn(), cx.root.dir(), config, &st.replay, st.stage, first, &full, Some(&l.id)))?;
+    let files = prepared_files(&full)?;
+    let questions: Vec<Value> = files
+        .iter()
+        .flat_map(|(_, v)| v["questions"].as_array().cloned().unwrap_or_default())
+        .collect();
+    let cut = cut(&questions, cx.part_bytes)?;
+    for n in 1..=cut.len() {
+        for (name, _) in &files {
+            transfer_key(token, &part_name(st, n), name)?;
+        }
+    }
+    write_atomic(&parts_dir(cx, l, st).join("cut.json"), &cut)?;
+    Ok(cut)
+}
+
+/// Sends round `round` of part `n` of `st`: the part's questions as files, written compact from
+/// the stage's prepared files (the same files again for a correction), and `content` (the
+/// refusals, for a correction).
+#[allow(clippy::too_many_arguments)]
+fn send_part(
+    cx: &Ctx<'_>,
+    config: &ConfigSet,
+    l: &Launch,
+    token: &str,
+    st: &Stage,
+    n: usize,
     round: u32,
     first: &[EvalAnswers],
     content: Option<Value>,
     previous: Option<&str>,
 ) -> Result<Stepped> {
-    let dir = stage_dir(cx, token, st);
-    if round == 1 {
-        cx.root.read(|led| eval::prepare(led.conn(), cx.root.dir(), config, &st.replay, st.stage, first, &dir, Some(&l.id)))?;
-    }
+    let cut = stage_cut(cx, config, l, token, st, first)?;
+    let Some(ids) = cut.get(n - 1) else {
+        return Ok(Stepped::Held(format!("stage {} has {} parts, not {n}", st.name, cut.len())));
+    };
+    let name = part_name(st, n);
+    let dir = stage_dir(cx, token, st).join(format!("p{n}"));
+    fs::create_dir_all(&dir)?;
+    let full = stage_dir(cx, token, st).join("full");
+    let files = prepared_files(&full)
+        .map_err(|e| Error::refused(format!("stage {}'s prepared files are not readable: {e}", st.name)))?;
     let mut attachments = Vec::new();
-    let mut names: Vec<PathBuf> = fs::read_dir(&dir)?.map(|e| Ok(e?.path())).collect::<Result<_>>()?;
-    names.sort();
-    for path in names {
-        match staged(cx, token, st, &path)? {
+    for (file, mut v) in files {
+        let questions: Vec<Value> = v["questions"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|q| q["id"].as_str().is_some_and(|id| ids.iter().any(|i| i == id)))
+            .collect();
+        if questions.is_empty() {
+            continue;
+        }
+        v["questions"] = Value::Array(questions);
+        let path = dir.join(&file);
+        fs::write(&path, serde_json::to_vec(&v)?)?;
+        match staged(cx, token, &name, &path)? {
             Some(manifest) => attachments.push(manifest),
             None => return Ok(Stepped::Waiting(format!("staging {}", path.display()))),
         }
     }
     let content = content.unwrap_or_else(|| {
-        json!({"decision": st.replay.decision, "repo": st.replay.repo, "stage": st.stage})
+        json!({"decision": st.replay.decision, "repo": st.replay.repo, "stage": st.stage, "part": n, "of": cut.len()})
     });
     let message = json!({
         "type": "stage_input",
         "schema_version": 1,
-        "stage": st.name,
+        "stage": name,
         "round": round,
         "content": content,
         "previous_result_event_id": previous,
         "attachments": attachments,
     });
-    bridge::send(cx.bridge, token, &format!("{token}-{}-{round}", st.name), message)?;
-    Ok(Stepped::Sent {
-        stage: st.name.clone(),
-        round,
-    })
+    bridge::send(cx.bridge, token, &format!("{token}-{name}-{round}"), message)?;
+    Ok(Stepped::Sent { stage: name, round })
 }
 
 /// A staged file's transfer key, `{token}-{stage}-{file}`: refused past the connector's 128 bytes.
@@ -621,12 +802,12 @@ pub fn transfer_key(token: &str, stage: &str, file: &str) -> Result<String> {
 
 /// `path` staged through AgentBridge's transfer, keyed by token, stage and file so a retry
 /// reuses it: its ready manifest, or `None` while it is still being prepared.
-fn staged(cx: &Ctx<'_>, token: &str, st: &Stage, path: &Path) -> Result<Option<Value>> {
+fn staged(cx: &Ctx<'_>, token: &str, stage: &str, path: &Path) -> Result<Option<Value>> {
     let name = path
         .file_name()
         .and_then(|n| n.to_str())
         .ok_or_else(|| Error::refused(format!("{} has no file name", path.display())))?;
-    let key = transfer_key(token, &st.name, name)?;
+    let key = transfer_key(token, stage, name)?;
     let prepared = bridge::transfer(
         cx.bridge,
         json!({"action": "prepare", "key": key, "path": path, "name": name, "media_type": "application/json", "keep": false}),

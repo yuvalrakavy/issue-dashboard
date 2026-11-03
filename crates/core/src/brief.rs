@@ -738,9 +738,11 @@ fn runner_eval(b: &mut Builder, l: &Launch) {
          answered and accepted, then a launch_result."
     ));
     b.tracker(format!(
-        "## Stages\n\nThe tracker sends you one stage_input per stage, its attachments holding \
-         the questions: a tuning file and a held-out file. Answer every question in both, and \
-         only those, then reply with a stage_result on the same stage and round whose content \
+        "## Stages\n\nEach stage comes in parts, one stage_input per part, named \
+         `<stage>#p<n>`; its content says which part of how many. Its attachments hold that \
+         part's questions: a tuning file, a held-out file, or both. Each part stands alone: \
+         once a part is accepted you need nothing from it again. Answer every question in the \
+         part's files, and only those, then reply with a stage_result on the same stage and round whose content \
          is `{{\"backend\": \"{backend}\", \"answers\": [...]}}`: one entry per question, with \
          `question` (its id), `probabilities` (one per allowed answer) and `reason`. Then wait \
          for the next stage_input.\n\nRead each attachment with the \

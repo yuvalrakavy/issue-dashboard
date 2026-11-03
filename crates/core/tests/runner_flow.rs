@@ -79,6 +79,7 @@ struct Run {
     fake: Fake,
     files: PathBuf,
     token: String,
+    part_bytes: std::cell::Cell<usize>,
 }
 
 fn run() -> Run {
@@ -142,6 +143,8 @@ fn run_with(store: bool) -> Run {
         fake: Fake::new(),
         files,
         token,
+        // One part a stage unless a test cuts finer.
+        part_bytes: std::cell::Cell::new(usize::MAX),
     }
 }
 
@@ -152,6 +155,7 @@ impl Run {
             bridge: &self.fake,
             files: &self.files,
             now: &now,
+            part_bytes: self.part_bytes.get(),
         };
         runner::step(&cx, &self.token)
     }
@@ -181,9 +185,15 @@ impl Run {
         self.fake.calls_to("send")
     }
 
-    /// The question files staged for `stage`.
-    fn questions(&self, stage: &str) -> Vec<Value> {
-        let dir = self.files.join("runner").join(&self.token).join(stage.replace('/', "_"));
+    /// The question files staged for `part`, an AgentBridge stage name `<stage>#p<n>`.
+    fn questions(&self, part: &str) -> Vec<Value> {
+        let (stage, n) = part.rsplit_once("#p").expect("a part's stage name");
+        let dir = self
+            .files
+            .join("runner")
+            .join(&self.token)
+            .join(stage.replace('/', "_"))
+            .join(format!("p{n}"));
         let mut out = Vec::new();
         for e in fs::read_dir(&dir).unwrap() {
             let v: Value = serde_json::from_str(&fs::read_to_string(e.unwrap().path()).unwrap()).unwrap();
@@ -231,7 +241,7 @@ impl Run {
         self.running(Value::Null);
         assert_eq!(self.step(), Stepped::RecordedStarted);
         let mut stages = Vec::new();
-        for n in 0..20 {
+        for n in 0..200 {
             let stepped = self.try_step().unwrap_or_else(|e| panic!("after {stages:?}: {e}"));
             match stepped {
                 Stepped::Sent { stage, round: 1 } => {
@@ -304,16 +314,16 @@ fn a_verified_session_is_recorded_started_then_sent_the_first_stage() {
     r.running(Value::Null);
     assert_eq!(r.step(), Stepped::RecordedStarted);
     assert_eq!(r.state(), State::Started);
-    assert_eq!(r.step(), Stepped::Sent { stage: "type".into(), round: 1 });
+    assert_eq!(r.step(), Stepped::Sent { stage: "type#p1".into(), round: 1 });
     let send = r.sent().pop().unwrap();
-    assert_eq!(send["interaction_id"], format!("{}-type-1", r.token));
+    assert_eq!(send["interaction_id"], format!("{}-type#p1-1", r.token));
     let m = &send["message"];
     assert_eq!(m["type"], "stage_input");
-    assert_eq!((m["stage"].as_str(), m["round"].as_u64()), (Some("type"), Some(1)));
+    assert_eq!((m["stage"].as_str(), m["round"].as_u64()), (Some("type#p1"), Some(1)));
     assert!(m["previous_result_event_id"].is_null());
     let attachments = m["attachments"].as_array().unwrap();
     assert!(!attachments.is_empty() && attachments.iter().all(|a| a["id"].is_string()), "{m}");
-    assert!(!r.questions("type").is_empty());
+    assert!(!r.questions("type#p1").is_empty());
     // Until its result is accepted, nothing more is sent.
     r.running(json!({"input": m, "result": null, "result_event_id": null}));
     assert!(matches!(r.step(), Stepped::Waiting(_)));
@@ -325,14 +335,14 @@ fn refused_answers_are_corrected_three_times_then_the_worker_is_archived() {
     let r = run();
     r.running(Value::Null);
     r.step();
-    assert_eq!(r.step(), Stepped::Sent { stage: "type".into(), round: 1 });
+    assert_eq!(r.step(), Stepped::Sent { stage: "type#p1".into(), round: 1 });
     let first = r.sent()[0]["message"]["attachments"].clone();
     let wrong = json!({"backend": BACKEND, "answers": [{"question": "nope", "probabilities": {}, "reason": "x"}]});
     for round in 2..=4 {
         r.answered(wrong.clone(), &format!("ev-{round}"));
-        assert_eq!(r.step(), Stepped::Sent { stage: "type".into(), round });
+        assert_eq!(r.step(), Stepped::Sent { stage: "type#p1".into(), round });
         let send = r.sent().pop().unwrap();
-        assert_eq!(send["interaction_id"], format!("{}-type-{round}", r.token));
+        assert_eq!(send["interaction_id"], format!("{}-type#p1-{round}", r.token));
         let m = &send["message"];
         assert_eq!(m["previous_result_event_id"], format!("ev-{round}"));
         assert!(!m["content"]["refused"].as_array().unwrap().is_empty(), "{m}");
@@ -347,15 +357,15 @@ fn refused_answers_are_corrected_three_times_then_the_worker_is_archived() {
 #[test]
 fn each_stage_is_scored_as_it_is_accepted_and_priority_is_prepared_from_its_first_stage() {
     let r = run();
-    assert_eq!(r.drive_to_finish(), STAGES);
+    assert_eq!(r.drive_to_finish(), STAGES.map(|s| format!("{s}#p1")));
     assert_eq!(r.evaluated(), 3, "type, area and priority; priority-first is not scored");
     let sent = r.sent();
     assert_eq!(sent.len(), 5);
     assert_eq!(sent[4]["interaction_id"], format!("{}-finish", r.token));
     // Each stage after the first names the result it follows.
-    assert_eq!(sent[3]["message"]["stage"], "priority");
+    assert_eq!(sent[3]["message"]["stage"], "priority#p1");
     assert_eq!(sent[3]["message"]["previous_result_event_id"], "ev-2");
-    assert!(!r.questions("priority").is_empty());
+    assert!(!r.questions("priority#p1").is_empty());
 }
 
 #[test]
@@ -364,10 +374,10 @@ fn a_step_repeated_after_a_score_scores_nothing_twice_and_resends_the_same_input
     r.running(Value::Null);
     r.step();
     r.step();
-    let a = r.answers("type");
+    let a = r.answers("type#p1");
     r.answered(a, "ev-1");
     let next = || Stepped::Sent {
-        stage: "area".into(),
+        stage: "area#p1".into(),
         round: 1,
     };
     assert_eq!(r.step(), next());
@@ -474,8 +484,8 @@ fn a_manifest_prepared_for_the_key_after_the_stage_was_sent_leaves_the_launch_s_
     let r = run();
     r.running(Value::Null);
     r.step();
-    assert_eq!(r.step(), Stepped::Sent { stage: "type".into(), round: 1 });
-    let a = r.answers("type");
+    assert_eq!(r.step(), Stepped::Sent { stage: "type#p1".into(), round: 1 });
+    let a = r.answers("type#p1");
     // `eval prepare` by hand, over a history that has since changed: the key's manifest.
     store_held_out_gone(&r);
     let c = ConfigSet::load(r.t.path()).unwrap();
@@ -485,7 +495,7 @@ fn a_manifest_prepared_for_the_key_after_the_stage_was_sent_leaves_the_launch_s_
         .read(|l| eval::prepare(l.conn(), r.t.path(), &c, &st.replay, st.stage, &[], &out, None))
         .unwrap();
     r.answered(a, "ev-1");
-    assert_eq!(r.step(), Stepped::Sent { stage: "area".into(), round: 1 });
+    assert_eq!(r.step(), Stepped::Sent { stage: "area#p1".into(), round: 1 });
     assert_eq!(r.evaluated(), 1);
 }
 
@@ -494,12 +504,12 @@ fn a_history_change_mid_launch_keeps_the_plan_recorded_at_its_first_stage() {
     let r = run();
     r.running(Value::Null);
     r.step();
-    assert_eq!(r.step(), Stepped::Sent { stage: "type".into(), round: 1 });
+    assert_eq!(r.step(), Stepped::Sent { stage: "type#p1".into(), round: 1 });
     store_held_out_gone(&r);
     assert_eq!(stage_names(&r), ["type"], "today's plan is type alone");
-    let a = r.answers("type");
+    let a = r.answers("type#p1");
     r.answered(a, "ev-1");
-    assert_eq!(r.step(), Stepped::Sent { stage: "area".into(), round: 1 }, "not an early finish");
+    assert_eq!(r.step(), Stepped::Sent { stage: "area#p1".into(), round: 1 }, "not an early finish");
 }
 
 #[test]
@@ -551,7 +561,7 @@ fn a_launch_with_nothing_to_evaluate_yet_starts_once_history_has_it() {
     for h in &saved {
         history::save(r.t.path(), h).unwrap();
     }
-    assert_eq!(r.step(), Stepped::Sent { stage: "type".into(), round: 1 });
+    assert_eq!(r.step(), Stepped::Sent { stage: "type#p1".into(), round: 1 });
 }
 
 #[test]
@@ -561,13 +571,13 @@ fn a_history_change_between_a_two_stage_decision_s_stages_keeps_the_launch_going
     r.step();
     for n in 0..3 {
         let Stepped::Sent { stage, round: 1 } = r.step() else { panic!("stage {n}") };
-        if stage == "priority-first" {
+        if stage == "priority-first#p1" {
             store_held_out_gone(&r);
         }
         let a = r.answers(&stage);
         r.answered(a, &format!("ev-{n}"));
     }
-    assert_eq!(r.step(), Stepped::Sent { stage: "priority".into(), round: 1 });
+    assert_eq!(r.step(), Stepped::Sent { stage: "priority#p1".into(), round: 1 });
 }
 
 #[test]
@@ -576,16 +586,228 @@ fn answers_to_only_some_of_the_questions_draw_a_correction_naming_the_unanswered
     r.running(Value::Null);
     r.step();
     r.step();
-    let mut a = r.answers("type");
+    let mut a = r.answers("type#p1");
     a["answers"].as_array_mut().unwrap().remove(0);
     r.answered(a, "ev-1");
-    assert_eq!(r.step(), Stepped::Sent { stage: "type".into(), round: 2 });
+    assert_eq!(r.step(), Stepped::Sent { stage: "type#p1".into(), round: 2 });
     let refused = r.sent().pop().unwrap()["message"]["content"]["refused"].to_string();
     assert!(refused.contains("1 questions are unanswered"), "{refused}");
     assert_eq!(r.evaluated(), 0);
 }
 
-// --- The loop's tick (4.3) -------------------------------------------------------------------
+// --- Stages in parts (D6) --------------------------------------------------------------------
+
+/// A budget that cuts every fixture stage into several parts.
+const SMALL_PART: usize = 6_000;
+
+/// The cut recorded for `stage`: its parts' question ids, in order.
+fn recorded_cut(r: &Run, stage: &str) -> Vec<Vec<String>> {
+    fn find(dir: &std::path::Path, tail: &std::path::Path, out: &mut Vec<PathBuf>) {
+        for e in fs::read_dir(dir).unwrap() {
+            let p = e.unwrap().path();
+            if p.ends_with(tail) {
+                out.push(p.clone());
+            }
+            if p.is_dir() {
+                find(&p, tail, out);
+            }
+        }
+    }
+    let mut found = Vec::new();
+    find(r.t.path(), &PathBuf::from("parts").join(stage).join("cut.json"), &mut found);
+    assert_eq!(found.len(), 1, "one cut recorded for {stage}: {found:?}");
+    serde_json::from_str(&fs::read_to_string(&found[0]).unwrap()).unwrap()
+}
+
+/// What an `evaluated` event says about the scoring, without what names the launch.
+fn scores(r: &Run) -> Vec<Value> {
+    r.t.root
+        .read(|l| ledger::events_by_kind(l.conn(), Kind::Evaluated))
+        .unwrap()
+        .into_iter()
+        .map(|e| {
+            let d = e.data;
+            json!([d["decision"], d["n"], d["n_tuning"], d["accuracy"], d["ece"], d["t"], d["uncalibratable"]])
+        })
+        .collect()
+}
+
+fn ids(questions: &[Value]) -> Vec<String> {
+    questions.iter().map(|q| q["id"].as_str().unwrap().to_string()).collect()
+}
+
+#[test]
+fn a_stage_in_parts_is_sent_part_by_part_and_scored_once_as_if_whole() {
+    let whole = run();
+    whole.drive_to_finish();
+    let r = run();
+    r.part_bytes.set(SMALL_PART);
+    r.running(Value::Null);
+    assert_eq!(r.step(), Stepped::RecordedStarted);
+    // (part sent, scores recorded when it was sent)
+    let mut sends: Vec<(String, usize)> = Vec::new();
+    for n in 0..200 {
+        match r.step() {
+            Stepped::Sent { stage, round: 1 } => {
+                sends.push((stage.clone(), r.evaluated()));
+                r.answered(r.answers(&stage), &format!("ev-{n}"));
+            }
+            Stepped::Finish => break,
+            other => panic!("after {sends:?}: {other:?}"),
+        }
+    }
+    for st in STAGES {
+        let cut = recorded_cut(&r, st);
+        assert!(cut.len() >= 2, "{st} is not cut at {SMALL_PART} bytes: the test tests nothing");
+        let parts: Vec<&(String, usize)> = sends.iter().filter(|(s, _)| s.starts_with(&format!("{st}#p"))).collect();
+        let names: Vec<String> = parts.iter().map(|(s, _)| s.clone()).collect();
+        let expected: Vec<String> = (1..=cut.len()).map(|n| format!("{st}#p{n}")).collect();
+        assert_eq!(names, expected, "{st}'s parts, in order, once each");
+        // Every part of a stage is sent before any of it is scored.
+        assert!(parts.iter().all(|(_, e)| *e == parts[0].1), "{st} was scored before its last part: {parts:?}");
+        // The parts together ask exactly what the whole stage asks, in the same order.
+        let asked: Vec<String> = expected.iter().flat_map(|p| ids(&r.questions(p))).collect();
+        assert_eq!(asked, ids(&whole.questions(&format!("{st}#p1"))), "{st}'s questions");
+        assert_eq!(asked, cut.concat(), "{st}'s parts follow its recorded cut");
+    }
+    assert_eq!(scores(&r), scores(&whole), "parts score as the whole stage does");
+    assert_eq!(r.evaluated(), 3);
+}
+
+fn question(id: &str, pad: usize) -> Value {
+    json!({"id": id, "body": "x".repeat(pad)})
+}
+
+#[test]
+fn a_cut_keeps_each_question_once_in_order_and_each_part_within_its_budget() {
+    let qs: Vec<Value> = (0..40).map(|i| question(&format!("q{i}"), (i * 37) % 300)).collect();
+    for budget in [1, 150, 400, 1_000, 100_000] {
+        let cut = runner::cut(&qs, budget).unwrap();
+        assert_eq!(cut.concat(), ids(&qs), "budget {budget}: each question once, in order");
+        assert!(cut.iter().all(|p| !p.is_empty()), "budget {budget}: an empty part");
+        let size = |id: &String| serde_json::to_vec(qs.iter().find(|q| q["id"] == *id.as_str()).unwrap()).unwrap().len();
+        for p in &cut {
+            let total: usize = p.iter().map(size).sum();
+            assert!(total <= budget || p.len() == 1, "budget {budget}: part {p:?} is {total} bytes");
+        }
+        // Greedy: no part could have taken its successor's first question.
+        for w in cut.windows(2) {
+            let total: usize = w[0].iter().map(size).sum::<usize>() + size(&w[1][0]);
+            assert!(total > budget, "budget {budget}: {:?} would have fit in {:?}", w[1][0], w[0]);
+        }
+    }
+    // A question over the budget is a part alone, between parts that are not.
+    let qs = vec![question("a", 10), question("big", 500), question("b", 10), question("c", 10)];
+    assert_eq!(runner::cut(&qs, 100).unwrap(), vec![vec!["a"], vec!["big"], vec!["b", "c"]]);
+    assert!(runner::cut(&[], 100).unwrap().is_empty());
+    assert!(runner::cut(&[json!({"body": "no id"})], 100).is_err());
+}
+
+#[test]
+fn a_transfer_key_is_refused_past_128_bytes() {
+    let token = "t".repeat(100);
+    let file = "f".repeat(128 - 100 - "-type#p1-".len());
+    assert_eq!(runner::transfer_key(&token, "type#p1", &file).unwrap().len(), 128);
+    assert!(runner::transfer_key(&token, "type#p1", &format!("{file}x")).is_err());
+}
+
+/// `r`, cut small, with part 1 of type accepted and part 2 sent.
+fn at_second_part() -> Run {
+    let r = run();
+    r.part_bytes.set(SMALL_PART);
+    r.running(Value::Null);
+    r.step();
+    assert_eq!(r.step(), Stepped::Sent { stage: "type#p1".into(), round: 1 });
+    r.answered(r.answers("type#p1"), "ev-1");
+    assert_eq!(r.step(), Stepped::Sent { stage: "type#p2".into(), round: 1 });
+    r
+}
+
+#[test]
+fn an_answer_to_a_question_of_another_part_draws_a_correction() {
+    let r = run();
+    r.part_bytes.set(SMALL_PART);
+    r.running(Value::Null);
+    r.step();
+    r.step();
+    let elsewhere = recorded_cut(&r, "type")[1][0].clone();
+    let mut a = r.answers("type#p1");
+    let mut stray = a["answers"][0].clone();
+    stray["question"] = json!(elsewhere);
+    a["answers"].as_array_mut().unwrap().push(stray);
+    r.answered(a, "ev-1");
+    assert_eq!(r.step(), Stepped::Sent { stage: "type#p1".into(), round: 2 });
+    let refused = r.sent().pop().unwrap()["message"]["content"]["refused"].to_string();
+    assert!(refused.contains("not in this part") && refused.contains(&elsewhere), "{refused}");
+}
+
+#[test]
+fn a_repeated_step_mid_stage_resends_the_same_part_and_follows_the_recorded_cut() {
+    let r = at_second_part();
+    let once = r.sent().pop().unwrap();
+    let cut = recorded_cut(&r, "type");
+    // A restart under another budget: the recorded cut still rules.
+    r.part_bytes.set(usize::MAX);
+    r.fake.calls.lock().unwrap().clear();
+    assert_eq!(r.step(), Stepped::Sent { stage: "type#p2".into(), round: 1 });
+    assert_eq!(r.sent().pop().unwrap(), once, "the same interaction, the same content");
+    assert_eq!(recorded_cut(&r, "type"), cut);
+    assert_eq!(ids(&r.questions("type#p2")), cut[1]);
+    assert_eq!(r.evaluated(), 0);
+}
+
+#[test]
+fn a_part_refused_a_fourth_time_archives_the_worker() {
+    let r = at_second_part();
+    let wrong = json!({"backend": BACKEND, "answers": []});
+    for round in 2..=4 {
+        r.answered(wrong.clone(), &format!("ev-{round}"));
+        assert_eq!(r.step(), Stepped::Sent { stage: "type#p2".into(), round });
+    }
+    r.answered(wrong, "ev-5");
+    assert_eq!(r.step(), Stepped::Archived);
+    assert_eq!(r.evaluated(), 0);
+}
+
+#[test]
+fn a_missing_accepted_part_stops_the_stage_unscored() {
+    let r = run();
+    r.part_bytes.set(SMALL_PART);
+    r.running(Value::Null);
+    r.step();
+    assert_eq!(r.step(), Stepped::Sent { stage: "type#p1".into(), round: 1 });
+    let parts = recorded_cut(&r, "type").len();
+    for n in 1..=parts {
+        let stage = format!("type#p{n}");
+        if n > 1 {
+            assert_eq!(r.step(), Stepped::Sent { stage: stage.clone(), round: 1 });
+        }
+        r.answered(r.answers(&stage), &format!("ev-{n}"));
+    }
+    let kept = {
+        let mut found = Vec::new();
+        fn find(dir: &std::path::Path, out: &mut Vec<PathBuf>) {
+            for e in fs::read_dir(dir).unwrap() {
+                let p = e.unwrap().path();
+                if p.ends_with("parts/type/1.json") {
+                    out.push(p.clone());
+                }
+                if p.is_dir() {
+                    find(&p, out);
+                }
+            }
+        }
+        find(r.t.path(), &mut found);
+        found.pop().expect("part 1 of type was kept")
+    };
+    fs::remove_file(kept).unwrap();
+    let sent = r.sent().len();
+    let err = r.try_step().expect_err("a stage scored without its first part");
+    assert!(err.to_string().contains("part 1"), "{err}");
+    assert_eq!((r.evaluated(), r.sent().len()), (0, sent));
+}
+
+// --- The loop's tick (4.3)-------------------------------------------------------------------
 
 /// A refresher whose refreshes succeed while `ok` holds, recording each project it is asked for.
 fn refresher(ok: Arc<Mutex<bool>>, asked: Arc<Mutex<Vec<String>>>) -> Refresher {
@@ -605,6 +827,7 @@ fn tick_at(r: &Run, refresher: &mut Refresher, at: DateTime<Utc>) -> Tick {
         bridge: &r.fake,
         files: &r.files,
         now: &clock,
+        part_bytes: r.part_bytes.get(),
     };
     service::tick(&cx, refresher).unwrap()
 }
@@ -852,7 +1075,7 @@ fn idle_blocked(t: &Tick) -> bool {
 fn an_idle_worker_waiting_for_its_first_stage_is_sent_it() {
     let (r, _) = started_run();
     idle(&r, Value::Null);
-    assert_eq!(r.step(), Stepped::Sent { stage: "type".into(), round: 1 });
+    assert_eq!(r.step(), Stepped::Sent { stage: "type#p1".into(), round: 1 });
 }
 
 #[test]
@@ -881,7 +1104,7 @@ fn an_idle_worker_seen_twice_is_resent_the_same_input_and_its_bound_keeps_its_st
 #[test]
 fn a_worker_idle_past_ten_minutes_is_archived_and_its_launch_ends_failed() {
     let (r, mut rf) = started_run();
-    assert_eq!(r.step(), Stepped::Sent { stage: "type".into(), round: 1 });
+    assert_eq!(r.step(), Stepped::Sent { stage: "type#p1".into(), round: 1 });
     let m = r.sent().pop().unwrap()["message"].clone();
     idle(&r, json!({"input": m, "result": null, "result_event_id": null}));
     let t = tick_at(&r, &mut rf, now());
@@ -1047,6 +1270,7 @@ fn admit(t: &TempRoot, ready: &[(&str, bool)]) -> Vec<String> {
         bridge: &fake,
         files: &files,
         now: &now,
+        part_bytes: runner::PART_BYTES,
     };
     runner::admit(&cx, &health).unwrap()
 }

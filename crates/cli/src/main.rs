@@ -653,6 +653,7 @@ fn serve(root: &Root, dir: &Path, now: impl Fn() -> DateTime<Utc> + Copy) -> any
                 bridge: &child,
                 files: &files,
                 now: &now,
+                part_bytes: issue_dashboard_core::runner::PART_BYTES,
             };
             match service::tick(&cx, &mut refresher) {
                 Ok(t) => {
