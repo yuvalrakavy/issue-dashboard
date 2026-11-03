@@ -52,6 +52,11 @@ fn a_runner_eval_brief_has_the_worker_answer_staged_files_and_run_no_command() {
     for needed in ["stage_input", "stage_result", "\"answers\"", "launch_result", "correction"] {
         assert!(text.contains(needed), "the brief does not mention {needed}:\n{text}");
     }
+    // Run A's worker, told only that attachments hold the questions, read them with a shell and
+    // stalled on a permission prompt per stage: the brief names the one way to read them.
+    for needed in ["agentbridge_native_snapshot", "transfer", "offset", "no shell command"] {
+        assert!(text.contains(needed), "the brief does not say how to read attachments ({needed}):\n{text}");
+    }
     // The dispatcher's eval brief is unchanged: its session still runs the commands.
     let dispatcher = eval_brief(None);
     assert!(dispatcher.contains("issue-dashboard eval prepare"), "{dispatcher}");
@@ -705,6 +710,48 @@ fn the_worker_s_question_is_shown_as_the_launch_s_reason_until_it_moves_on() {
     tick_at(&r, &mut rf, now());
     let reasons = launch_reasons(&r);
     assert!(reasons.iter().all(|w| !w.contains("asked a question")), "{reasons:?}");
+}
+
+/// Run A's worker sat on a permission prompt for half an hour holding the only read-only slot.
+#[test]
+fn a_worker_waiting_on_a_prompt_past_ten_minutes_is_archived_and_its_launch_ends_failed() {
+    let r = run();
+    r.running(Value::Null);
+    assert_eq!(r.step(), Stepped::RecordedStarted);
+    r.status(json!({"operation_id": r.token, "state": "waiting_user"}));
+    let mut rf = refresher(Arc::new(Mutex::new(true)), Arc::new(Mutex::new(Vec::new())));
+    tick_at(&r, &mut rf, now());
+    let t = tick_at(&r, &mut rf, now() + Duration::minutes(10) + Duration::seconds(1));
+    assert!(
+        matches!(&t.stepped[..], [(_, Ok(Stepped::Blocked(why)))] if why.contains("blocked on a prompt")),
+        "{t:?}"
+    );
+    assert_eq!(r.fake.calls_to("archive").len(), 1);
+    r.status(json!({"operation_id": r.token, "state": "archived", "result": null}));
+    let t = tick_at(&r, &mut rf, now() + Duration::minutes(11));
+    assert_eq!(t.stepped, vec![(r.token.clone(), Ok(Stepped::Ended(EndState::Failed)))]);
+}
+
+/// The bound runs from when the CURRENT question was asked: an earlier one the worker moved
+/// past does not count toward it.
+#[test]
+fn a_question_under_ten_minutes_old_keeps_waiting_however_long_the_launch_has_run() {
+    let r = run();
+    r.running(Value::Null);
+    assert_eq!(r.step(), Stepped::RecordedStarted);
+    let mut rf = refresher(Arc::new(Mutex::new(true)), Arc::new(Mutex::new(Vec::new())));
+    r.status(json!({"operation_id": r.token, "state": "waiting_user"}));
+    tick_at(&r, &mut rf, now());
+    // The worker moves on, and the launch shows another reason for over ten minutes before the
+    // worker asks again.
+    r.status(json!({"operation_id": r.token, "state": "started", "native_session_id": SESSION, "routing": {"verified": false}}));
+    tick_at(&r, &mut rf, now() + Duration::minutes(2));
+    assert_eq!(launch_reasons(&r), ["routing not verified yet"]);
+    r.status(json!({"operation_id": r.token, "state": "waiting_user"}));
+    tick_at(&r, &mut rf, now() + Duration::minutes(13));
+    let t = tick_at(&r, &mut rf, now() + Duration::minutes(20));
+    assert!(matches!(&t.stepped[..], [(_, Ok(Stepped::Waiting(_)))]), "{t:?}");
+    assert!(r.fake.calls_to("archive").is_empty());
 }
 
 #[test]

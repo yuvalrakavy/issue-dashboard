@@ -743,7 +743,11 @@ fn runner_eval(b: &mut Builder, l: &Launch) {
          only those, then reply with a stage_result on the same stage and round whose content \
          is `{{\"backend\": \"{backend}\", \"answers\": [...]}}`: one entry per question, with \
          `question` (its id), `probabilities` (one per allowed answer) and `reason`. Then wait \
-         for the next stage_input.\n\nA stage_input with a higher round is a correction: its \
+         for the next stage_input.\n\nRead each attachment with the \
+         `agentbridge_native_snapshot` tool, `transfer` action `read` on its `transfer_id`, \
+         paging with `offset` and `length` (at most 65536 bytes a call) until you have the whole \
+         file. Run no shell command: everything you need arrives through that tool.\n\nA \
+         stage_input with a higher round is a correction: its \
          content lists what was refused. Fix those entries and reply with the whole answer set \
          for that round again. Priority comes in two stages, priority-first and then priority, \
          whose input holds your first-stage answers.\n\nAnswer from each input alone; you have \

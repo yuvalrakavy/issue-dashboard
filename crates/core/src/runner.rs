@@ -28,6 +28,10 @@ use crate::{Error, Result, Root, runner_status};
 /// Corrections after a stage's first round (2.5); the next refusal ends the launch failed.
 pub const MAX_CORRECTIONS: u32 = 3;
 
+/// How long a worker may wait on one question (a permission prompt arrives as one) before
+/// the runner archives it: an unanswered prompt otherwise holds its pool slot forever.
+pub const QUESTION_BOUND_MINUTES: i64 = 10;
+
 /// How long one step waits for a staged file to be ready before it leaves it to the next.
 const STAGING_WAIT: Duration = Duration::from_secs(30);
 
@@ -53,6 +57,9 @@ pub enum Stepped {
     Finish,
     /// The worker was archived; the next step ends the launch.
     Archived,
+    /// The worker sat on one question past [`QUESTION_BOUND_MINUTES`] and was archived; the
+    /// next step ends the launch failed, freeing its slot.
+    Blocked(String),
     Ended(EndState),
     /// Released as never started (row 6).
     ReleasedNeverStarted,
@@ -286,11 +293,27 @@ pub fn step(cx: &Ctx<'_>, token: &str) -> Result<Stepped> {
                 _ => Ok(Stepped::Waiting("routing not verified yet".into())),
             }
         }
-        "waiting_user" => Ok(Stepped::Waiting(match &s.reason {
-            Value::Null => "the worker asked a question".into(),
-            Value::String(q) => format!("the worker asked a question: {q}"),
-            q => format!("the worker asked a question: {q}"),
-        })),
+        "waiting_user" => {
+            let why = match &s.reason {
+                Value::Null => "the worker asked a question".to_string(),
+                Value::String(q) => format!("the worker asked a question: {q}"),
+                q => format!("the worker asked a question: {q}"),
+            };
+            // The reason's `since` is when THIS question was first shown (`runner_status::hold`
+            // keeps it while the reason is unchanged), so an earlier question does not count.
+            let asked = cx.root.read(|led| runner_status::held(led.conn()))?.into_iter().find(|h| h.launch == l.id);
+            let blocked = match asked.filter(|h| h.reason == why) {
+                Some(h) => (cx.now)() - crate::root::parse_time(&h.since)? > chrono::Duration::minutes(QUESTION_BOUND_MINUTES),
+                None => false,
+            };
+            if !blocked {
+                return Ok(Stepped::Waiting(why));
+            }
+            bridge::archive(cx.bridge, token, &format!("{token}-blocked"))?;
+            Ok(Stepped::Blocked(format!(
+                "the worker was blocked on a prompt for over {QUESTION_BOUND_MINUTES} minutes and was archived ({why})"
+            )))
+        }
         other => Ok(Stepped::Held(format!("AgentBridge reports {other} ({})", s.reason))),
     }
 }
