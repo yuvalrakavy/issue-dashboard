@@ -290,3 +290,15 @@ the harness traps to a hook message or the build-brief template.
 - improve: `runner status` shows no waiting row between steps (seen 8 times in A⁶), so a watch
   must not read a blank reason as a stop; and a watch's terminal-state list comes from
   `launch.rs`'s `State` enum (`released` follows `ended` in one transaction), not from memory.
+
+## 2026-11-04 outbox pruning (T1)
+- time: about 40 min from noticing to live (found while staging data for a UX review).
+- catches: noticed in passing (3,031 outboxes, 2.1 GB, never removed); mutation=5/5 red;
+  gate=Codex adversarial approve, no findings. Live: 2.1 GB → 2.4 MB on the first sync.
+- DG=n/a IG=0 post-merge=0
+- tier-call: right (T1: one prune beside the existing atomic write).
+- delegation: depth Codex adversarial-review `--wait`.
+- unconsolidated: 3
+- improve: hazards §1 also asks "what removes each file this writes?" — spec 10.6 deleted old
+  page generations but never named the local file's end; every writer of a per-run file names
+  its remover in the same chapter.
