@@ -294,3 +294,7 @@ before UI chapters".
 | 3.4 | a rollback is saved in `runner.json`; the service refuses to start until `runner pin --accept-rollback` | the flag must outlive the process | — |
 | 4.3 | `wait` (≤ 5 s) is the poll; the cursor is the largest event `sequence`; history refreshes run on threads, held in memory (a restart refreshes again) | one loop, no stall on `gh` | — |
 | 1.3 | `runner launchagent` prints the plist/unit only; launchd cannot skip a restart on exit 1, so `ThrottleInterval` 60 | install is the owner's | — |
+| 2.5, 2.6 | a launch's manifests and its plan (`plan.json`, written at its first stage) live under `launches/<id>/`; its score skips 3.2's re-verify | another eval's refresh or a hand `prepare` must not change what it was asked | gate fix |
+| 2.6 | answers must cover every question of the stage, else a correction | a partial answer would score as unanswered | gate fix |
+| 3.1, 4.3 | a reserved eval asks `status` before its refresh gate; every held/waiting/failed step is its reason row (a question shows its text) | a known token is reconciled whatever GitHub does | gate fix |
+| 1.2 | `runner init` reads `state_dir` from the connector config | the one checked is the one the connector writes | gate fix |

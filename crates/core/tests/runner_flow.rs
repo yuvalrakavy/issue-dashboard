@@ -16,6 +16,7 @@ use issue_dashboard_core::bridge::fake::{Answer, Fake};
 use issue_dashboard_core::brief;
 use issue_dashboard_core::config::ConfigSet;
 use issue_dashboard_core::docs::LaunchKind;
+use issue_dashboard_core::eval;
 use issue_dashboard_core::event::Kind;
 use issue_dashboard_core::github::Replay as GhReplay;
 use issue_dashboard_core::history::{self, HistoryItem, LabelChange};
@@ -79,8 +80,9 @@ fn run() -> Run {
     run_with(true)
 }
 
-/// `run`, with the Store issues only when `store`: without them only type has held-out
-/// examples in the recorded history.
+/// `run`, with every Store issue only when `store`: otherwise only the Store issues that are
+/// tuning items, so area and priority have candidates but no held-out one, and only type has
+/// held-out examples.
 fn run_with(store: bool) -> Run {
     let t = fixture_root();
     let gh = GhReplay::load(&fixtures().join("history-replay")).unwrap();
@@ -112,8 +114,9 @@ fn run_with(store: bool) -> Run {
             comments: Vec::new(),
             ..base.clone()
         })
-        .filter(|_| store)
+        .filter(|i| store || eval::is_tuning(&i.id))
         .collect();
+    assert!(store || !s.items.is_empty(), "no Store issue is a tuning item: the fixture tests nothing");
     history::save(t.path(), &s).unwrap();
     let mut doc = launch_of("E1", LaunchKind::Eval, &[]);
     doc.routing.harness = Some("Codex".into());
@@ -259,6 +262,14 @@ fn an_eval_is_staged_one_replay_key_at_a_time_priority_s_first_stage_before_it()
 fn a_replay_with_no_held_out_example_is_left_out_of_the_plan() {
     // Area and priority have truths only among tuning items here: score would refuse them.
     assert_eq!(stage_names(&run_with(false)), ["type"]);
+}
+
+#[test]
+fn a_transfer_key_over_128_bytes_is_refused() {
+    let key = runner::transfer_key(&"t".repeat(100), "type", &"f".repeat(22)).unwrap();
+    assert_eq!(key.len(), 128);
+    let refused = runner::transfer_key(&"t".repeat(100), "type", &"f".repeat(23));
+    assert!(matches!(refused, Err(issue_dashboard_core::Error::Refused(m)) if m.contains("over 128 bytes")));
 }
 
 #[test]
@@ -445,6 +456,81 @@ fn a_question_waits_a_failed_status_call_is_an_error_and_an_unknown_state_holds(
     assert!(matches!(r.step(), Stepped::Held(_)));
 }
 
+/// The Store history keeps only its tuning items: area and priority lose every held-out
+/// example, and type loses some of its questions.
+fn store_held_out_gone(r: &Run) {
+    let mut s = history::load(r.t.path(), STORE).unwrap().unwrap();
+    s.items.retain(|i| eval::is_tuning(&i.id));
+    history::save(r.t.path(), &s).unwrap();
+}
+
+#[test]
+fn a_manifest_prepared_for_the_key_after_the_stage_was_sent_leaves_the_launch_s_own_alone() {
+    let r = run();
+    r.running(Value::Null);
+    r.step();
+    assert_eq!(r.step(), Stepped::Sent { stage: "type".into(), round: 1 });
+    let a = r.answers("type");
+    // `eval prepare` by hand, over a history that has since changed: the key's manifest.
+    store_held_out_gone(&r);
+    let c = ConfigSet::load(r.t.path()).unwrap();
+    let st = runner::eval_stages(&r.t.root, &c, "home", BACKEND).unwrap().remove(0);
+    let out = r.t.path().join("by-hand");
+    r.t.root
+        .read(|l| eval::prepare(l.conn(), r.t.path(), &c, &st.replay, st.stage, &[], &out, None))
+        .unwrap();
+    r.answered(a, "ev-1");
+    assert_eq!(r.step(), Stepped::Sent { stage: "area".into(), round: 1 });
+    assert_eq!(r.evaluated(), 1);
+}
+
+#[test]
+fn a_history_change_mid_launch_keeps_the_plan_recorded_at_its_first_stage() {
+    let r = run();
+    r.running(Value::Null);
+    r.step();
+    assert_eq!(r.step(), Stepped::Sent { stage: "type".into(), round: 1 });
+    store_held_out_gone(&r);
+    assert_eq!(stage_names(&r), ["type"], "today's plan is type alone");
+    let a = r.answers("type");
+    r.answered(a, "ev-1");
+    assert_eq!(r.step(), Stepped::Sent { stage: "area".into(), round: 1 }, "not an early finish");
+}
+
+#[test]
+fn a_launch_whose_plan_is_empty_or_missing_never_lands() {
+    let r = run();
+    let dir = eval::launch_dir(r.t.path(), "home", BACKEND, "E1");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("plan.json"), "[]").unwrap();
+    r.running(Value::Null);
+    r.step();
+    assert!(matches!(r.step(), Stepped::Held(_)));
+    finished(&r, "archived", "landed");
+    assert_eq!(r.step(), Stepped::Ended(EndState::Failed), "an empty plan");
+
+    let r = run();
+    r.drive_to_finish();
+    fs::remove_file(eval::launch_dir(r.t.path(), "home", BACKEND, "E1").join("plan.json")).unwrap();
+    finished(&r, "archived", "landed");
+    assert_eq!(r.step(), Stepped::Ended(EndState::Failed), "a missing plan");
+}
+
+#[test]
+fn answers_to_only_some_of_the_questions_draw_a_correction_naming_the_unanswered() {
+    let r = run();
+    r.running(Value::Null);
+    r.step();
+    r.step();
+    let mut a = r.answers("type");
+    a["answers"].as_array_mut().unwrap().remove(0);
+    r.answered(a, "ev-1");
+    assert_eq!(r.step(), Stepped::Sent { stage: "type".into(), round: 2 });
+    let refused = r.sent().pop().unwrap()["message"]["content"]["refused"].to_string();
+    assert!(refused.contains("1 questions are unanswered"), "{refused}");
+    assert_eq!(r.evaluated(), 0);
+}
+
 // --- The loop's tick (4.3) -------------------------------------------------------------------
 
 /// A refresher whose refreshes succeed while `ok` holds, recording each project it is asked for.
@@ -546,6 +632,33 @@ fn a_rollback_found_by_a_step_stops_the_tick_before_any_other_launch_is_stepped(
 }
 
 #[test]
+fn a_reserved_eval_agentbridge_already_started_is_recorded_without_waiting_for_a_refresh() {
+    let r = run();
+    r.running(Value::Null);
+    let asked = Arc::new(Mutex::new(Vec::new()));
+    let mut rf = refresher(Arc::new(Mutex::new(false)), asked.clone());
+    let t = tick_at(&r, &mut rf, now());
+    assert_eq!(t.stepped, vec![(r.token.clone(), Ok(Stepped::RecordedStarted))]);
+    assert_eq!(r.state(), State::Started);
+    rf.settle(std::time::Duration::from_secs(10), now());
+    assert!(asked.lock().unwrap().is_empty(), "a refresh only gates a start");
+}
+
+#[test]
+fn the_worker_s_question_is_shown_as_the_launch_s_reason_until_it_moves_on() {
+    let r = run();
+    r.status(json!({"operation_id": r.token, "state": "waiting_user", "reason": "which repo?"}));
+    let mut rf = refresher(Arc::new(Mutex::new(true)), Arc::new(Mutex::new(Vec::new())));
+    tick_at(&r, &mut rf, now());
+    assert_eq!(launch_reasons(&r), ["the worker asked a question: which repo?"]);
+    r.running(Value::Null);
+    tick_at(&r, &mut rf, now());
+    tick_at(&r, &mut rf, now());
+    let reasons = launch_reasons(&r);
+    assert!(reasons.iter().all(|w| !w.contains("asked a question")), "{reasons:?}");
+}
+
+#[test]
 fn a_reason_for_a_launch_that_no_longer_waits_is_forgotten() {
     let r = run();
     r.t.root
@@ -553,7 +666,9 @@ fn a_reason_for_a_launch_that_no_longer_waits_is_forgotten() {
         .unwrap();
     let mut rf = refresher(Arc::new(Mutex::new(true)), Arc::new(Mutex::new(Vec::new())));
     tick_at(&r, &mut rf, now());
-    assert_eq!(launch_reasons(&r), Vec::<String>::new());
+    let held: Vec<String> =
+        r.t.root.read(|l| runner_status::held(l.conn())).unwrap().into_iter().map(|h| h.launch).collect();
+    assert!(!held.contains(&"GONE".to_string()), "{held:?}");
 }
 
 // --- Admission (4.2) -------------------------------------------------------------------------

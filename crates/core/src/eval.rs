@@ -582,7 +582,8 @@ impl Manifest {
 }
 
 /// What a replay is about.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Replay {
     pub project: String,
     pub decision: String,
@@ -835,10 +836,20 @@ pub fn answer_errors(
     r: &Replay,
     stage: EvalStage,
     answers: &[EvalAnswers],
+    launch: &str,
 ) -> Result<Vec<String>> {
-    let path = manifest_path(root, &r.project, &r.backend, &r.decision, r.repo.as_deref(), stage);
+    let path = manifest_path(root, &r.project, &r.backend, &r.decision, r.repo.as_deref(), stage, Some(launch));
     let m = load_manifest(&path)?;
-    answers_checked(Catalogue::embedded(), config, &m, answers).map(|(_, errors)| errors)
+    let (_, mut errors) = answers_checked(Catalogue::embedded(), config, &m, answers)?;
+    // The runner's worker answers every question: a gap is a correction, not a smaller score.
+    let given: BTreeSet<&str> = answers.iter().flat_map(|f| &f.answers).map(|a| a.question.as_str()).collect();
+    let missing: Vec<&str> = m.questions.iter().map(|q| q.id.as_str()).filter(|id| !given.contains(id)).collect();
+    if !missing.is_empty() {
+        let shown = missing.iter().take(20).copied().collect::<Vec<_>>().join(", ");
+        let more = if missing.len() > 20 { ", …" } else { "" };
+        errors.push(format!("{} questions are unanswered: {shown}{more}", missing.len()));
+    }
+    Ok(errors)
 }
 
 /// Builds a replay's questions (3.2) from history and the ledger: the manifest's stage, its
@@ -962,7 +973,9 @@ pub fn build(
     })
 }
 
-/// Where a replay's manifest is kept: one per key and stage, the latest prepare's.
+/// Where a replay's manifest is kept: one per key and stage, the latest prepare's. A launch's
+/// own (`launch`) sits under [`launch_dir`], so no other prepare of the key replaces the
+/// manifest its answers are checked and scored against.
 pub fn manifest_path(
     root: &Path,
     project: &str,
@@ -970,13 +983,23 @@ pub fn manifest_path(
     decision: &str,
     repo: Option<&str>,
     stage: EvalStage,
+    launch: Option<&str>,
 ) -> PathBuf {
     let stage = match stage {
         EvalStage::First => "first",
         EvalStage::Scored => "replay",
     };
     let repo = repo.map(|r| format!("-{}", segment(r))).unwrap_or_default();
-    key_dir(root, project, backend).join(format!("{decision}{repo}.{stage}.manifest.json"))
+    let dir = match launch {
+        Some(l) => launch_dir(root, project, backend, l),
+        None => key_dir(root, project, backend),
+    };
+    dir.join(format!("{decision}{repo}.{stage}.manifest.json"))
+}
+
+/// A launch's own eval files: its manifests and its recorded plan (runner spec 2.5).
+pub fn launch_dir(root: &Path, project: &str, backend: &str, launch: &str) -> PathBuf {
+    key_dir(root, project, backend).join("launches").join(segment(launch))
 }
 
 fn load_manifest(path: &Path) -> Result<Manifest> {
@@ -1104,7 +1127,8 @@ fn stage_one_answers(
 }
 
 /// `eval prepare` (3.2): writes the tuning and held-out question files into `out` and the
-/// manifest under `state/evals/`. Priority's scored stage needs the first stage's answers.
+/// manifest under `state/evals/` (a launch's own when `launch`, [`manifest_path`]). Priority's
+/// scored stage needs the first stage's answers.
 #[allow(clippy::too_many_arguments)]
 pub fn prepare(
     conn: &Connection,
@@ -1114,6 +1138,7 @@ pub fn prepare(
     stage: EvalStage,
     first_answers: &[EvalAnswers],
     out: &Path,
+    launch: Option<&str>,
 ) -> Result<PrepareReport> {
     let cat = Catalogue::embedded();
     let history = history::project_history(root, config, &r.project)?;
@@ -1133,6 +1158,7 @@ pub fn prepare(
                 &r.decision,
                 r.repo.as_deref(),
                 EvalStage::First,
+                launch,
             );
             let first = load_manifest(&path)?;
             verify(conn, config, cat, &history, &first)?;
@@ -1142,7 +1168,7 @@ pub fn prepare(
     };
     let built = build(conn, config, cat, &history, r, stage, stage_one.as_ref())?;
     let m = &built.manifest;
-    let path = manifest_path(root, &r.project, &r.backend, &r.decision, r.repo.as_deref(), stage);
+    let path = manifest_path(root, &r.project, &r.backend, &r.decision, r.repo.as_deref(), stage, launch);
     fs::create_dir_all(path.parent().expect("a manifest has a directory"))?;
     fs::write(&path, serde_json::to_string_pretty(m)? + "\n")?;
     fs::create_dir_all(out)?;
@@ -1348,6 +1374,18 @@ pub fn score(
     r: &Replay,
     answers: &[EvalAnswers],
 ) -> Result<ScoreReport> {
+    score_manifest(tx, root, config, r, answers, None)
+}
+
+/// [`score`] against the key's shared manifest, or launch `launch`'s own.
+fn score_manifest(
+    tx: &mut Tx<'_>,
+    root: &Path,
+    config: &ConfigSet,
+    r: &Replay,
+    answers: &[EvalAnswers],
+    launch: Option<&str>,
+) -> Result<ScoreReport> {
     let cat = Catalogue::embedded();
     check_backend(&r.backend)?;
     let path = manifest_path(
@@ -1357,6 +1395,7 @@ pub fn score(
         &r.decision,
         r.repo.as_deref(),
         EvalStage::Scored,
+        launch,
     );
     let m = load_manifest(&path)?;
     // The file is the request's: its key, and the exclusions it was prepared under.
@@ -1383,8 +1422,12 @@ pub fn score(
             "the manifest was prepared excluding {had:?} and this score excludes {want:?}: eval prepare again with the same exclusions"
         )));
     }
-    let history = history::project_history(root, config, &r.project)?;
-    verify(tx.conn(), config, cat, &history, &m)?;
+    // A launch's manifest is its own and is what its worker was asked; history moving on
+    // (another eval's refresh) must not strand it. A shared one may have been replaced.
+    if launch.is_none() {
+        let history = history::project_history(root, config, &r.project)?;
+        verify(tx.conn(), config, cat, &history, &m)?;
+    }
     let answered = checked_answers(cat, config, &m, answers)?;
     let kind = cat.file(&m.decision)?.kind;
     let repo_areas = m
@@ -1507,7 +1550,7 @@ pub fn score_for_launch(
             evaluated,
         });
     }
-    let s = score(tx, root, config, r, answers)?;
+    let s = score_manifest(tx, root, config, r, answers, Some(launch))?;
     let data = EvalAppliedData {
         launch: launch.to_string(),
         project: r.project.clone(),

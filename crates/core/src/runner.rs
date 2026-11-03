@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::bridge::{self, Bridge, Status, TokenStatus};
@@ -86,7 +86,8 @@ struct RoundResult {
 }
 
 /// One stage of an eval (D2).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Stage {
     pub name: String,
     pub replay: Replay,
@@ -285,7 +286,11 @@ pub fn step(cx: &Ctx<'_>, token: &str) -> Result<Stepped> {
                 _ => Ok(Stepped::Waiting("routing not verified yet".into())),
             }
         }
-        "waiting_user" => Ok(Stepped::Waiting("the worker asked a question".into())),
+        "waiting_user" => Ok(Stepped::Waiting(match &s.reason {
+            Value::Null => "the worker asked a question".into(),
+            Value::String(q) => format!("the worker asked a question: {q}"),
+            q => format!("the worker asked a question: {q}"),
+        })),
         other => Ok(Stepped::Held(format!("AgentBridge reports {other} ({})", s.reason))),
     }
 }
@@ -342,9 +347,36 @@ fn backend(l: &Launch) -> String {
     crate::triage::backend(&l.request.routing)
 }
 
+/// Launch `l`'s eval plan (2.5): recorded before its first stage is sent and read back on every
+/// later step, so a history or config change during the launch never adds, drops or reorders
+/// a stage. `None` when none is recorded and `record` is false.
+fn plan(cx: &Ctx<'_>, config: &ConfigSet, l: &Launch, record: bool) -> Result<Option<Vec<Stage>>> {
+    let dir = eval::launch_dir(cx.root.dir(), &l.request.project, &backend(l), &l.id);
+    let path = dir.join("plan.json");
+    match fs::read_to_string(&path) {
+        Ok(text) => return Ok(Some(serde_json::from_str(&text)?)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e.into()),
+    }
+    if !record {
+        return Ok(None);
+    }
+    let stages = eval_stages(cx.root, config, &l.request.project, &backend(l))?;
+    fs::create_dir_all(&dir)?;
+    let tmp = dir.join("plan.json.tmp");
+    fs::write(&tmp, serde_json::to_string_pretty(&stages)? + "\n")?;
+    fs::rename(&tmp, &path)?;
+    Ok(Some(stages))
+}
+
+/// Whether every scored stage of `l`'s recorded plan has its receipt: never for a launch with
+/// no plan, or an empty one.
 fn every_stage_applied(cx: &Ctx<'_>, l: &Launch) -> Result<bool> {
     let config = ConfigSet::load(cx.root.dir())?;
-    let stages = eval_stages(cx.root, &config, &l.request.project, &backend(l))?;
+    let stages = match plan(cx, &config, l, false)? {
+        Some(stages) if !stages.is_empty() => stages,
+        _ => return Ok(false),
+    };
     for st in stages.iter().filter(|st| st.stage == EvalStage::Scored) {
         if !cx.root.read(|led| eval::applied(led.conn(), &l.id, &st.replay))? {
             return Ok(false);
@@ -358,10 +390,16 @@ fn every_stage_applied(cx: &Ctx<'_>, l: &Launch) -> Result<bool> {
 /// and send the next stage, a correction, or the finish.
 fn eval_step(cx: &Ctx<'_>, l: &Launch, token: &str, s: &Status) -> Result<Stepped> {
     let config = ConfigSet::load(cx.root.dir())?;
-    let stages = eval_stages(cx.root, &config, &l.request.project, &backend(l))?;
-    let Some(round) = s.stage.clone().filter(|v| !v.is_null()) else {
+    let active = s.stage.clone().filter(|v| !v.is_null());
+    let Some(stages) = plan(cx, &config, l, active.is_none())? else {
+        return Ok(Stepped::Held(format!(
+            "launch {} has an active stage but no recorded eval plan",
+            l.id
+        )));
+    };
+    let Some(round) = active else {
         return match stages.first() {
-            Some(first) => send_stage(cx, &config, token, first, 1, &[], None, None),
+            Some(first) => send_stage(cx, &config, l, token, first, 1, &[], None, None),
             None => Ok(Stepped::Held(format!(
                 "project {} has no replay to evaluate",
                 l.request.project
@@ -377,7 +415,7 @@ fn eval_step(cx: &Ctx<'_>, l: &Launch, token: &str, s: &Status) -> Result<Steppe
     };
     let Some(i) = stages.iter().position(|st| st.name == round.input.stage) else {
         return Ok(Stepped::Held(format!(
-            "AgentBridge's active stage {} is not one this eval has now: the replay keys changed",
+            "AgentBridge's active stage {} is not in this launch's recorded eval plan",
             round.input.stage
         )));
     };
@@ -389,7 +427,7 @@ fn eval_step(cx: &Ctx<'_>, l: &Launch, token: &str, s: &Status) -> Result<Steppe
         let errors = match serde_json::from_value::<EvalAnswers>(result.content) {
             Err(e) => (vec![format!("the content is not {{backend, answers}}: {e}")], None),
             Ok(a) => (
-                eval::answer_errors(cx.root.dir(), &config, &st.replay, st.stage, std::slice::from_ref(&a))?,
+                eval::answer_errors(cx.root.dir(), &config, &st.replay, st.stage, std::slice::from_ref(&a), &l.id)?,
                 Some(a),
             ),
         };
@@ -399,7 +437,7 @@ fn eval_step(cx: &Ctx<'_>, l: &Launch, token: &str, s: &Status) -> Result<Steppe
                     return archive(cx, token);
                 }
                 let content = json!({"refused": errors});
-                return send_stage(cx, &config, token, st, round.input.round + 1, &[], Some(content), Some(&event));
+                return send_stage(cx, &config, l, token, st, round.input.round + 1, &[], Some(content), Some(&event));
             }
             (_, a) => a,
         }
@@ -413,9 +451,9 @@ fn eval_step(cx: &Ctx<'_>, l: &Launch, token: &str, s: &Status) -> Result<Steppe
         // Priority's scored stage is prepared from its first stage's answers.
         Some(next) if st.stage == EvalStage::First => {
             let first = answers.map(|a| vec![a]).unwrap_or_default();
-            send_stage(cx, &config, token, next, 1, &first, None, Some(&event))
+            send_stage(cx, &config, l, token, next, 1, &first, None, Some(&event))
         }
-        Some(next) => send_stage(cx, &config, token, next, 1, &[], None, Some(&event)),
+        Some(next) => send_stage(cx, &config, l, token, next, 1, &[], None, Some(&event)),
         None => {
             let message = json!(
                 "Every stage is answered and accepted. Finish now: reply with a launch_result, outcome `landed`."
@@ -437,6 +475,7 @@ fn stage_dir(cx: &Ctx<'_>, token: &str, st: &Stage) -> PathBuf {
 fn send_stage(
     cx: &Ctx<'_>,
     config: &ConfigSet,
+    l: &Launch,
     token: &str,
     st: &Stage,
     round: u32,
@@ -446,7 +485,7 @@ fn send_stage(
 ) -> Result<Stepped> {
     let dir = stage_dir(cx, token, st);
     if round == 1 {
-        cx.root.read(|led| eval::prepare(led.conn(), cx.root.dir(), config, &st.replay, st.stage, first, &dir))?;
+        cx.root.read(|led| eval::prepare(led.conn(), cx.root.dir(), config, &st.replay, st.stage, first, &dir, Some(&l.id)))?;
     }
     let mut attachments = Vec::new();
     let mut names: Vec<PathBuf> = fs::read_dir(&dir)?.map(|e| Ok(e?.path())).collect::<Result<_>>()?;
@@ -476,6 +515,15 @@ fn send_stage(
     })
 }
 
+/// A staged file's transfer key, `{token}-{stage}-{file}`: refused past the connector's 128 bytes.
+pub fn transfer_key(token: &str, stage: &str, file: &str) -> Result<String> {
+    let key = format!("{token}-{stage}-{file}");
+    if key.len() > 128 {
+        return Err(Error::refused(format!("transfer key {key} is over 128 bytes")));
+    }
+    Ok(key)
+}
+
 /// `path` staged through AgentBridge's transfer, keyed by token, stage and file so a retry
 /// reuses it: its ready manifest, or `None` while it is still being prepared.
 fn staged(cx: &Ctx<'_>, token: &str, st: &Stage, path: &Path) -> Result<Option<Value>> {
@@ -483,10 +531,7 @@ fn staged(cx: &Ctx<'_>, token: &str, st: &Stage, path: &Path) -> Result<Option<V
         .file_name()
         .and_then(|n| n.to_str())
         .ok_or_else(|| Error::refused(format!("{} has no file name", path.display())))?;
-    let key = format!("{token}-{}-{name}", st.name);
-    if key.len() > 128 {
-        return Err(Error::refused(format!("transfer key {key} is over 128 bytes")));
-    }
+    let key = transfer_key(token, &st.name, name)?;
     let prepared = bridge::transfer(
         cx.bridge,
         json!({"action": "prepare", "key": key, "path": path, "name": name, "media_type": "application/json", "keep": false}),

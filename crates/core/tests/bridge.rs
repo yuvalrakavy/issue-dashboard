@@ -138,6 +138,37 @@ fn the_handshake_refuses_a_connector_that_is_not_the_pinned_one() {
 }
 
 #[test]
+fn a_wait_asks_for_at_most_a_minute() {
+    let f = Fake::new();
+    bridge::wait(&f, 4, 600_000, 10).unwrap();
+    bridge::wait(&f, 4, 5_000, 10).unwrap();
+    let asked: Vec<_> = f.calls_to("wait").iter().map(|p| p["timeout_ms"].clone()).collect();
+    assert_eq!(asked, [json!(60_000), json!(5_000)]);
+}
+
+#[test]
+fn a_harness_is_ready_only_when_health_says_ready_to_attempt_true() {
+    let f = Fake::new();
+    f.push(
+        "health",
+        Answer::Ok(json!({"harnesses": [
+            {"profile": "Codex", "ready_to_attempt": true},
+            {"profile": "Hermes", "ready_to_attempt": false},
+            {"profile": "Claude"},
+            {"profile": "OpenCode", "ready_to_attempt": "true"},
+        ]})),
+    );
+    let names = ["Codex", "Hermes", "Claude", "OpenCode"].map(String::from);
+    let h = bridge::health(&f, &names).unwrap();
+    let want: std::collections::HashMap<String, bool> =
+        [("Codex", true), ("Hermes", false), ("Claude", false), ("OpenCode", false)]
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v))
+            .collect();
+    assert_eq!(h, want);
+}
+
+#[test]
 fn a_start_over_the_size_limit_is_refused_before_it_is_sent() {
     let f = Fake::new();
     let s = bridge::Start {

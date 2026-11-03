@@ -253,12 +253,9 @@ enum RunnerCommand {
         /// The agentbridge-dashboard executable.
         #[arg(long)]
         connector: PathBuf,
-        /// The connector's config, absolute.
+        /// The connector's config, absolute; its `state_dir` is the one checked and recorded.
         #[arg(long)]
         config: PathBuf,
-        /// The connector config's state_dir.
-        #[arg(long)]
-        state_dir: PathBuf,
     },
     /// Record the running connector's package version, contract and executable hash as the
     /// pin the runner starts against.
@@ -1052,7 +1049,7 @@ fn run(cli: Cli) -> anyhow::Result<Value> {
                 backend,
                 repo,
             };
-            serde_json::to_value(root.read(|l| eval::prepare(l.conn(), &dir, &config, &r, stage, &first, &out))?)?
+            serde_json::to_value(root.read(|l| eval::prepare(l.conn(), &dir, &config, &r, stage, &first, &out, None))?)?
         }
         Command::Eval(EvalCommand::Score {
             project,
@@ -1104,12 +1101,9 @@ fn run(cli: Cli) -> anyhow::Result<Value> {
             json!({"name": name, "decision": decision, "events": tagged, "recorded": recorded})
         }
         Command::BridgeServe => serve(&root, &dir, now)?,
-        Command::Runner(RunnerCommand::Init {
-            connector,
-            config,
-            state_dir,
-        }) => {
+        Command::Runner(RunnerCommand::Init { connector, config }) => {
             let _lock = service::lock(&dir)?;
+            let state_dir = service::connector_state_dir(&config)?;
             service::check_init(&dir, &state_dir)?;
             let setup = service::Setup {
                 connector,

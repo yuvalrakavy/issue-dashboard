@@ -14,7 +14,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::bridge::{self, Pin};
+use crate::bridge::{self, Pin, TokenStatus};
 use crate::docs::LaunchKind;
 use crate::launch::{self, State};
 use crate::lock::RootLock;
@@ -92,6 +92,21 @@ pub fn save(dir: &Path, setup: &Setup) -> Result<()> {
 /// The connector state `--init` would create. AgentBridge reopens existing state even under
 /// `--init` (`DASHBOARD-RUNNER.md`), so refusing to initialize over it is the runner's job.
 const CONNECTOR_STATE: &[&str] = &["dashboard.redb", "transport/journal.redb"];
+
+/// The `state_dir` the connector `config` names: the directory the connector really writes,
+/// so `runner init` checks and records that one rather than one it is told.
+pub fn connector_state_dir(config: &Path) -> Result<PathBuf> {
+    let text = fs::read(config).map_err(|e| Error::refused(format!("{}: {e}", config.display())))?;
+    let v: Value = serde_json::from_slice(&text)
+        .map_err(|e| Error::refused(format!("{}: not a connector config: {e}", config.display())))?;
+    let Some(dir) = v.get("state_dir").and_then(Value::as_str).map(PathBuf::from) else {
+        return Err(Error::refused(format!("{}: no state_dir", config.display())));
+    };
+    if !dir.is_absolute() {
+        return Err(Error::refused(format!("{}: state_dir {} is not absolute", config.display(), dir.display())));
+    }
+    Ok(dir)
+}
 
 /// `runner init`'s refusals: an existing setup, or any connector state already in `state_dir`.
 pub fn check_init(dir: &Path, state_dir: &Path) -> Result<()> {
@@ -242,26 +257,57 @@ pub fn tick(cx: &Ctx<'_>, refresher: &mut Refresher) -> Result<Tick> {
     for l in all.iter().filter(|l| l.request.routing.harness.is_some() && l.state.holds()) {
         let Some(token) = l.token.clone() else { continue };
         if l.state == State::Reserved && l.request.kind == LaunchKind::Eval {
-            match refresher.ready(&token, &l.request.project, now) {
-                Ok(true) => cx.root.mutate(now, |tx| runner_status::unhold(tx.conn(), &l.id))?,
-                Ok(false) => continue,
+            // Only a start waits for the refresh: a token AgentBridge already knows is
+            // reconciled (recorded, released, ended) whether or not GitHub answers.
+            let unknown = match bridge::status(cx.bridge, &token) {
+                Ok(s) => s == TokenStatus::Unknown,
                 Err(e) => {
-                    let why = format!("the history refresh of {} failed: {e}", l.request.project);
+                    let e = e.to_string();
+                    note(cx.root, &l.id, &Err(e.clone()), now)?;
+                    t.stepped.push((token, Err(e)));
+                    continue;
+                }
+            };
+            if unknown {
+                let wait = match refresher.ready(&token, &l.request.project, now) {
+                    Ok(true) => None,
+                    Ok(false) => Some(format!("the history refresh of {} is running", l.request.project)),
+                    Err(e) => Some(format!("the history refresh of {} failed: {e}", l.request.project)),
+                };
+                if let Some(why) = wait {
                     cx.root.mutate(now, |tx| runner_status::hold(tx.conn(), &l.id, &why, now))?;
                     continue;
                 }
             }
         }
-        match runner::step(cx, &token) {
-            Ok(Stepped::Rollback(why)) => {
-                t.rollback = Some(why);
-                return Ok(t);
-            }
-            Ok(s) => t.stepped.push((token, Ok(s))),
-            Err(e) => t.stepped.push((token, Err(e.to_string()))),
+        let r = runner::step(cx, &token).map_err(|e| e.to_string());
+        if let Ok(Stepped::Rollback(why)) = r {
+            t.rollback = Some(why);
+            return Ok(t);
         }
+        note(cx.root, &l.id, &r, now)?;
+        t.stepped.push((token, r));
     }
     Ok(t)
+}
+
+/// Keeps launch `id`'s waiting reason in step with what its step did (3.1 rows 10-11): a step
+/// that waits, holds or fails shows why; one that moves the launch on clears it.
+fn note(root: &Root, id: &str, r: &std::result::Result<Stepped, String>, now: DateTime<Utc>) -> Result<()> {
+    let why = match r {
+        Ok(Stepped::Waiting(why) | Stepped::Held(why)) => Some(why.clone()),
+        Err(e) => Some(format!("the last step failed: {e}")),
+        Ok(_) => None,
+    };
+    // Most ticks repeat the reason a launch already shows; only a change pays a commit.
+    let current = root.read(|l| runner_status::held(l.conn()))?.into_iter().find(|h| h.launch == id).map(|h| h.reason);
+    if current == why {
+        return Ok(());
+    }
+    root.mutate(now, |tx| match &why {
+        Some(why) => runner_status::hold(tx.conn(), id, why, now),
+        None => runner_status::unhold(tx.conn(), id),
+    })
 }
 
 /// Drops the waiting reason of every launch that neither waits nor holds any more (it was

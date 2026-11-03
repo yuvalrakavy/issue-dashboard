@@ -17,7 +17,7 @@ const CONNECTOR: &str = r#"#!/usr/bin/env python3
 import json, os, sys, time
 args = sys.argv[1:]
 cfg = args[args.index("--config") + 1]
-sha = open(cfg).read().strip()
+sha = json.load(open(cfg))["sha"]
 if "--init" in args:
     with open(os.path.join(os.path.dirname(cfg), "inits"), "a") as f:
         f.write("init\n")
@@ -66,12 +66,17 @@ impl Runner {
     }
 
     fn config(&self) -> PathBuf {
-        self.path().join("connector/config.toml")
+        self.path().join("connector/config.json")
+    }
+
+    fn state_dir(&self) -> PathBuf {
+        self.path().join("connector/state")
     }
 
     /// The connector now reports executable hash `sha`.
     fn connector_is(&self, sha: &str) {
-        fs::write(self.config(), sha).unwrap();
+        let config = serde_json::json!({"sha": sha, "state_dir": self.state_dir()});
+        fs::write(self.config(), config.to_string()).unwrap();
     }
 
     fn command(&self, args: &[&str]) -> Command {
@@ -86,7 +91,6 @@ impl Runner {
 
     fn init(&self) -> Output {
         let exe = self.path().join("connector/agentbridge-dashboard");
-        let state = self.path().join("connector/state");
         self.run(&[
             "runner",
             "init",
@@ -94,8 +98,6 @@ impl Runner {
             exe.to_str().unwrap(),
             "--config",
             self.config().to_str().unwrap(),
-            "--state-dir",
-            state.to_str().unwrap(),
         ])
     }
 
@@ -133,6 +135,23 @@ fn init_starts_the_connector_with_init_once_and_refuses_a_second_time() {
     assert_eq!(o.status.code(), Some(1), "{}", stderr(&o));
     assert!(stderr(&o).contains("already set up"), "{}", stderr(&o));
     assert_eq!(r.inits(), 1, "a refused init never starts the connector");
+}
+
+#[test]
+fn init_checks_and_records_the_state_dir_the_connector_config_names() {
+    let r = Runner::new();
+    fs::create_dir_all(r.state_dir()).unwrap();
+    fs::write(r.state_dir().join("dashboard.redb"), "").unwrap();
+    let o = r.init();
+    assert_eq!(o.status.code(), Some(1), "{}", stderr(&o));
+    assert!(stderr(&o).contains("would reuse an identity"), "{}", stderr(&o));
+    assert_eq!(r.inits(), 0);
+
+    fs::remove_file(r.state_dir().join("dashboard.redb")).unwrap();
+    let o = r.init();
+    assert!(o.status.success(), "{}", stderr(&o));
+    let setup: Value = serde_json::from_str(&fs::read_to_string(r.path().join("runner.json")).unwrap()).unwrap();
+    assert_eq!(setup["state_dir"], r.state_dir().to_str().unwrap());
 }
 
 #[test]
