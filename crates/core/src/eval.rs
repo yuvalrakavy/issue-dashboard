@@ -582,7 +582,8 @@ impl Manifest {
 }
 
 /// What a replay is about.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Replay {
     pub project: String,
     pub decision: String,
@@ -763,6 +764,94 @@ pub struct Built {
     pub available: BTreeMap<Split, usize>,
 }
 
+/// The repos of `all` by the question hash `decision` is asked with there (area's differs per
+/// repo, 1.3).
+fn question_hashes(
+    config: &ConfigSet,
+    cat: &Catalogue,
+    decision: &str,
+    all: &[Candidate<'_>],
+) -> Result<BTreeMap<String, Vec<String>>> {
+    let mut hashes: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for c in all {
+        let areas = triage::areas_of(&triage::translation_of(config, &c.repo));
+        hashes
+            .entry(cat.question_hash(decision, &areas)?)
+            .or_default()
+            .push(c.repo.clone());
+    }
+    Ok(hashes)
+}
+
+/// The replays an eval of `project` under `backend` scores (runner spec as-built D2), in
+/// [`LABEL_DECISIONS`] order: one per decision, or one per repo where the decision is asked
+/// differently in different repos, as `build` would refuse it whole.
+pub fn replays(conn: &Connection, root: &Path, config: &ConfigSet, project: &str, backend: &str) -> Result<Vec<Replay>> {
+    let cat = Catalogue::embedded();
+    let history = history::project_history(root, config, project)?;
+    let exclude = exclusions(config, project, &[])?;
+    let mut out = Vec::new();
+    for decision in LABEL_DECISIONS {
+        let whole = Replay {
+            project: project.to_string(),
+            decision: decision.to_string(),
+            backend: backend.to_string(),
+            exclude: exclude.clone(),
+            repo: None,
+        };
+        let all = candidates(conn, config, &history, &whole)?;
+        // A replay with no held-out candidate has nothing `score` could measure: it is left out
+        // rather than asked.
+        let held_out = |repo: Option<&str>| {
+            all.iter()
+                .any(|c| !is_tuning(&c.item.id) && repo.is_none_or(|r| r.eq_ignore_ascii_case(&c.repo)))
+        };
+        let hashes = question_hashes(config, cat, decision, &all)?;
+        if hashes.len() <= 1 {
+            if held_out(None) {
+                out.push(whole);
+            }
+            continue;
+        }
+        let repos: BTreeSet<String> = hashes.into_values().flatten().collect();
+        out.extend(repos.into_iter().filter(|repo| held_out(Some(repo))).map(|repo| Replay {
+            repo: Some(repo),
+            ..whole.clone()
+        }));
+    }
+    Ok(out)
+}
+
+/// Whether `decision` is prepared in two stages (priority: its first stage, then itself).
+pub fn two_stage(decision: &str) -> Result<bool> {
+    Ok(!Catalogue::embedded().file(decision)?.reads.is_empty())
+}
+
+/// What is wrong with `answers` against the manifest `eval prepare` wrote for `r` at `stage`,
+/// each reason as `score` would refuse it; empty when they are acceptable. The runner sends a
+/// non-empty list back to the worker as a correction round (runner spec 2.5).
+pub fn answer_errors(
+    root: &Path,
+    config: &ConfigSet,
+    r: &Replay,
+    stage: EvalStage,
+    answers: &[EvalAnswers],
+    launch: &str,
+) -> Result<Vec<String>> {
+    let path = manifest_path(root, &r.project, &r.backend, &r.decision, r.repo.as_deref(), stage, Some(launch));
+    let m = load_manifest(&path)?;
+    let (_, mut errors) = answers_checked(Catalogue::embedded(), config, &m, answers)?;
+    // The runner's worker answers every question: a gap is a correction, not a smaller score.
+    let given: BTreeSet<&str> = answers.iter().flat_map(|f| &f.answers).map(|a| a.question.as_str()).collect();
+    let missing: Vec<&str> = m.questions.iter().map(|q| q.id.as_str()).filter(|id| !given.contains(id)).collect();
+    if !missing.is_empty() {
+        let shown = missing.iter().take(20).copied().collect::<Vec<_>>().join(", ");
+        let more = if missing.len() > 20 { ", …" } else { "" };
+        errors.push(format!("{} questions are unanswered: {shown}{more}", missing.len()));
+    }
+    Ok(errors)
+}
+
 /// Builds a replay's questions (3.2) from history and the ledger: the manifest's stage, its
 /// sample, and for priority's scored stage the first stage's answers.
 pub fn build(
@@ -791,14 +880,7 @@ pub fn build(
         (Split::HeldOut, p.eval_sample.unwrap_or(EVAL_SAMPLE) as usize),
     ]);
     let all = candidates(conn, config, history, r)?;
-    let mut hashes: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    for c in &all {
-        let areas = triage::areas_of(&triage::translation_of(config, &c.repo));
-        hashes
-            .entry(cat.question_hash(&r.decision, &areas)?)
-            .or_default()
-            .push(c.repo.clone());
-    }
+    let hashes = question_hashes(config, cat, &r.decision, &all)?;
     if hashes.len() > 1 {
         let repos: BTreeSet<&String> = hashes.values().flatten().collect();
         return Err(Error::refused(format!(
@@ -891,7 +973,9 @@ pub fn build(
     })
 }
 
-/// Where a replay's manifest is kept: one per key and stage, the latest prepare's.
+/// Where a replay's manifest is kept: one per key and stage, the latest prepare's. A launch's
+/// own (`launch`) sits under [`launch_dir`], so no other prepare of the key replaces the
+/// manifest its answers are checked and scored against.
 pub fn manifest_path(
     root: &Path,
     project: &str,
@@ -899,13 +983,23 @@ pub fn manifest_path(
     decision: &str,
     repo: Option<&str>,
     stage: EvalStage,
+    launch: Option<&str>,
 ) -> PathBuf {
     let stage = match stage {
         EvalStage::First => "first",
         EvalStage::Scored => "replay",
     };
     let repo = repo.map(|r| format!("-{}", segment(r))).unwrap_or_default();
-    key_dir(root, project, backend).join(format!("{decision}{repo}.{stage}.manifest.json"))
+    let dir = match launch {
+        Some(l) => launch_dir(root, project, backend, l),
+        None => key_dir(root, project, backend),
+    };
+    dir.join(format!("{decision}{repo}.{stage}.manifest.json"))
+}
+
+/// A launch's own eval files: its manifests and its recorded plan (runner spec 2.5).
+pub fn launch_dir(root: &Path, project: &str, backend: &str, launch: &str) -> PathBuf {
+    key_dir(root, project, backend).join("launches").join(segment(launch))
 }
 
 fn load_manifest(path: &Path) -> Result<Manifest> {
@@ -926,6 +1020,23 @@ pub struct EvalAnswers {
 /// answer must answer one of its questions, once, under its backend, with valid probabilities;
 /// one that does not refuses the files with every reason listed.
 fn checked_answers(cat: &Catalogue, config: &ConfigSet, m: &Manifest, files: &[EvalAnswers]) -> Result<Answered> {
+    let (out, errors) = answers_checked(cat, config, m, files)?;
+    if !errors.is_empty() {
+        return Err(Error::refused(format!(
+            "the answers are refused: {}",
+            errors.join("; ")
+        )));
+    }
+    Ok(out)
+}
+
+/// [`checked_answers`]' answers and every reason it would refuse them.
+fn answers_checked(
+    cat: &Catalogue,
+    config: &ConfigSet,
+    m: &Manifest,
+    files: &[EvalAnswers],
+) -> Result<(Answered, Vec<String>)> {
     let by_id: BTreeMap<&str, &ManifestQuestion> = m.questions.iter().map(|q| (q.id.as_str(), q)).collect();
     let mut out = BTreeMap::new();
     let mut errors = Vec::new();
@@ -957,13 +1068,7 @@ fn checked_answers(cat: &Catalogue, config: &ConfigSet, m: &Manifest, files: &[E
             }
         }
     }
-    if !errors.is_empty() {
-        return Err(Error::refused(format!(
-            "the answers are refused: {}",
-            errors.join("; ")
-        )));
-    }
-    Ok(out)
+    Ok((out, errors))
 }
 
 /// What `eval prepare` wrote.
@@ -1022,7 +1127,8 @@ fn stage_one_answers(
 }
 
 /// `eval prepare` (3.2): writes the tuning and held-out question files into `out` and the
-/// manifest under `state/evals/`. Priority's scored stage needs the first stage's answers.
+/// manifest under `state/evals/` (a launch's own when `launch`, [`manifest_path`]). Priority's
+/// scored stage needs the first stage's answers.
 #[allow(clippy::too_many_arguments)]
 pub fn prepare(
     conn: &Connection,
@@ -1032,6 +1138,7 @@ pub fn prepare(
     stage: EvalStage,
     first_answers: &[EvalAnswers],
     out: &Path,
+    launch: Option<&str>,
 ) -> Result<PrepareReport> {
     let cat = Catalogue::embedded();
     let history = history::project_history(root, config, &r.project)?;
@@ -1051,16 +1158,20 @@ pub fn prepare(
                 &r.decision,
                 r.repo.as_deref(),
                 EvalStage::First,
+                launch,
             );
             let first = load_manifest(&path)?;
-            verify(conn, config, cat, &history, &first)?;
+            // A launch's first stage is its own, as in `score_manifest`.
+            if launch.is_none() {
+                verify(conn, config, cat, &history, &first)?;
+            }
             Some(stage_one_answers(conn, cat, config, &first, first_answers)?)
         }
         _ => None,
     };
     let built = build(conn, config, cat, &history, r, stage, stage_one.as_ref())?;
     let m = &built.manifest;
-    let path = manifest_path(root, &r.project, &r.backend, &r.decision, r.repo.as_deref(), stage);
+    let path = manifest_path(root, &r.project, &r.backend, &r.decision, r.repo.as_deref(), stage, launch);
     fs::create_dir_all(path.parent().expect("a manifest has a directory"))?;
     fs::write(&path, serde_json::to_string_pretty(m)? + "\n")?;
     fs::create_dir_all(out)?;
@@ -1266,6 +1377,18 @@ pub fn score(
     r: &Replay,
     answers: &[EvalAnswers],
 ) -> Result<ScoreReport> {
+    score_manifest(tx, root, config, r, answers, None)
+}
+
+/// [`score`] against the key's shared manifest, or launch `launch`'s own.
+fn score_manifest(
+    tx: &mut Tx<'_>,
+    root: &Path,
+    config: &ConfigSet,
+    r: &Replay,
+    answers: &[EvalAnswers],
+    launch: Option<&str>,
+) -> Result<ScoreReport> {
     let cat = Catalogue::embedded();
     check_backend(&r.backend)?;
     let path = manifest_path(
@@ -1275,6 +1398,7 @@ pub fn score(
         &r.decision,
         r.repo.as_deref(),
         EvalStage::Scored,
+        launch,
     );
     let m = load_manifest(&path)?;
     // The file is the request's: its key, and the exclusions it was prepared under.
@@ -1301,8 +1425,12 @@ pub fn score(
             "the manifest was prepared excluding {had:?} and this score excludes {want:?}: eval prepare again with the same exclusions"
         )));
     }
-    let history = history::project_history(root, config, &r.project)?;
-    verify(tx.conn(), config, cat, &history, &m)?;
+    // A launch's manifest is its own and is what its worker was asked; history moving on
+    // (another eval's refresh) must not strand it. A shared one may have been replaced.
+    if launch.is_none() {
+        let history = history::project_history(root, config, &r.project)?;
+        verify(tx.conn(), config, cat, &history, &m)?;
+    }
     let answered = checked_answers(cat, config, &m, answers)?;
     let kind = cat.file(&m.decision)?.kind;
     let repo_areas = m
@@ -1350,6 +1478,92 @@ pub fn score(
         unanswered,
         distinct,
     )
+}
+
+/// An `eval_applied` receipt (runner spec 2.6): the evaluation a launch's score of one key
+/// recorded. Its subject is the launch; project, backend, decision and repo distinguish it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EvalAppliedData {
+    pub launch: String,
+    pub project: String,
+    pub backend: String,
+    pub decision: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo: Option<String>,
+    /// The `seq` of the `evaluated` event the score recorded, or repeated.
+    pub evaluated: i64,
+}
+
+/// What distinguishes one key's `eval_applied` receipt among a launch's.
+fn receipt_key(r: &Replay) -> Value {
+    let mut distinct = json!({"project": r.project, "backend": r.backend, "decision": r.decision});
+    if let Some(repo) = &r.repo {
+        distinct["repo"] = json!(repo);
+    }
+    distinct
+}
+
+/// Launch `launch`'s `eval_applied` receipt for `r`'s key, if it scored it.
+fn receipt(conn: &Connection, launch: &str, r: &Replay) -> Result<Option<crate::Event>> {
+    let distinct = receipt_key(r);
+    Ok(ledger::events_of(conn, launch, Kind::EvalApplied)?
+        .into_iter()
+        .find(|e| e.distinct == distinct))
+}
+
+/// Whether launch `launch` has scored `r`'s key (its 2.6 receipt is recorded).
+pub fn applied(conn: &Connection, launch: &str, r: &Replay) -> Result<bool> {
+    Ok(receipt(conn, launch, r)?.is_some())
+}
+
+/// [`score`] on behalf of a launch (runner spec 2.6), applied once per launch and key.
+/// `score` alone is not: its dedupe compares the key's LATEST evaluation, so launch A, then
+/// launch B, then a retry of A would record A again over B. The receipt is read before
+/// anything else, the map's write included, and is recorded in the same transaction as the
+/// evaluation, so a launch with a receipt is a no-op that reports its own evaluation.
+pub fn score_for_launch(
+    tx: &mut Tx<'_>,
+    root: &Path,
+    config: &ConfigSet,
+    r: &Replay,
+    answers: &[EvalAnswers],
+    launch: &str,
+) -> Result<ScoreReport> {
+    let distinct = receipt_key(r);
+    if let Some(e) = receipt(tx.conn(), launch, r)? {
+        let applied: EvalAppliedData = serde_json::from_value(e.data)?;
+        let ev = ledger::event_at(tx.conn(), applied.evaluated)?
+            .filter(|ev| ev.kind == Kind::Evaluated)
+            .ok_or_else(|| {
+                Error::refused(format!(
+                    "launch {launch}'s eval_applied receipt (seq {}) names evaluated event {}, which the ledger does not hold",
+                    e.seq, applied.evaluated
+                ))
+            })?;
+        let evaluated: EvaluatedData = serde_json::from_value(ev.data)?;
+        let map = evaluated.map_id.as_ref().map(|id| {
+            key_dir(root, &evaluated.project, &evaluated.backend)
+                .join(format!("{}-{}-{id}.json", evaluated.decision, evaluated.question_hash))
+        });
+        return Ok(ScoreReport {
+            seq: ev.seq,
+            repeat: true,
+            map,
+            evaluated,
+        });
+    }
+    let s = score_manifest(tx, root, config, r, answers, Some(launch))?;
+    let data = EvalAppliedData {
+        launch: launch.to_string(),
+        project: r.project.clone(),
+        backend: r.backend.clone(),
+        decision: r.decision.clone(),
+        repo: r.repo.clone(),
+        evaluated: s.seq,
+    };
+    tx.record_valid(Kind::EvalApplied, launch, distinct, serde_json::to_value(&data)?, Dedupe::Any)?;
+    Ok(s)
 }
 
 /// `eval score --live` (3.2): the recorded suggestions of a closure decision under `backend`,

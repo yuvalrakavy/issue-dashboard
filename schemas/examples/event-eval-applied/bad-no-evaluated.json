@@ -1,0 +1,19 @@
+{
+  "seq": 42,
+  "time": "2026-11-03T09:05:00Z",
+  "kind": "eval_applied",
+  "subject": "launch-eval-7",
+  "pred": 0,
+  "distinct": {
+    "project": "home",
+    "backend": "claude-opus-5-5@medium",
+    "decision": "type"
+  },
+  "identity": "0000000000000000000000000000000000000000000000000000000000000000",
+  "data": {
+    "launch": "launch-eval-7",
+    "project": "home",
+    "backend": "claude-opus-5-5@medium",
+    "decision": "type"
+  }
+}

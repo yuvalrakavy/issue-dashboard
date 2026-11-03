@@ -21,6 +21,10 @@ pub struct Routing {
     pub workspace: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    /// The AgentBridge launch profile that runs the launch (runner spec 1.4). A launch that
+    /// names one is the bridge runner's; one without it is a dispatcher's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub harness: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

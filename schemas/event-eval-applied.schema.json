@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yuvalrakavy/issue-dashboard/schemas/event-eval-applied.schema.json",
+  "title": "Ledger event: eval_applied",
+  "description": "A launch's eval score of one key was applied (runner spec 2.6). The subject is the launch; written in the same transaction as the evaluated event it names, so a retry of the launch finds it first and records nothing.",
+  "allOf": [
+    {
+      "$ref": "common.schema.json#/$defs/eventEnvelope"
+    }
+  ],
+  "properties": {
+    "kind": {
+      "const": "eval_applied"
+    },
+    "subject": {
+      "$ref": "common.schema.json#/$defs/docId"
+    },
+    "distinct": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "project",
+        "backend",
+        "decision"
+      ],
+      "properties": {
+        "project": {
+          "$ref": "common.schema.json#/$defs/projectName"
+        },
+        "backend": {
+          "type": "string",
+          "minLength": 1
+        },
+        "decision": {
+          "type": "string",
+          "minLength": 1
+        },
+        "repo": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "data": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "launch",
+        "project",
+        "backend",
+        "decision",
+        "evaluated"
+      ],
+      "properties": {
+        "launch": {
+          "$ref": "common.schema.json#/$defs/docId"
+        },
+        "project": {
+          "$ref": "common.schema.json#/$defs/projectName"
+        },
+        "backend": {
+          "type": "string",
+          "minLength": 1
+        },
+        "decision": {
+          "type": "string",
+          "minLength": 1
+        },
+        "repo": {
+          "description": "The one repo a scoped score (area) was over.",
+          "type": "string",
+          "minLength": 1
+        },
+        "evaluated": {
+          "description": "The seq of the evaluated event the score recorded or repeated.",
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    }
+  }
+}

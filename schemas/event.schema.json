@@ -57,6 +57,9 @@
     },
     {
       "$ref": "event-truth-tag.schema.json"
+    },
+    {
+      "$ref": "event-eval-applied.schema.json"
     }
   ]
 }

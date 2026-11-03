@@ -45,3 +45,9 @@ owners = ["example-org"]
 [fork."example-org/engine"]
 upstream = "upstream-org/engine"
 fixes    = ["upstream-org/engine#1189"]
+
+[runner.kinds.eval]
+enabled = true
+
+[runner.harness.Codex]
+max_active = 2

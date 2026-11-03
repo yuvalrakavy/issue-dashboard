@@ -9,9 +9,14 @@
 //! | `reserved` | `started` | [`started`] |
 //! | `reserved` | `unconfirmed` | [`unconfirm`], by the owning dispatcher |
 //! | `reserved`, `unconfirmed` | `released` | [`release`], by the owning dispatcher, after 15 min |
+//! | `reserved` | `released` | [`release_never_started`], by the runner, on AgentBridge's evidence |
 //! | `unconfirmed` | `started` | [`started`] |
-//! | `started` | `ended` | [`ended`] |
-//! | `ended` | `released` | [`ended`], in the same transaction |
+//! | `started` | `ended` | [`ended`], or [`runner_ended`] |
+//! | `reserved` | `ended` | [`runner_ended`], by the runner, on AgentBridge's evidence |
+//! | `ended` | `released` | [`ended`] or [`runner_ended`], in the same transaction |
+//!
+//! A launch whose routing names a harness is reserved only by [`RUNNER`]; any other only by a
+//! dispatcher (runner spec 1.4).
 //! | `requested`, `queued` | `withdrawn` | [`withdraw`] |
 //!
 //! Alongside a launch: `orphan` ([`started`], for a released token or a second session) and
@@ -34,6 +39,10 @@ use crate::{Error, Result};
 
 /// A session list is evidence of absence only for a reservation older than this (10.7).
 pub const SETTLE_AFTER: Duration = Duration::minutes(15);
+
+/// The claimer name of the bridge runner (runner spec 1.4). A launch whose routing names a
+/// harness is reservable only by it; any other launch only by a dispatcher.
+pub const RUNNER: &str = "runner";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -96,6 +105,10 @@ pub struct LaunchData {
     /// A triage launch's scope, on its `requested` transition (triage spec 4.6).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scope: Option<TriageScope>,
+    /// AgentBridge's status body that justified a runner transition taken without a session
+    /// (runner spec 2.1, 3.2): `release_never_started`'s release, or an end from `reserved`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evidence: Option<serde_json::Value>,
 }
 
 impl LaunchData {
@@ -111,6 +124,7 @@ impl LaunchData {
             decision: None,
             via: None,
             scope: None,
+            evidence: None,
         }
     }
 
@@ -379,6 +393,28 @@ fn check_owner(l: &Launch, dispatcher: &str) -> Result<()> {
     }
 }
 
+/// Whether `claimer` may reserve `l` (runner spec 1.4): the runner takes exactly the launches
+/// whose routing names a harness, a dispatcher exactly the others.
+fn may_claim(l: &Launch, claimer: &str) -> bool {
+    l.request.routing.harness.is_some() == (claimer == RUNNER)
+}
+
+fn check_claimer(l: &Launch, claimer: &str) -> Result<()> {
+    if may_claim(l, claimer) {
+        return Ok(());
+    }
+    Err(Error::refused(match &l.request.routing.harness {
+        Some(h) => format!(
+            "launch {} is routed to harness {h}; only the {RUNNER} reserves it, not {claimer}",
+            l.id
+        ),
+        None => format!(
+            "launch {} names no harness; it is a dispatcher's, and the {RUNNER} reserves only harness-routed launches",
+            l.id
+        ),
+    }))
+}
+
 /// Records a `requested` transition for a page launch document. A document whose id is
 /// already requested is a repeat if identical, and refused if different (launch documents
 /// are never changed, 5.3).
@@ -519,20 +555,37 @@ pub fn reserve(
     dispatcher: &str,
     capacity: &dyn Fn(&str) -> Result<u32>,
 ) -> Result<Reservation> {
+    reserve_admitted(tx, launch_id, dispatcher, capacity, &|_| None).map(|(r, _)| r)
+}
+
+/// Why a launch its claimer may claim is not admitted now (runner spec 4.2 checks 3-5), or
+/// `None`. A launch that is not admitted stays queued and is not counted ahead of the others.
+pub type Admit<'a> = &'a dyn Fn(&Launch) -> Option<String>;
+
+/// [`reserve`] behind `admit`: a launch it refuses is queued with the reason, as is one that
+/// waits for a slot.
+pub fn reserve_admitted(
+    tx: &mut Tx<'_>,
+    launch_id: &str,
+    dispatcher: &str,
+    capacity: &dyn Fn(&str) -> Result<u32>,
+    admit: Admit<'_>,
+) -> Result<(Reservation, Option<String>)> {
     let l = load(tx.conn(), launch_id)?.ok_or_else(|| {
         Error::refused(format!(
             "no launch {launch_id}; reserve --request <file> records its document first"
         ))
     })?;
     match l.state {
-        State::Requested | State::Queued => {}
+        State::Requested | State::Queued => check_claimer(&l, dispatcher)?,
         State::Reserved | State::Unconfirmed | State::Started => {
             check_owner(&l, dispatcher)?;
-            return Ok(Reservation::Reserved {
+            let held = Reservation::Reserved {
                 launch: l.id.clone(),
                 token: l.token.clone().expect("a held launch has a token"),
                 repeat: true,
-            });
+            };
+            return Ok((held, None));
         }
         State::Ended | State::Released | State::Withdrawn => {
             return Err(Error::refused(format!(
@@ -542,7 +595,22 @@ pub fn reserve(
         }
     }
     let all = all(tx.conn())?;
-    try_reserve(tx, &l, dispatcher, capacity, &all)
+    try_reserve(tx, &l, dispatcher, capacity, &all, admit)
+}
+
+/// Queues `l` (once) and reports it queued.
+fn queue(tx: &mut Tx<'_>, l: &Launch, dispatcher: &str) -> Result<Reservation> {
+    if l.state == State::Queued {
+        return Ok(Reservation::Queued {
+            launch: l.id.clone(),
+            repeat: true,
+        });
+    }
+    record(tx, &l.id, LaunchData::new(Transition::Queued).dispatcher(dispatcher))?;
+    Ok(Reservation::Queued {
+        launch: l.id.clone(),
+        repeat: false,
+    })
 }
 
 fn try_reserve(
@@ -551,7 +619,8 @@ fn try_reserve(
     dispatcher: &str,
     capacity: &dyn Fn(&str) -> Result<u32>,
     all: &[Launch],
-) -> Result<Reservation> {
+    admit: Admit<'_>,
+) -> Result<(Reservation, Option<String>)> {
     if let Some((item, other)) = held_item(l, all) {
         let alias = l
             .request
@@ -565,6 +634,10 @@ fn try_reserve(
             other.id, other.state, other.request.project
         )));
     }
+    // A launch that may not run neither takes nor waits for a slot, so it is checked first.
+    if let Some(reason) = admit(l) {
+        return Ok((queue(tx, l, dispatcher)?, Some(reason)));
+    }
     let recipe = &l.request.recipe;
     let cap = capacity(recipe)? as usize;
     let same_pool = || all.iter().filter(|o| &o.request.recipe == recipe && o.id != l.id);
@@ -574,26 +647,19 @@ fn try_reserve(
             .filter(|o| &o.request.recipe == recipe)
             .map(|o| o.orphans.len())
             .sum::<usize>();
-    // Queued launches that come before this one and could take a slot now.
+    // Queued launches that come before this one and could take a slot now: not one held for
+    // an item, nor one of this claimer's that `admit` refuses.
     let ahead = same_pool()
         .filter(|o| o.state == State::Queued && held_item(o, all).is_none())
+        .filter(|o| !(may_claim(o, dispatcher) && admit(o).is_some()))
         .filter(|o| match (l.state, l.queued_seq, o.queued_seq) {
             (State::Queued, Some(mine), Some(theirs)) => theirs < mine,
             _ => true,
         })
         .count();
     if held + ahead >= cap {
-        if l.state == State::Queued {
-            return Ok(Reservation::Queued {
-                launch: l.id.clone(),
-                repeat: true,
-            });
-        }
-        record(tx, &l.id, LaunchData::new(Transition::Queued).dispatcher(dispatcher))?;
-        return Ok(Reservation::Queued {
-            launch: l.id.clone(),
-            repeat: false,
-        });
+        let reason = format!("no free slot in pool {recipe} ({held} held, {ahead} queued ahead, capacity {cap})");
+        return Ok((queue(tx, l, dispatcher)?, Some(reason)));
     }
     let token = new_token();
     record(
@@ -603,11 +669,12 @@ fn try_reserve(
             .token(&token)
             .dispatcher(dispatcher),
     )?;
-    Ok(Reservation::Reserved {
+    let reserved = Reservation::Reserved {
         launch: l.id.clone(),
         token,
         repeat: false,
-    })
+    };
+    Ok((reserved, None))
 }
 
 /// Reserves the oldest queued launch that can take a slot now, if any.
@@ -616,12 +683,52 @@ pub fn reserve_next(
     dispatcher: &str,
     capacity: &dyn Fn(&str) -> Result<u32>,
 ) -> Result<Option<Reservation>> {
+    match next(tx, dispatcher, capacity, &|_| None)? {
+        (Next { reserved: None, .. }, Some(e)) => Err(e),
+        (n, _) => Ok(n.reserved),
+    }
+}
+
+/// What [`reserve_next_admitted`] did: the launch reserved, if any, and why each queued launch
+/// of the claimer's that it passed over waits (runner spec 4.2), in queue order.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Next {
+    pub reserved: Option<Reservation>,
+    pub waiting: Vec<(String, String)>,
+}
+
+/// [`reserve_next`] behind `admit` (4.2): checks 1 (no issue held) and 2 (a free slot) are
+/// `reserve`'s own; `admit` is the claimer's checks. A recipe that cannot be resolved is that
+/// launch's reason, never an error.
+pub fn reserve_next_admitted(
+    tx: &mut Tx<'_>,
+    dispatcher: &str,
+    capacity: &dyn Fn(&str) -> Result<u32>,
+    admit: Admit<'_>,
+) -> Result<Next> {
+    next(tx, dispatcher, capacity, admit).map(|(n, _)| n)
+}
+
+/// Both reserve-nexts: the [`Next`], and the first recipe that could not be resolved.
+fn next(
+    tx: &mut Tx<'_>,
+    dispatcher: &str,
+    capacity: &dyn Fn(&str) -> Result<u32>,
+    admit: Admit<'_>,
+) -> Result<(Next, Option<Error>)> {
     let all = all(tx.conn())?;
     let mut queued: Vec<&Launch> = all.iter().filter(|l| l.state == State::Queued).collect();
     queued.sort_by_key(|l| l.queued_seq);
     let mut first_error = None;
+    let mut waiting = Vec::new();
     for l in queued {
-        if held_item(l, &all).is_some() {
+        // Only what this claimer may claim (runner spec 4.1). A launch it may not claim still
+        // counts as ahead of it in `try_reserve`: the pool is shared and first-in first-out.
+        if !may_claim(l, dispatcher) {
+            continue;
+        }
+        if let Some((item, other)) = held_item(l, &all) {
+            waiting.push((l.id.clone(), format!("{item} is held by launch {}", other.id)));
             continue;
         }
         // A launch whose recipe can no longer be resolved must not stop other recipes' queues;
@@ -630,18 +737,27 @@ pub fn reserve_next(
         let cap = match capacity(&l.request.recipe) {
             Ok(cap) => cap,
             Err(e) => {
+                waiting.push((l.id.clone(), e.to_string()));
                 first_error.get_or_insert(e);
                 continue;
             }
         };
-        if let r @ Reservation::Reserved { .. } = try_reserve(tx, l, dispatcher, &|_| Ok(cap), &all)? {
-            return Ok(Some(r));
+        match try_reserve(tx, l, dispatcher, &|_| Ok(cap), &all, admit)? {
+            (r @ Reservation::Reserved { .. }, _) => {
+                let n = Next {
+                    reserved: Some(r),
+                    waiting,
+                };
+                return Ok((n, first_error));
+            }
+            (_, reason) => waiting.push((l.id.clone(), reason.unwrap_or_else(|| "queued".into()))),
         }
     }
-    match first_error {
-        Some(e) => Err(e),
-        None => Ok(None),
-    }
+    let n = Next {
+        reserved: None,
+        waiting,
+    };
+    Ok((n, first_error))
 }
 
 /// `launch-started` (10.7). Idempotent for a token and session already recorded; a released
@@ -812,4 +928,58 @@ pub fn settle_orphan(tx: &mut Tx<'_>, token: &str, session: &str) -> Result<Move
         LaunchData::new(Transition::OrphanSettled).token(token).session(session),
     )?;
     Ok(moved(&l, l.state, false))
+}
+
+fn check_runner_owned(l: &Launch, what: &str) -> Result<()> {
+    if l.dispatcher.as_deref() == Some(RUNNER) {
+        return Ok(());
+    }
+    Err(Error::refused(format!(
+        "launch {} is held by {}; only a launch the {RUNNER} reserved {what}",
+        l.id,
+        l.dispatcher.as_deref().unwrap_or("nobody")
+    )))
+}
+
+/// `release_never_started` (runner spec 3.2): frees a runner launch AgentBridge reports it
+/// never started, with that report as evidence. The evidence is direct, so there is no
+/// [`SETTLE_AFTER`] wait; a dispatcher's launch still settles through [`release`].
+pub fn release_never_started(tx: &mut Tx<'_>, token: &str, evidence: &serde_json::Value) -> Result<Moved> {
+    let l = by_token(tx.conn(), token)?;
+    match l.state {
+        State::Reserved => {
+            check_runner_owned(&l, "is released as never started")?;
+            let mut data = LaunchData::new(Transition::Released).token(token).dispatcher(RUNNER);
+            data.evidence = Some(evidence.clone());
+            record(tx, &l.id, data)?;
+            Ok(moved(&l, State::Released, false))
+        }
+        State::Released if l.end_state.is_none() => Ok(moved(&l, State::Released, true)),
+        other => Err(Error::refused(format!(
+            "launch {} is {other}; only a reserved launch is released as never started",
+            l.id
+        ))),
+    }
+}
+
+/// The runner's `launch-ended` (runner spec 2.1): as [`ended`], and also from `reserved` for a
+/// launch whose worker finished or was archived before `started` was recorded, with
+/// AgentBridge's status body as evidence. Only for a launch the runner reserved.
+pub fn runner_ended(
+    tx: &mut Tx<'_>,
+    token: &str,
+    end_state: EndState,
+    evidence: &serde_json::Value,
+) -> Result<Moved> {
+    let l = by_token(tx.conn(), token)?;
+    check_runner_owned(&l, "is ended by the runner")?;
+    if l.state != State::Reserved {
+        return ended(tx, token, end_state);
+    }
+    let mut data = LaunchData::new(Transition::Ended).token(token);
+    data.end_state = Some(end_state);
+    data.evidence = Some(evidence.clone());
+    record(tx, &l.id, data)?;
+    record(tx, &l.id, LaunchData::new(Transition::Released).token(token))?;
+    Ok(moved(&l, State::Released, false))
 }

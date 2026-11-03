@@ -37,6 +37,16 @@ pub enum Error {
     #[error("readers still hold {}; gave up after {}s", .path.display(), .waited.as_secs())]
     ReadersActive { path: PathBuf, waited: Duration },
 
+    /// AgentBridge answered a request with an error (`code` set), or was not reached: the child
+    /// died, its pipe closed, or no answer came within the bound (`code` None). Either way the
+    /// outcome is unknown and the runner holds (runner spec 3.1 row 1).
+    #[error("agentbridge {method}: {message}")]
+    Bridge {
+        method: String,
+        code: Option<String>,
+        message: String,
+    },
+
     /// A test failpoint fired (only in-process; the CLI aborts instead).
     #[error("failpoint {0} fired")]
     Failpoint(&'static str),

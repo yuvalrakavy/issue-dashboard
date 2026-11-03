@@ -506,10 +506,15 @@ fn replay(decision: &str) -> EvalReplay {
 }
 
 fn prepare_eval(t: &TempRoot, r: &EvalReplay) -> Result<eval::PrepareReport> {
+    prepare_for(t, r, None)
+}
+
+/// Prepares `r` as `launch` would: its manifest is the launch's own.
+fn prepare_for(t: &TempRoot, r: &EvalReplay, launch: Option<&str>) -> Result<eval::PrepareReport> {
     let c = ConfigSet::load(t.path()).unwrap();
     let out = t.path().join("eval-out");
     t.root
-        .read(|l| eval::prepare(l.conn(), t.path(), &c, r, EvalStage::Scored, &[], &out))
+        .read(|l| eval::prepare(l.conn(), t.path(), &c, r, EvalStage::Scored, &[], &out, launch))
 }
 
 fn manifest_of(p: &eval::PrepareReport) -> Manifest {
@@ -1345,6 +1350,7 @@ fn manifest_paths_never_collide_and_score_refuses_a_manifest_of_another_key() {
             "type",
             repo,
             EvalStage::Scored,
+            None,
         )
     };
     assert_ne!(p(BACKEND, Some("a/b_c")), p(BACKEND, Some("a_b/c")));
@@ -1356,7 +1362,7 @@ fn manifest_paths_never_collide_and_score_refuses_a_manifest_of_another_key() {
     let prepared = prepare_eval(&t, &r).unwrap();
     let m = manifest_of(&prepared);
     // The type manifest under priority's name.
-    let wrong = eval::manifest_path(t.path(), "home", BACKEND, "priority", None, EvalStage::Scored);
+    let wrong = eval::manifest_path(t.path(), "home", BACKEND, "priority", None, EvalStage::Scored, None);
     fs::copy(&prepared.manifest, &wrong).unwrap();
     let msg = refused(score(&t, &replay("priority"), &answers(&m, 0.6, |_| true)));
     assert!(msg.contains("is the manifest of home/"), "{msg}");
@@ -1542,4 +1548,52 @@ fn the_interval_is_the_5th_and_95th_percentile_of_the_resamples() {
     // Seed 4: the 49th and 50th sorted resamples differ, so rounding p · 999 is observable.
     let (lo, hi) = eval::ece_interval(AnswerKind::Choice, &allowed, &e, 4);
     assert!(close(lo, 0.059) && close(hi, 0.227), "{lo} {hi}");
+}
+
+// --- A launch's score is applied once (runner spec 2.6) -------------------------------------
+
+fn score_as(t: &TempRoot, launch: &str, r: &EvalReplay, a: &EvalAnswers) -> Result<eval::ScoreReport> {
+    let c = ConfigSet::load(t.path()).unwrap();
+    t.root.mutate(now(), |tx| {
+        eval::score_for_launch(tx, t.path(), &c, r, std::slice::from_ref(a), launch)
+    })
+}
+
+#[test]
+fn a_launch_retried_after_another_launch_scored_records_nothing_and_the_other_stays_latest() {
+    let t = with_history(Vec::new());
+    let r = replay("type");
+    let m = manifest_of(&prepare_for(&t, &r, Some("LA")).unwrap());
+    prepare_for(&t, &r, Some("LB")).unwrap();
+    let a = answers(&m, 0.6, |i| i % 3 != 2);
+    let b = answers(&m, 0.7, |i| i % 4 != 3);
+    let sa = score_as(&t, "LA", &r, &a).unwrap();
+    let sb = score_as(&t, "LB", &r, &b).unwrap();
+    assert!(!sa.repeat && !sb.repeat);
+    let map_a = sa.map.clone().unwrap();
+    fs::remove_file(&map_a).unwrap();
+    let again = score_as(&t, "LA", &r, &a).unwrap();
+    assert!(again.repeat, "A's receipt makes the retry a no-op");
+    assert_eq!(again.seq, sa.seq, "the retry reports A's own evaluation");
+    assert!(!map_a.exists(), "the receipt is read before the map is written");
+    let rec = t
+        .root
+        .read(|l| ledger::events_by_kind(l.conn(), Kind::Evaluated))
+        .unwrap();
+    assert_eq!(rec.len(), 2);
+    assert_eq!(rec.last().unwrap().seq, sb.seq, "B stays the latest evaluation");
+}
+
+#[test]
+fn one_launch_scores_each_of_its_keys_once() {
+    let t = with_history(Vec::new());
+    let r = replay("type");
+    let m = manifest_of(&prepare_for(&t, &r, Some("LA")).unwrap());
+    let mut one_repo = replay("type");
+    one_repo.repo = Some(AIRZONED.into());
+    let m1 = manifest_of(&prepare_for(&t, &one_repo, Some("LA")).unwrap());
+    let s = score_as(&t, "LA", &r, &answers(&m, 0.6, |i| i % 3 != 2)).unwrap();
+    let s1 = score_as(&t, "LA", &one_repo, &answers(&m1, 0.6, |i| i % 3 != 2)).unwrap();
+    assert!(!s.repeat && !s1.repeat, "a receipt covers its own key only");
+    assert!(score_as(&t, "LA", &one_repo, &answers(&m1, 0.7, |_| true)).unwrap().repeat);
 }

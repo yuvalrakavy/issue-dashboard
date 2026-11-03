@@ -84,6 +84,10 @@
             "schedule"
           ]
         },
+        "evidence": {
+          "description": "AgentBridge's status body that justified a runner transition taken without a session: a release as never started, or an end from reserved (runner spec 2.1, 3.2).",
+          "type": "object"
+        },
         "scope": {
           "description": "A triage launch's scope, on its requested transition (triage spec 4.6).",
           "enum": [

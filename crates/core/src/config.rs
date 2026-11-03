@@ -158,7 +158,38 @@ pub struct Registry {
     pub forks: Option<Forks>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub fork: BTreeMap<String, ForkEntry>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runner: Option<RunnerConfig>,
 }
+
+/// `[runner]`: what the bridge runner may run (runner spec 2.3, 4.2).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RunnerConfig {
+    /// `[runner.kinds.<kind>]`: a kind not listed is disabled.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub kinds: BTreeMap<String, RunnerKind>,
+    /// `[runner.harness.<name>]`, by AgentBridge profile.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub harness: BTreeMap<String, RunnerHarness>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RunnerKind {
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RunnerHarness {
+    /// Launches on this harness at once; 1 when unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_active: Option<u32>,
+}
+
+/// A harness's `max_active` when its table does not set one (4.2).
+pub const RUNNER_MAX_ACTIVE: u32 = 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Writes {
@@ -579,6 +610,7 @@ pub fn default_routing(kind: &str) -> Option<crate::docs::Routing> {
         effort: effort.to_string(),
         workspace: None,
         reason: Some("the tracker's default routing (triage spec 5.3)".to_string()),
+        harness: None,
     })
 }
 

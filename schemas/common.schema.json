@@ -136,6 +136,11 @@
         },
         "reason": {
           "type": "string"
+        },
+        "harness": {
+          "description": "The AgentBridge launch profile that runs the launch; a launch naming one is reserved only by the bridge runner (runner spec 1.4).",
+          "type": "string",
+          "minLength": 1
         }
       }
     },
@@ -546,7 +551,8 @@
             "session_gone",
             "prepared",
             "evaluated",
-            "truth_tag"
+            "truth_tag",
+            "eval_applied"
           ]
         },
         "subject": {

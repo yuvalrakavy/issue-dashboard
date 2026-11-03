@@ -1,0 +1,22 @@
+{
+  "seq": 42,
+  "time": "2026-11-03T09:05:00Z",
+  "kind": "eval_applied",
+  "subject": "launch-eval-7",
+  "pred": 0,
+  "distinct": {
+    "project": "home",
+    "backend": "claude-opus-5-5@medium",
+    "decision": "area",
+    "repo": "example-org/server"
+  },
+  "identity": "b6e6bdacb5052ab956aef82769a17ee27b51c2840886fd0aa93d8ffcf3ceeb79",
+  "data": {
+    "launch": "launch-eval-7",
+    "project": "home",
+    "backend": "claude-opus-5-5@medium",
+    "decision": "area",
+    "repo": "example-org/server",
+    "evaluated": 41
+  }
+}

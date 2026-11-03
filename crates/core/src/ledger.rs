@@ -174,6 +174,7 @@ impl Ledger {
             conn.execute_batch("DROP TABLE reads;")?;
         }
         conn.execute_batch(READS)?;
+        conn.execute_batch(crate::runner_status::TABLES)?;
         Ok(Ledger { conn })
     }
 
