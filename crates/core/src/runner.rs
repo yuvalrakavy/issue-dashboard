@@ -32,6 +32,19 @@ pub const MAX_CORRECTIONS: u32 = 3;
 /// the runner archives it: an unanswered prompt otherwise holds its pool slot forever.
 pub const QUESTION_BOUND_MINUTES: i64 = 10;
 
+/// How long a worker AgentBridge reports idle may stay so: the same report covers a worker
+/// that died, which would otherwise hold its pool slot forever.
+pub const IDLE_BOUND_MINUTES: i64 = 10;
+
+/// AgentBridge 0.2.4's `unknown` reason for a native session that is idle, or gone, with no
+/// terminal report (`dashboard/store.rs` `token_status`). A worker waiting for its first stage
+/// is reported so; a delivered stage wakes it. Any other `unknown` reason holds.
+const IDLE_REASON: &str = "native_idle_or_unavailable_without_valid_terminal_report; original identity retained";
+
+/// The bound identity of an idle spell. A question's identity is JSON, which never starts
+/// with this, so the two bounds share the `runner_questions` row without mistaking each other.
+const IDLE_IDENTITY: &str = "idle:";
+
 /// How long one step waits for a staged file to be ready before it leaves it to the next.
 const STAGING_WAIT: Duration = Duration::from_secs(30);
 
@@ -249,10 +262,13 @@ pub fn step(cx: &Ctx<'_>, token: &str) -> Result<Stepped> {
         return Ok(Stepped::Waiting(format!("launch {} is {}", l.id, l.state)));
     }
     let s = match bridge::status(cx.bridge, token)? {
-        TokenStatus::Unknown if l.state == State::Reserved => return start(cx, &l, token),
         TokenStatus::Unknown => {
-            // A rolled-back launch's next worker must not inherit this one's question.
+            // No worker holds the token: whichever worker comes next, a restarted one or a
+            // rolled-back launch's, must not inherit this one's question or idle spell.
             cx.root.mutate((cx.now)(), |tx| runner_status::not_asking(tx.conn(), &l.id))?;
+            if l.state == State::Reserved {
+                return start(cx, &l, token);
+            }
             return Ok(Stepped::Rollback(format!(
                 "AgentBridge no longer knows token {token}, which launch {} recorded as {}",
                 l.id, l.state
@@ -260,10 +276,17 @@ pub fn step(cx: &Ctx<'_>, token: &str) -> Result<Stepped> {
         }
         TokenStatus::Known(s) => s,
     };
-    let asking = cx.root.read(|led| runner_status::asking(led.conn(), &l.id))?;
-    if s.state != "waiting_user" && asking.is_some() {
-        cx.root.mutate((cx.now)(), |tx| runner_status::not_asking(tx.conn(), &l.id))?;
-    }
+    let idle = s.state == "unknown" && s.reason == IDLE_REASON;
+    // A recorded bound outlives only the state it times: a question, or an idle spell.
+    let asking = match cx.root.read(|led| runner_status::asking(led.conn(), &l.id))? {
+        Some((identity, _)) if (identity.starts_with(IDLE_IDENTITY) && !idle)
+            || (!identity.starts_with(IDLE_IDENTITY) && s.state != "waiting_user") =>
+        {
+            cx.root.mutate((cx.now)(), |tx| runner_status::not_asking(tx.conn(), &l.id))?;
+            None
+        }
+        kept => kept,
+    };
     if s.result.is_some() {
         return finished(cx, &l, token, &s);
     }
@@ -282,22 +305,25 @@ pub fn step(cx: &Ctx<'_>, token: &str) -> Result<Stepped> {
     }
     match s.state.as_str() {
         "queued" => Ok(Stepped::Waiting("queued: no native session yet".into())),
-        "started" | "awaiting_caller" => {
-            let r = &l.request.routing;
-            match (s.native_session_id.as_deref(), s.routing_matches(&r.model, &r.effort)) {
-                (_, Some(false)) => archive(cx, token),
-                (Some(session), Some(true)) => {
-                    if l.state == State::Reserved {
-                        cx.root.mutate((cx.now)(), |tx| launch::started(tx, token, session))?;
-                        return Ok(Stepped::RecordedStarted);
-                    }
-                    match l.request.kind {
-                        LaunchKind::Eval => eval_step(cx, &l, token, &s),
-                        other => Ok(Stepped::Held(format!("the runner does not run {other:?} launches yet"))),
-                    }
-                }
-                _ => Ok(Stepped::Waiting("routing not verified yet".into())),
+        "started" | "awaiting_caller" => running(cx, &l, token, &s),
+        "unknown" if idle => {
+            let now = (cx.now)();
+            // A record kept past the clear rule above is this idle spell's: one reason, one identity.
+            // Recorded before the step, so a failed send never restarts the bound.
+            let since = match asking {
+                Some((_, since)) => since,
+                None => cx.root.mutate(now, |tx| {
+                    runner_status::asked(tx.conn(), &l.id, &format!("{IDLE_IDENTITY}{IDLE_REASON}"), now)
+                })?,
+            };
+            if now - since <= chrono::Duration::minutes(IDLE_BOUND_MINUTES) {
+                return running(cx, &l, token, &s);
             }
+            // Retried each tick until AgentBridge reports the worker archived, as a question's.
+            bridge::archive(cx.bridge, token, &format!("{token}-idle"))?;
+            Ok(Stepped::Blocked(format!(
+                "the worker was idle and unresponsive for over {IDLE_BOUND_MINUTES} minutes and was archived"
+            )))
         }
         "waiting_user" => {
             // AgentBridge leaves `reason` null here and puts the question in `question`.
@@ -359,6 +385,26 @@ fn start(cx: &Ctx<'_>, l: &Launch, token: &str) -> Result<Stepped> {
     };
     bridge::start(cx.bridge, &s)?;
     Ok(Stepped::Started)
+}
+
+/// The worker's session is up (or idle, waiting for its next input): record it started on the
+/// routing asked for, then take the launch's next step.
+fn running(cx: &Ctx<'_>, l: &Launch, token: &str, s: &Status) -> Result<Stepped> {
+    let r = &l.request.routing;
+    match (s.native_session_id.as_deref(), s.routing_matches(&r.model, &r.effort)) {
+        (_, Some(false)) => archive(cx, token),
+        (Some(session), Some(true)) => {
+            if l.state == State::Reserved {
+                cx.root.mutate((cx.now)(), |tx| launch::started(tx, token, session))?;
+                return Ok(Stepped::RecordedStarted);
+            }
+            match l.request.kind {
+                LaunchKind::Eval => eval_step(cx, l, token, s),
+                other => Ok(Stepped::Held(format!("the runner does not run {other:?} launches yet"))),
+            }
+        }
+        _ => Ok(Stepped::Waiting("routing not verified yet".into())),
+    }
 }
 
 fn archive(cx: &Ctx<'_>, token: &str) -> Result<Stepped> {
