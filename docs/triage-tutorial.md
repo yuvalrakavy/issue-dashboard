@@ -79,7 +79,7 @@ something new since they were asked, and issues you asked about with **Request t
 ## 3. Reading a card
 
 Issue #512, *"Panel freezes after the broker reconnects"*, filed yesterday with no labels. It is in
-the **Triage** tab, one row for the issue, under **Suggestions**:
+the **Triage** tab, one row for the issue, under **All** and **Suggestions**:
 
 > **▸ Suggested · 82% · evaluated**
 > Store#512 Panel freezes after the broker reconnects

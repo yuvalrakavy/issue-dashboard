@@ -220,7 +220,7 @@ footer .wrap { padding-block: 0 32px; font-size: .82rem; color: var(--muted); di
     owner: false, viewer: null,
     load: null, meta: null, heartbeat: null, issues: [], acks: [], statuses: [], suggestions: [], metrics: [],
     decisions: [], launches: [], views: [],
-    tab: "inbox", inboxFilter: "all", queueFilter: "all", triageFilter: "rows", threshold: 0.85, open: null, text: "",
+    tab: "inbox", inboxFilter: "all", queueFilter: "all", triageFilter: "all", threshold: 0.85, open: null, text: "",
     scope: null, scopeName: null,
     openCard: null, menu: null, sel: 0, error: null, weeks: 8,
   };
@@ -499,7 +499,7 @@ footer .wrap { padding-block: 0 32px; font-size: .82rem; color: var(--muted); di
     $("tiles").replaceChildren(...[
       t.p0_open ? tile(t.p0_open, "p0 open", () => go("queue", "p0"), true) : null,
       tile(t.waiting_on_you, "waiting on you", () => go("inbox", "waiting"), true),
-      tile(nTriage, "to triage · " + nSuggestions + " suggestion" + (nSuggestions === 1 ? "" : "s"), () => go("triage", tr.rows.length || !tr.seconds.length ? "rows" : "seconds")),
+      tile(nTriage, "to triage · " + nSuggestions + " suggestion" + (nSuggestions === 1 ? "" : "s"), () => go("triage", "all")),
       t.over_time_limit ? tile(t.over_time_limit, "over time limit", () => go("queue", "over"), true) : null,
       tile(t.open, "open", () => go("queue", "all")),
     ].filter(Boolean));
@@ -720,7 +720,7 @@ footer .wrap { padding-block: 0 32px; font-size: .82rem; color: var(--muted); di
     const runTriage = S.owner
       ? h("button", { class: "btn", disabled: live, title: live ? "A triage launch is live; wait for it to end." : "", onclick: openTriage }, "Run triage…")
       : null;
-    const head = h("div", { class: "pills" }, pill("rows", "Suggestions · " + t.rows.length), pill("seconds", "Second opinions · " + t.seconds.length), pill("stronger", "Needs a stronger look · " + stronger), runTriage);
+    const head = h("div", { class: "pills" }, pill("all", "All · " + D.triageCount(t)), pill("rows", "Suggestions · " + t.rows.length), pill("seconds", "Second opinions · " + t.seconds.length), pill("stronger", "Needs a stronger look · " + stronger), runTriage);
     if (f === "stronger") return h("div", { class: "list" }, head, strongerLookSection() || h("div", { class: "note" }, "Nothing needs a stronger look."));
 
     const eligible = D.eligibleCards(t, S.threshold);
@@ -728,7 +728,7 @@ footer .wrap { padding-block: 0 32px; font-size: .82rem; color: var(--muted); di
     const threshold = h("select", { "aria-label": "Confidence threshold", onchange: (e) => { S.threshold = Number(e.target.value); render(); } },
       THRESHOLDS.map((x) => h("option", { value: String(x), selected: x === S.threshold }, pct(x))));
     const evaluate = h("button", { class: "btn", onclick: () => openEvaluate((S.meta && S.meta.routing && S.meta.routing.triage) || { model: "claude-opus-5-5", effort: "medium" }) }, "Evaluate…");
-    const bar = S.owner && f === "rows" && t.rows.length
+    const bar = S.owner && f !== "seconds" && t.rows.length
       ? h("div", { class: "tbar" }, h("span", {}, "Confidence ≥ "), threshold,
         eligible.length ? h("button", { class: "btn primary", onclick: () => applyAll(eligible) }, "Apply eligible · " + eligible.length) : h("span", { class: "muted" }, why),
         eligible.length ? null : evaluate)
@@ -767,7 +767,7 @@ footer .wrap { padding-block: 0 32px; font-size: .82rem; color: var(--muted); di
           h("button", { class: "btn", onclick: () => { S.openCard = { id: x.id, mode: "triage-edit" }; render(); } }, "Edit…"),
           h("button", { class: "btn quiet", onclick: () => writeAll(x.parts.map((s) => D.dismissSuggestionFields(s))) }, "Dismiss")) : null);
     };
-    const list = f === "seconds" ? t.seconds : t.rows;
+    const list = f === "all" ? t.rows.concat(t.seconds) : f === "seconds" ? t.seconds : t.rows;
     const empty = f === "seconds" ? "No second opinions." : "Nothing to triage.";
     return h("div", { class: "list" }, head, bar, list.length ? list.map(row) : h("div", { class: "note" }, empty));
   }

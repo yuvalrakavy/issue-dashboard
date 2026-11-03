@@ -80,3 +80,13 @@ test("the page has a Triage tab and the Inbox no longer renders the triage secti
   assert.ok(inbox.length > 0, "renderInbox precedes renderTriage");
   assert.doesNotMatch(inbox, /triageSection|strongerLookSection|openTriage/);
 });
+
+// The tile counts first-time and second-opinion issues together, so it must open a list
+// holding both (spec 5.2: every tile links to the filter it counts).
+test("the to-triage tile opens the All filter, which lists rows and second opinions", () => {
+  const html = fs.readFileSync(path.join(__dirname, "dashboard.html"), "utf8");
+  const strip = html.slice(html.indexOf("function renderStrip"), html.indexOf("function renderStrip") + 4000);
+  assert.match(strip, /"to triage · "[^\n]*go\("triage", "all"\)/);
+  assert.match(html, /triageFilter: "all"/);
+  assert.match(html, /f === "all" \? t\.rows\.concat\(t\.seconds\)/);
+});
