@@ -302,3 +302,17 @@ the harness traps to a hook message or the build-brief template.
 - improve: hazards §1 also asks "what removes each file this writes?" — spec 10.6 deleted old
   page generations but never named the local file's end; every writer of a per-run file names
   its remover in the same chapter.
+
+## 2026-11-04 Triage tab (T1, UX review proposals 1+2, shape B)
+- time: memo + mockups + build about 2 h; gate about 25 min (Codex depth, Sonnet confirming).
+- catches: self-review 1 (an empty current read "none → bug"; now "—"); controls 2 (a
+  duplicated site made "worst badge" ambiguous; a redundant `!c.second` left a mutant green, so
+  the term went); gate=Codex 2 medium: tile opens a subset of what it counts (fixed: All
+  filter); Triage ∩ Queue duplicates (pre-existing; ruled by spec: a suggestion does not move a
+  triaged issue). Round 2 (Sonnet medium) clean, 1 S1 folded into the spec.
+- DG=n/a IG=2 post-merge=0
+- tier-call: right (T1: regroups existing cards into a new tab).
+- delegation: depth Codex adversarial-review `--wait`; confirming Sonnet medium.
+- unconsolidated: 4
+- improve: a summary tile and its target list are one claim — when a tile counts a union, the
+  memo names the filter that shows that union, and a test opens the tile's filter and counts it.
