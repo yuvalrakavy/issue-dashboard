@@ -146,27 +146,34 @@ pub fn admission<'a>(
     }
 }
 
-/// One admission pass (4.2): every requested runner launch is reserved or queued, then the
-/// queue is reserved from until nothing more can be; each launch left waiting has its reason
-/// recorded for the page, and a reserved one has its reason cleared. Returns the tokens
-/// reserved.
-pub fn admit(cx: &Ctx<'_>) -> Result<Vec<String>> {
+/// The harnesses the runner has to read the health of: every runner launch's, waiting or held.
+pub fn harnesses(root: &Root) -> Result<Vec<String>> {
+    let mut out: Vec<String> = root
+        .read(|l| launch::all(l.conn()))?
+        .into_iter()
+        .filter(|l| l.state.holds() || matches!(l.state, State::Requested | State::Queued))
+        .filter_map(|l| l.request.routing.harness)
+        .collect();
+    out.sort();
+    out.dedup();
+    Ok(out)
+}
+
+/// One admission pass (4.2) over `health`, read live by the caller: every requested runner
+/// launch is reserved or queued, then the queue is reserved from until nothing more can be.
+/// Each launch that was waiting has its reason recorded for the page, or cleared once it is
+/// reserved. Returns the tokens reserved.
+pub fn admit(cx: &Ctx<'_>, health: &HashMap<String, bool>) -> Result<Vec<String>> {
     let config = ConfigSet::load(cx.root.dir())?;
     let all = cx.root.read(|l| launch::all(l.conn()))?;
-    let waiting = |l: &&Launch| {
-        l.request.routing.harness.is_some() && matches!(l.state, State::Requested | State::Queued)
-    };
-    let mut harnesses: Vec<String> = all
+    let waiting: Vec<String> = all
         .iter()
-        .filter(waiting)
-        .filter_map(|l| l.request.routing.harness.clone())
+        .filter(|l| l.request.routing.harness.is_some() && matches!(l.state, State::Requested | State::Queued))
+        .map(|l| l.id.clone())
         .collect();
-    harnesses.sort();
-    harnesses.dedup();
-    if harnesses.is_empty() {
+    if waiting.is_empty() {
         return Ok(Vec::new());
     }
-    let health = bridge::health(cx.bridge, &harnesses)?;
     let capacity = |recipe: &str| config.capacity(recipe);
     let mut tokens = Vec::new();
     let mut reasons: Vec<(String, String)> = Vec::new();
@@ -177,7 +184,7 @@ pub fn admit(cx: &Ctx<'_>) -> Result<Vec<String>> {
         .collect();
     for id in requested {
         let all = cx.root.read(|l| launch::all(l.conn()))?;
-        let ok = admission(&config, &health, &all);
+        let ok = admission(&config, health, &all);
         let r = cx
             .root
             .mutate((cx.now)(), |tx| launch::reserve_admitted(tx, &id, launch::RUNNER, &capacity, &ok));
@@ -190,7 +197,7 @@ pub fn admit(cx: &Ctx<'_>) -> Result<Vec<String>> {
     }
     loop {
         let all = cx.root.read(|l| launch::all(l.conn()))?;
-        let ok = admission(&config, &health, &all);
+        let ok = admission(&config, health, &all);
         let next = cx
             .root
             .mutate((cx.now)(), |tx| launch::reserve_next_admitted(tx, launch::RUNNER, &capacity, &ok))?;
@@ -203,7 +210,7 @@ pub fn admit(cx: &Ctx<'_>) -> Result<Vec<String>> {
     }
     let now = (cx.now)();
     cx.root.mutate(now, |tx| {
-        for o in launch::all(tx.conn())?.iter().filter(|o| o.request.routing.harness.is_some()) {
+        for o in launch::all(tx.conn())?.iter().filter(|o| waiting.contains(&o.id)) {
             match reasons.iter().rev().find(|(id, _)| id == &o.id) {
                 Some((_, reason)) if matches!(o.state, State::Queued | State::Requested) => {
                     runner_status::hold(tx.conn(), &o.id, reason, now)?

@@ -56,9 +56,9 @@ pub struct Pin {
     pub executable_sha256: String,
 }
 
-/// The handshake: requires [`CONTRACT_VERSION`], [`METHODS`] and [`FEATURES`] (the connector
-/// refuses itself if one is missing), then compares the answer to `pin`.
-pub fn handshake(b: &dyn Bridge, pin: &Pin) -> Result<Value> {
+/// `capabilities`, requiring [`CONTRACT_VERSION`], [`METHODS`] and [`FEATURES`] (the connector
+/// refuses itself if one is missing): the pin the running connector answers to, and the answer.
+pub fn capabilities(b: &dyn Bridge) -> Result<(Pin, Value)> {
     let caps = b.call(
         "capabilities",
         json!({"require": {"contract_version": CONTRACT_VERSION, "methods": METHODS, "features": FEATURES}}),
@@ -68,6 +68,12 @@ pub fn handshake(b: &dyn Bridge, pin: &Pin) -> Result<Value> {
         contract_version: caps["connector_contract_version"].as_u64().unwrap_or(0) as u32,
         executable_sha256: caps["executable"]["sha256"].as_str().unwrap_or_default().to_string(),
     };
+    Ok((seen, caps))
+}
+
+/// The handshake: [`capabilities`], compared to `pin`.
+pub fn handshake(b: &dyn Bridge, pin: &Pin) -> Result<Value> {
+    let (seen, caps) = capabilities(b)?;
     if &seen != pin {
         return Err(Error::refused(format!(
             "the connector is not the one the runner is pinned to: pinned {pin:?}, running {seen:?}; \

@@ -290,3 +290,7 @@ before UI chapters".
 | 4.2, 1.2 | pre-reserve checks before `reserve_next`; `wait`'s bound = connector timeout + 120 s | | 11a5623, 4f3e728 |
 | 4.2 | checks 3-5 (`runner::admission`) run before the slot check; a queued launch the runner may not admit is not "ahead" in its own claim (it still is for another claimer); check 1 never stops an eval (read-only kinds hold no issue) | an unadmittable launch would block its pool | — |
 | 2.2 | `network: none` is not sent | `start` has no network field; `read-only` access is the fence | — |
+| 1.2 | setup in `runner.json` (connector, config, `state_dir`, pin, rollback); `runner init` refuses an existing setup or connector state and leaves it unpinned; `init` and `pin` take the runner lock | `--init` reopens existing state; one connector per root | — |
+| 3.4 | a rollback is saved in `runner.json`; the service refuses to start until `runner pin --accept-rollback` | the flag must outlive the process | — |
+| 4.3 | `wait` (≤ 5 s) is the poll; the cursor is the largest event `sequence`; history refreshes run on threads, held in memory (a restart refreshes again) | one loop, no stall on `gh` | — |
+| 1.3 | `runner launchagent` prints the plist/unit only; launchd cannot skip a restart on exit 1, so `ThrottleInterval` 60 | install is the owner's | — |

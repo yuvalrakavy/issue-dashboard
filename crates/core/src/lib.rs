@@ -34,6 +34,7 @@ pub mod root;
 pub mod runner;
 pub mod runner_status;
 pub mod schema;
+pub mod service;
 pub mod sessions;
 pub mod snapshot;
 pub mod suggest;

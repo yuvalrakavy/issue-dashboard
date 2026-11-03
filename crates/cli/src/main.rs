@@ -2,15 +2,19 @@
 //! the ledger; each prints its result as JSON on stdout, and an error on stderr with the exit
 //! code of chapter 8 (1 refused by a check, 2 a file or environment error).
 
+use std::ffi::OsString;
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::time::Duration;
+use std::sync::Arc;
+use std::thread;
+use std::time::{Duration, Instant};
 
 use anyhow::Context;
 use chrono::{DateTime, Utc};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use issue_dashboard_core::backup::Failpoint;
+use issue_dashboard_core::bridge;
 use issue_dashboard_core::brief;
 use issue_dashboard_core::config::ConfigSet;
 use issue_dashboard_core::cycle;
@@ -24,6 +28,9 @@ use issue_dashboard_core::outcome::{self, GateRuns, Outcome, RecordedBy};
 use issue_dashboard_core::publish::{self, Active};
 use issue_dashboard_core::read;
 use issue_dashboard_core::root::{Options, parse_time};
+use issue_dashboard_core::runner::Ctx;
+use issue_dashboard_core::runner_status;
+use issue_dashboard_core::service::{self, Refresher};
 use issue_dashboard_core::sessions::SessionList;
 use issue_dashboard_core::suggest;
 use issue_dashboard_core::sync;
@@ -229,6 +236,42 @@ enum Command {
     /// Mark truth (triage spec 3.3).
     #[command(subcommand)]
     Truth(TruthCommand),
+    /// Run the bridge runner (runner spec 1.1): holds <root>/runner.lock, owns one connector
+    /// child and restarts it, and admits and steps the launches routed to a harness. Runs
+    /// until stopped; a pin mismatch or a rollback stops it with an error.
+    BridgeServe,
+    /// The bridge runner's setup and status (runner spec 1.2, 1.3).
+    #[command(subcommand)]
+    Runner(RunnerCommand),
+}
+
+#[derive(Subcommand)]
+enum RunnerCommand {
+    /// Create the runner's connector identity once (`--init`) and write <root>/runner.json;
+    /// refused if either already exists.
+    Init {
+        /// The agentbridge-dashboard executable.
+        #[arg(long)]
+        connector: PathBuf,
+        /// The connector's config, absolute.
+        #[arg(long)]
+        config: PathBuf,
+        /// The connector config's state_dir.
+        #[arg(long)]
+        state_dir: PathBuf,
+    },
+    /// Record the running connector's package version, contract and executable hash as the
+    /// pin the runner starts against.
+    Pin {
+        /// Clear a rollback stop (3.4), once AgentBridge's state has been checked.
+        #[arg(long)]
+        accept_rollback: bool,
+    },
+    /// The runner's status row, whether it reads as down, and why each launch waits.
+    Status,
+    /// Print the LaunchAgent plist (a systemd user unit on Linux) that runs bridge-serve for
+    /// this root; nothing is installed.
+    Launchagent,
 }
 
 #[derive(Subcommand)]
@@ -553,6 +596,152 @@ fn run_sync(command: &Command, now: DateTime<Utc>) -> anyhow::Result<Option<Valu
     }))
 }
 
+/// Starts the setup's connector (with `--init` when `init`), runs `f` over it and shuts it down.
+fn with_connector<T>(
+    setup: &service::Setup,
+    init: bool,
+    f: impl FnOnce(&bridge::Process) -> Result<T, Error>,
+) -> anyhow::Result<T> {
+    let c = spawn_connector(setup, init)?;
+    let r = f(&c);
+    c.shutdown(CONNECTOR_GRACE);
+    Ok(r?)
+}
+
+/// How long a connector is given to exit after its stdin closes.
+const CONNECTOR_GRACE: Duration = Duration::from_secs(5);
+/// The longest the service waits before restarting a connector that stopped.
+const MAX_RESTART_SECONDS: u64 = 60;
+
+fn spawn_connector(setup: &service::Setup, init: bool) -> anyhow::Result<bridge::Process> {
+    let mut args: Vec<OsString> = vec!["--config".into(), setup.config.clone().into_os_string()];
+    if init {
+        args.push("--init".into());
+    }
+    bridge::Process::spawn(&setup.connector, &args).with_context(|| format!("starting {}", setup.connector.display()))
+}
+
+/// `bridge-serve` (runner spec 1.1-1.3, 4.3): the loop around [`service::tick`]. It owns the
+/// connector child and is its only restarter; it returns only with the error that stops it.
+fn serve(root: &Root, dir: &Path, now: impl Fn() -> DateTime<Utc> + Copy) -> anyhow::Result<Value> {
+    let _lock = service::lock(dir)?;
+    let mut setup = service::load(dir)?;
+    let pin = setup.startable()?.clone();
+    let files = setup.files();
+    let history_dir = dir.to_path_buf();
+    let mut refresher = Refresher::new(Arc::new(move |project: &str| {
+        let config = ConfigSet::load(&history_dir)?;
+        let gh = github().map_err(|e| Error::GitHub(format!("{e:#}")))?;
+        history::refresh(&history_dir, &config, gh.as_ref(), project, Utc::now(), history::HISTORY_PAGE).map(|_| ())
+    }));
+    let mut backoff = 1;
+    loop {
+        let child = spawn_connector(&setup, false)?;
+        if let Err(e) = bridge::handshake(&child, &pin) {
+            child.shutdown(CONNECTOR_GRACE);
+            return Err(e.into());
+        }
+        let at = now();
+        root.mutate(at, |tx| {
+            runner_status::started(tx.conn(), std::process::id(), at, &pin.package_version, pin.contract_version)
+        })?;
+        let mut cursor = root.read(|l| runner_status::status(l.conn()))?.and_then(|s| s.cursor);
+        let began = Instant::now();
+        let why = loop {
+            if let Some(why) = child.stopped() {
+                break why;
+            }
+            let cx = Ctx {
+                root,
+                bridge: &child,
+                files: &files,
+                now: &now,
+            };
+            match service::tick(&cx, &mut refresher) {
+                Ok(t) => {
+                    if let Some(why) = t.rollback {
+                        child.shutdown(CONNECTOR_GRACE);
+                        setup.rollback = Some(why.clone());
+                        service::save(dir, &setup)?;
+                        return Err(Error::refused(format!(
+                            "stopped on a rollback: {why}; the runner does not resume until `runner pin --accept-rollback`"
+                        ))
+                        .into());
+                    }
+                    for (token, stepped) in &t.stepped {
+                        if let Err(e) = stepped {
+                            eprintln!("bridge-serve: {token}: {e}");
+                        }
+                    }
+                    let at = now();
+                    root.mutate(at, |tx| runner_status::ticked(tx.conn(), at, cursor, &t.health))?;
+                }
+                Err(e) => eprintln!("bridge-serve: tick: {e}"),
+            }
+            let after = cursor.unwrap_or(0).max(0) as u64;
+            match bridge::wait(&child, after, service::POLL_MS, 100) {
+                Ok(events) => cursor = service::cursor(&events).or(cursor),
+                Err(e) => {
+                    eprintln!("bridge-serve: wait: {e}");
+                    thread::sleep(Duration::from_millis(service::POLL_MS));
+                }
+            }
+        };
+        child.shutdown(CONNECTOR_GRACE);
+        if began.elapsed() > Duration::from_secs(MAX_RESTART_SECONDS) {
+            backoff = 1;
+        }
+        eprintln!("bridge-serve: the connector stopped ({why}); restarting in {backoff}s");
+        thread::sleep(Duration::from_secs(backoff));
+        backoff = (backoff * 2).min(MAX_RESTART_SECONDS);
+    }
+}
+
+/// The service definition for this platform, printed for the owner to install (runner spec
+/// 1.1). Exit status 1 is a refusal (a pin mismatch, a rollback): systemd does not restart on
+/// it; launchd cannot tell, so it is throttled instead.
+fn launch_agent(dir: &Path) -> anyhow::Result<Value> {
+    let exe = std::env::current_exe()?;
+    let log = dir.join("runner.log");
+    let label = "com.issue-dashboard.runner";
+    let (platform, path, text) = if cfg!(target_os = "macos") {
+        let text = format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>{label}</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>{exe}</string>
+    <string>bridge-serve</string>
+    <string>--root</string>
+    <string>{dir}</string>
+  </array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>ThrottleInterval</key><integer>60</integer>
+  <key>StandardOutPath</key><string>{log}</string>
+  <key>StandardErrorPath</key><string>{log}</string>
+</dict>
+</plist>
+"#,
+            exe = exe.display(),
+            dir = dir.display(),
+            log = log.display(),
+        );
+        ("macos", format!("~/Library/LaunchAgents/{label}.plist"), text)
+    } else {
+        let text = format!(
+            "[Unit]\nDescription=issue-dashboard bridge runner\n\n[Service]\nExecStart={exe} bridge-serve --root {dir}\nRestart=on-failure\nRestartSec=60\nRestartPreventExitStatus=1\n\n[Install]\nWantedBy=default.target\n",
+            exe = shell_word(&exe),
+            dir = shell_word(dir),
+        );
+        ("linux", "~/.config/systemd/user/issue-dashboard-runner.service".to_string(), text)
+    };
+    Ok(json!({"platform": platform, "install_path": path, "text": text}))
+}
+
 fn run(cli: Cli) -> anyhow::Result<Value> {
     if let Some(v) = run_sync(&cli.command, clock()?())? {
         return Ok(v);
@@ -582,6 +771,11 @@ fn run(cli: Cli) -> anyhow::Result<Value> {
         Command::Eval(EvalCommand::Score { .. }) => "eval-score",
         Command::Eval(EvalCommand::Status { .. }) => "eval-status",
         Command::Truth(TruthCommand::Tag { .. }) => "truth-tag",
+        Command::BridgeServe => "bridge-serve",
+        Command::Runner(RunnerCommand::Init { .. }) => "runner-init",
+        Command::Runner(RunnerCommand::Pin { .. }) => "runner-pin",
+        Command::Runner(RunnerCommand::Status) => "runner-status",
+        Command::Runner(RunnerCommand::Launchagent) => "runner-launchagent",
         Command::Pages { .. } | Command::PublishPlan { .. } | Command::CleanupPlan { .. } => {
             unreachable!("run_sync answered")
         }
@@ -909,6 +1103,38 @@ fn run(cli: Cli) -> anyhow::Result<Value> {
             };
             json!({"name": name, "decision": decision, "events": tagged, "recorded": recorded})
         }
+        Command::BridgeServe => serve(&root, &dir, now)?,
+        Command::Runner(RunnerCommand::Init {
+            connector,
+            config,
+            state_dir,
+        }) => {
+            let _lock = service::lock(&dir)?;
+            service::check_init(&dir, &state_dir)?;
+            let setup = service::Setup {
+                connector,
+                config,
+                state_dir,
+                pin: None,
+                rollback: None,
+            };
+            let seen = with_connector(&setup, true, |c| Ok(bridge::capabilities(c)?.0))?;
+            service::save(&dir, &setup)?;
+            json!({"setup": setup, "connector": seen, "next": "qualify the connector, then run `runner pin`"})
+        }
+        Command::Runner(RunnerCommand::Pin { accept_rollback }) => {
+            let _lock = service::lock(&dir)?;
+            let setup = service::load(&dir)?;
+            let seen = with_connector(&setup, false, |c| Ok(bridge::capabilities(c)?.0))?;
+            json!({"setup": service::pin(&dir, seen, accept_rollback)?})
+        }
+        Command::Runner(RunnerCommand::Status) => {
+            let setup = service::load(&dir).ok();
+            let (status, held) = root.read(|l| Ok((runner_status::status(l.conn())?, runner_status::held(l.conn())?)))?;
+            let down = runner_status::is_down(status.as_ref(), now())?;
+            json!({"status": status, "down": down, "waiting": held, "setup": setup})
+        }
+        Command::Runner(RunnerCommand::Launchagent) => launch_agent(&dir)?,
         Command::Pages { .. } | Command::PublishPlan { .. } | Command::CleanupPlan { .. } => {
             unreachable!("run_sync answered")
         }

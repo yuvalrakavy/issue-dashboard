@@ -3,8 +3,10 @@
 
 mod common;
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, Duration, Utc};
 use common::TempRoot;
@@ -20,6 +22,7 @@ use issue_dashboard_core::history::{self, HistoryItem, LabelChange};
 use issue_dashboard_core::launch::{self, EndState, RUNNER, Reservation, State, Via};
 use issue_dashboard_core::ledger;
 use issue_dashboard_core::runner_status;
+use issue_dashboard_core::service::{self, Refresher, Tick};
 use issue_dashboard_core::root::{format_time, parse_time};
 use issue_dashboard_core::runner::{self, Ctx, Stepped};
 use issue_dashboard_core::Result;
@@ -442,6 +445,117 @@ fn a_question_waits_a_failed_status_call_is_an_error_and_an_unknown_state_holds(
     assert!(matches!(r.step(), Stepped::Held(_)));
 }
 
+// --- The loop's tick (4.3) -------------------------------------------------------------------
+
+/// A refresher whose refreshes succeed while `ok` holds, recording each project it is asked for.
+fn refresher(ok: Arc<Mutex<bool>>, asked: Arc<Mutex<Vec<String>>>) -> Refresher {
+    Refresher::new(Arc::new(move |project: &str| {
+        asked.lock().unwrap().push(project.to_string());
+        match *ok.lock().unwrap() {
+            true => Ok(()),
+            false => Err(issue_dashboard_core::Error::GitHub("gh: rate limited".into())),
+        }
+    }))
+}
+
+fn tick_at(r: &Run, refresher: &mut Refresher, at: DateTime<Utc>) -> Tick {
+    let clock = move || at;
+    let cx = Ctx {
+        root: &r.t.root,
+        bridge: &r.fake,
+        files: &r.files,
+        now: &clock,
+    };
+    service::tick(&cx, refresher).unwrap()
+}
+
+fn launch_reasons(r: &Run) -> Vec<String> {
+    r.t.root
+        .read(|l| runner_status::held(l.conn()))
+        .unwrap()
+        .into_iter()
+        .map(|h| h.reason)
+        .collect()
+}
+
+#[test]
+fn a_reserved_eval_starts_only_once_its_history_refresh_is_done() {
+    let r = run();
+    let (ok, asked) = (Arc::new(Mutex::new(true)), Arc::new(Mutex::new(Vec::new())));
+    let mut rf = refresher(ok, asked.clone());
+    let t = tick_at(&r, &mut rf, now());
+    assert_eq!(t.stepped, vec![], "nothing is started before the refresh");
+    assert!(r.fake.calls_to("start").is_empty());
+    rf.settle(std::time::Duration::from_secs(10), now());
+    let t = tick_at(&r, &mut rf, now());
+    assert_eq!(t.stepped, vec![(r.token.clone(), Ok(Stepped::Started))]);
+    assert_eq!(*asked.lock().unwrap(), vec!["home".to_string()], "one refresh, of the launch's project");
+}
+
+#[test]
+fn a_failed_refresh_holds_the_eval_with_its_reason_and_is_retried_later() {
+    let r = run();
+    let (ok, asked) = (Arc::new(Mutex::new(false)), Arc::new(Mutex::new(Vec::new())));
+    let mut rf = refresher(ok.clone(), asked.clone());
+    tick_at(&r, &mut rf, now());
+    rf.settle(std::time::Duration::from_secs(10), now());
+    let t = tick_at(&r, &mut rf, now() + Duration::seconds(10));
+    assert_eq!(t.stepped, vec![]);
+    let reasons = launch_reasons(&r);
+    assert_eq!(reasons.len(), 1, "{reasons:?}");
+    assert!(reasons[0].contains("history refresh of home failed") && reasons[0].contains("rate limited"), "{reasons:?}");
+    assert_eq!(asked.lock().unwrap().len(), 1, "not retried within {}s", service::REFRESH_RETRY_SECONDS);
+    *ok.lock().unwrap() = true;
+    let later = now() + Duration::seconds(service::REFRESH_RETRY_SECONDS + 1);
+    tick_at(&r, &mut rf, later);
+    rf.settle(std::time::Duration::from_secs(10), later);
+    let t = tick_at(&r, &mut rf, later);
+    assert_eq!(t.stepped, vec![(r.token.clone(), Ok(Stepped::Started))]);
+    assert_eq!(launch_reasons(&r), Vec::<String>::new(), "the reason is cleared once it starts");
+}
+
+#[test]
+fn a_rollback_found_by_a_step_stops_the_tick_before_any_other_launch_is_stepped() {
+    let r = run();
+    r.running(Value::Null);
+    assert_eq!(r.step(), Stepped::RecordedStarted);
+    // A second started runner launch, after E1, that AgentBridge still knows.
+    let mut doc = launch_of("E2", LaunchKind::Eval, &[]);
+    doc.routing.harness = Some("Codex".into());
+    let e2 = r
+        .t
+        .root
+        .mutate(now(), |tx| {
+            launch::request(tx, &doc, Via::Ingest)?;
+            let token = match launch::reserve(tx, "E2", RUNNER, &|_| Ok(2))? {
+                Reservation::Reserved { token, .. } => token,
+                other => panic!("expected a reservation, got {other:?}"),
+            };
+            launch::started(tx, &token, "native-2")?;
+            Ok(token)
+        })
+        .unwrap();
+    r.fake.tokens.lock().unwrap().clear();
+    r.fake.set_status(&e2, json!({"operation_id": e2, "state": "waiting_user"}));
+    let mut rf = refresher(Arc::new(Mutex::new(true)), Arc::new(Mutex::new(Vec::new())));
+    let t = tick_at(&r, &mut rf, now());
+    assert!(t.rollback.as_deref().is_some_and(|w| w.contains("no longer knows")), "{t:?}");
+    assert_eq!(t.stepped, vec![]);
+    let asked: Vec<Value> = r.fake.calls_to("status");
+    assert!(asked.iter().all(|p| p["operation_id"] != json!(e2)), "E2 was stepped after the rollback: {asked:?}");
+}
+
+#[test]
+fn a_reason_for_a_launch_that_no_longer_waits_is_forgotten() {
+    let r = run();
+    r.t.root
+        .mutate(now(), |tx| runner_status::hold(tx.conn(), "GONE", "no free slot", now()))
+        .unwrap();
+    let mut rf = refresher(Arc::new(Mutex::new(true)), Arc::new(Mutex::new(Vec::new())));
+    tick_at(&r, &mut rf, now());
+    assert_eq!(launch_reasons(&r), Vec::<String>::new());
+}
+
 // --- Admission (4.2) -------------------------------------------------------------------------
 
 const ENABLED: &str = "[runner.kinds.eval]\nenabled = true\n";
@@ -466,14 +580,10 @@ fn request(t: &TempRoot, id: &str, harness: &str, items: &[(String, String)]) {
     t.root.mutate(now(), |tx| launch::request(tx, &doc, Via::Ingest)).unwrap();
 }
 
-/// One admission pass, AgentBridge reporting each of `ready`'s harnesses ready or not.
+/// One admission pass, each of `ready`'s harnesses read as ready or not.
 fn admit(t: &TempRoot, ready: &[(&str, bool)]) -> Vec<String> {
     let fake = Fake::new();
-    let harnesses: Vec<Value> = ready
-        .iter()
-        .map(|(h, r)| json!({"profile": h, "ready_to_attempt": r}))
-        .collect();
-    fake.push("health", Answer::Ok(json!({"harnesses": harnesses})));
+    let health: HashMap<String, bool> = ready.iter().map(|(h, r)| (h.to_string(), *r)).collect();
     let files = t.path().join("bridge-files");
     let cx = Ctx {
         root: &t.root,
@@ -481,7 +591,7 @@ fn admit(t: &TempRoot, ready: &[(&str, bool)]) -> Vec<String> {
         files: &files,
         now: &now,
     };
-    runner::admit(&cx).unwrap()
+    runner::admit(&cx, &health).unwrap()
 }
 
 fn state_of(t: &TempRoot, id: &str) -> State {
