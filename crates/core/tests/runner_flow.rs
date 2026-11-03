@@ -511,9 +511,58 @@ fn a_launch_whose_plan_is_empty_or_missing_never_lands() {
 
     let r = run();
     r.drive_to_finish();
-    fs::remove_file(eval::launch_dir(r.t.path(), "home", BACKEND, "E1").join("plan.json")).unwrap();
+    let plan = eval::launch_dir(r.t.path(), "home", BACKEND, "E1").join("plan.json");
+    fs::remove_file(&plan).unwrap();
     finished(&r, "archived", "landed");
     assert_eq!(r.step(), Stepped::Ended(EndState::Failed), "a missing plan");
+
+    let r = run();
+    let c = ConfigSet::load(r.t.path()).unwrap();
+    let first: Vec<_> = runner::eval_stages(&r.t.root, &c, "home", BACKEND)
+        .unwrap()
+        .into_iter()
+        .filter(|st| st.stage == issue_dashboard_core::eval::EvalStage::First)
+        .collect();
+    assert!(!first.is_empty());
+    let dir = eval::launch_dir(r.t.path(), "home", BACKEND, "E1");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("plan.json"), serde_json::to_string(&first).unwrap()).unwrap();
+    r.running(Value::Null);
+    r.step();
+    finished(&r, "archived", "landed");
+    assert_eq!(r.step(), Stepped::Ended(EndState::Failed), "a plan with no scored stage");
+}
+
+#[test]
+fn a_launch_with_nothing_to_evaluate_yet_starts_once_history_has_it() {
+    let r = run();
+    let saved: Vec<_> = [STORE, AIRZONED, RHAI].iter().map(|repo| history::load(r.t.path(), repo).unwrap().unwrap()).collect();
+    for h in &saved {
+        history::save(r.t.path(), &history::RepoHistory { items: Vec::new(), ..h.clone() }).unwrap();
+    }
+    r.running(Value::Null);
+    assert_eq!(r.step(), Stepped::RecordedStarted);
+    assert!(matches!(r.step(), Stepped::Held(_)), "no replay to evaluate yet");
+    for h in &saved {
+        history::save(r.t.path(), h).unwrap();
+    }
+    assert_eq!(r.step(), Stepped::Sent { stage: "type".into(), round: 1 });
+}
+
+#[test]
+fn a_history_change_between_a_two_stage_decision_s_stages_keeps_the_launch_going() {
+    let r = run();
+    r.running(Value::Null);
+    r.step();
+    for n in 0..3 {
+        let Stepped::Sent { stage, round: 1 } = r.step() else { panic!("stage {n}") };
+        if stage == "priority-first" {
+            store_held_out_gone(&r);
+        }
+        let a = r.answers(&stage);
+        r.answered(a, &format!("ev-{n}"));
+    }
+    assert_eq!(r.step(), Stepped::Sent { stage: "priority".into(), round: 1 });
 }
 
 #[test]

@@ -1161,7 +1161,10 @@ pub fn prepare(
                 launch,
             );
             let first = load_manifest(&path)?;
-            verify(conn, config, cat, &history, &first)?;
+            // A launch's first stage is its own, as in `score_manifest`.
+            if launch.is_none() {
+                verify(conn, config, cat, &history, &first)?;
+            }
             Some(stage_one_answers(conn, cat, config, &first, first_answers)?)
         }
         _ => None,

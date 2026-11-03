@@ -362,6 +362,10 @@ fn plan(cx: &Ctx<'_>, config: &ConfigSet, l: &Launch, record: bool) -> Result<Op
         return Ok(None);
     }
     let stages = eval_stages(cx.root, config, &l.request.project, &backend(l))?;
+    // Nothing to evaluate yet is not a plan: a later step looks again.
+    if stages.is_empty() {
+        return Ok(Some(stages));
+    }
     fs::create_dir_all(&dir)?;
     let tmp = dir.join("plan.json.tmp");
     fs::write(&tmp, serde_json::to_string_pretty(&stages)? + "\n")?;
@@ -370,11 +374,11 @@ fn plan(cx: &Ctx<'_>, config: &ConfigSet, l: &Launch, record: bool) -> Result<Op
 }
 
 /// Whether every scored stage of `l`'s recorded plan has its receipt: never for a launch with
-/// no plan, or an empty one.
+/// no plan, or one with no scored stage.
 fn every_stage_applied(cx: &Ctx<'_>, l: &Launch) -> Result<bool> {
     let config = ConfigSet::load(cx.root.dir())?;
     let stages = match plan(cx, &config, l, false)? {
-        Some(stages) if !stages.is_empty() => stages,
+        Some(stages) if stages.iter().any(|st| st.stage == EvalStage::Scored) => stages,
         _ => return Ok(false),
     };
     for st in stages.iter().filter(|st| st.stage == EvalStage::Scored) {
