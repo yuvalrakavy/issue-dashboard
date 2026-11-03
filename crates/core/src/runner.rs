@@ -570,6 +570,7 @@ fn eval_step(cx: &Ctx<'_>, l: &Launch, token: &str, s: &Status) -> Result<Steppe
     let answers = if done { Vec::new() } else { kept_parts(cx, l, st, cut.len())? };
     if st.stage == EvalStage::Scored && !done {
         // Every part was checked alone; the whole set is checked once more as `score` reads it.
+        // Defensive: per-part checks make it unreachable unless a kept part is edited on disk.
         let errors = eval::answer_errors(cx.root.dir(), &config, &st.replay, st.stage, &answers, &l.id, None)?;
         if !errors.is_empty() {
             return Ok(Stepped::Held(format!(
@@ -720,6 +721,10 @@ fn stage_cut(
         .flat_map(|(_, v)| v["questions"].as_array().cloned().unwrap_or_default())
         .collect();
     let cut = cut(&questions, cx.part_bytes)?;
+    // An empty cut is not recorded: history may give the stage questions again by a later step.
+    if cut.is_empty() {
+        return Ok(cut);
+    }
     for n in 1..=cut.len() {
         for (name, _) in &files {
             transfer_key(token, &part_name(st, n), name)?;
@@ -746,6 +751,12 @@ fn send_part(
     previous: Option<&str>,
 ) -> Result<Stepped> {
     let cut = stage_cut(cx, config, l, token, st, first)?;
+    if cut.is_empty() {
+        return Ok(Stepped::Held(format!(
+            "stage {} has no questions to ask now: its candidates left history after the plan was recorded",
+            st.name
+        )));
+    }
     let Some(ids) = cut.get(n - 1) else {
         return Ok(Stepped::Held(format!("stage {} has {} parts, not {n}", st.name, cut.len())));
     };

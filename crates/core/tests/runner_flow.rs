@@ -600,8 +600,8 @@ fn answers_to_only_some_of_the_questions_draw_a_correction_naming_the_unanswered
 /// A budget that cuts every fixture stage into several parts.
 const SMALL_PART: usize = 6_000;
 
-/// The cut recorded for `stage`: its parts' question ids, in order.
-fn recorded_cut(r: &Run, stage: &str) -> Vec<Vec<String>> {
+/// Every path under the run's root ending in `tail`.
+fn found(r: &Run, tail: &str) -> Vec<PathBuf> {
     fn find(dir: &std::path::Path, tail: &std::path::Path, out: &mut Vec<PathBuf>) {
         for e in fs::read_dir(dir).unwrap() {
             let p = e.unwrap().path();
@@ -613,8 +613,14 @@ fn recorded_cut(r: &Run, stage: &str) -> Vec<Vec<String>> {
             }
         }
     }
-    let mut found = Vec::new();
-    find(r.t.path(), &PathBuf::from("parts").join(stage).join("cut.json"), &mut found);
+    let mut out = Vec::new();
+    find(r.t.path(), std::path::Path::new(tail), &mut out);
+    out
+}
+
+/// The cut recorded for `stage`: its parts' question ids, in order.
+fn recorded_cut(r: &Run, stage: &str) -> Vec<Vec<String>> {
+    let found = found(r, &format!("parts/{stage}/cut.json"));
     assert_eq!(found.len(), 1, "one cut recorded for {stage}: {found:?}");
     serde_json::from_str(&fs::read_to_string(&found[0]).unwrap()).unwrap()
 }
@@ -646,10 +652,20 @@ fn a_stage_in_parts_is_sent_part_by_part_and_scored_once_as_if_whole() {
     assert_eq!(r.step(), Stepped::RecordedStarted);
     // (part sent, scores recorded when it was sent)
     let mut sends: Vec<(String, usize)> = Vec::new();
+    let mut parts_of: Vec<(String, Value)> = Vec::new();
     for n in 0..200 {
         match r.step() {
             Stepped::Sent { stage, round: 1 } => {
                 sends.push((stage.clone(), r.evaluated()));
+                let (_, part) = stage.rsplit_once("#p").unwrap();
+                let content = r.sent().last().unwrap()["message"]["content"].clone();
+                assert_eq!(content["part"], json!(part.parse::<u64>().unwrap()), "{stage}: {content}");
+                parts_of.push((stage.clone(), content["of"].clone()));
+                let dir = r.files.join("runner").join(&r.token).join(stage.split('#').next().unwrap()).join(format!("p{part}"));
+                for e in fs::read_dir(&dir).unwrap() {
+                    let v: Value = serde_json::from_str(&fs::read_to_string(e.unwrap().path()).unwrap()).unwrap();
+                    assert!(!v["questions"].as_array().unwrap().is_empty(), "{stage} staged a file with no questions");
+                }
                 r.answered(r.answers(&stage), &format!("ev-{n}"));
             }
             Stepped::Finish => break,
@@ -663,6 +679,9 @@ fn a_stage_in_parts_is_sent_part_by_part_and_scored_once_as_if_whole() {
         let names: Vec<String> = parts.iter().map(|(s, _)| s.clone()).collect();
         let expected: Vec<String> = (1..=cut.len()).map(|n| format!("{st}#p{n}")).collect();
         assert_eq!(names, expected, "{st}'s parts, in order, once each");
+        for (part, of) in parts_of.iter().filter(|(s, _)| s.starts_with(&format!("{st}#p"))) {
+            assert_eq!(*of, json!(cut.len()), "{part} names how many parts its stage has");
+        }
         // Every part of a stage is sent before any of it is scored.
         assert!(parts.iter().all(|(_, e)| *e == parts[0].1), "{st} was scored before its last part: {parts:?}");
         // The parts together ask exactly what the whole stage asks, in the same order.
@@ -767,6 +786,62 @@ fn a_part_refused_a_fourth_time_archives_the_worker() {
     r.answered(wrong, "ev-5");
     assert_eq!(r.step(), Stepped::Archived);
     assert_eq!(r.evaluated(), 0);
+    assert!(found(&r, "parts/type/2.json").is_empty(), "a refused part was kept");
+}
+
+#[test]
+fn a_scored_stage_repeated_does_not_read_its_parts_again() {
+    let r = run();
+    r.part_bytes.set(SMALL_PART);
+    r.running(Value::Null);
+    r.step();
+    assert_eq!(r.step(), Stepped::Sent { stage: "type#p1".into(), round: 1 });
+    let parts = recorded_cut(&r, "type").len();
+    for n in 1..=parts {
+        let stage = format!("type#p{n}");
+        if n > 1 {
+            assert_eq!(r.step(), Stepped::Sent { stage: stage.clone(), round: 1 });
+        }
+        r.answered(r.answers(&stage), &format!("ev-{n}"));
+    }
+    assert_eq!(r.step(), Stepped::Sent { stage: "area#p1".into(), round: 1 });
+    // The send was lost; meanwhile an earlier part's kept answers are gone. The stage is
+    // applied: nothing of it is read or scored again.
+    for kept in found(&r, "parts/type/1.json") {
+        fs::remove_file(kept).unwrap();
+    }
+    assert_eq!(r.step(), Stepped::Sent { stage: "area#p1".into(), round: 1 });
+    assert_eq!(r.evaluated(), 1);
+}
+
+#[test]
+fn a_stage_left_without_questions_holds_and_resumes_once_history_has_them_again() {
+    let r = run();
+    r.running(Value::Null);
+    r.step();
+    assert_eq!(r.step(), Stepped::Sent { stage: "type#p1".into(), round: 1 });
+    r.answered(r.answers("type#p1"), "ev-1");
+    // Every candidate leaves history after the plan was recorded.
+    let saved: Vec<_> = [STORE, AIRZONED, RHAI]
+        .map(|repo| history::load(r.t.path(), repo).unwrap().unwrap())
+        .into_iter()
+        .collect();
+    for s in &saved {
+        history::save(r.t.path(), &history::RepoHistory { items: Vec::new(), ..s.clone() }).unwrap();
+    }
+    let sent = r.sent().len();
+    for _ in 0..2 {
+        match r.step() {
+            Stepped::Held(reason) => assert!(reason.contains("area") && reason.contains("no questions"), "{reason}"),
+            other => panic!("{other:?}"),
+        }
+    }
+    assert_eq!(r.sent().len(), sent, "nothing sent for an empty stage");
+    for s in &saved {
+        history::save(r.t.path(), s).unwrap();
+    }
+    assert_eq!(r.step(), Stepped::Sent { stage: "area#p1".into(), round: 1 }, "the empty cut was not kept");
+    assert!(!r.questions("area#p1").is_empty());
 }
 
 #[test]
@@ -784,22 +859,7 @@ fn a_missing_accepted_part_stops_the_stage_unscored() {
         }
         r.answered(r.answers(&stage), &format!("ev-{n}"));
     }
-    let kept = {
-        let mut found = Vec::new();
-        fn find(dir: &std::path::Path, out: &mut Vec<PathBuf>) {
-            for e in fs::read_dir(dir).unwrap() {
-                let p = e.unwrap().path();
-                if p.ends_with("parts/type/1.json") {
-                    out.push(p.clone());
-                }
-                if p.is_dir() {
-                    find(&p, out);
-                }
-            }
-        }
-        find(r.t.path(), &mut found);
-        found.pop().expect("part 1 of type was kept")
-    };
+    let kept = found(&r, "parts/type/1.json").pop().expect("part 1 of type was kept");
     fs::remove_file(kept).unwrap();
     let sent = r.sent().len();
     let err = r.try_step().expect_err("a stage scored without its first part");
