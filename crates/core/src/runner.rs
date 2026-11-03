@@ -251,6 +251,8 @@ pub fn step(cx: &Ctx<'_>, token: &str) -> Result<Stepped> {
     let s = match bridge::status(cx.bridge, token)? {
         TokenStatus::Unknown if l.state == State::Reserved => return start(cx, &l, token),
         TokenStatus::Unknown => {
+            // A rolled-back launch's next worker must not inherit this one's question.
+            cx.root.mutate((cx.now)(), |tx| runner_status::not_asking(tx.conn(), &l.id))?;
             return Ok(Stepped::Rollback(format!(
                 "AgentBridge no longer knows token {token}, which launch {} recorded as {}",
                 l.id, l.state
@@ -258,7 +260,8 @@ pub fn step(cx: &Ctx<'_>, token: &str) -> Result<Stepped> {
         }
         TokenStatus::Known(s) => s,
     };
-    if s.state != "waiting_user" && cx.root.read(|led| runner_status::asking(led.conn(), &l.id))? {
+    let asking = cx.root.read(|led| runner_status::asking(led.conn(), &l.id))?;
+    if s.state != "waiting_user" && asking.is_some() {
         cx.root.mutate((cx.now)(), |tx| runner_status::not_asking(tx.conn(), &l.id))?;
     }
     if s.result.is_some() {
@@ -299,7 +302,12 @@ pub fn step(cx: &Ctx<'_>, token: &str) -> Result<Stepped> {
         "waiting_user" => {
             // AgentBridge leaves `reason` null here and puts the question in `question`.
             let q = &s.body["question"];
-            let shown = [&s.reason, &q["question"], &q["detail"]].into_iter().find_map(Value::as_str);
+            // An OpenCode permission prompt is an object: shown as its JSON, cut short.
+            let shown = match [&s.reason, &q["question"], &q["detail"]].into_iter().find(|v| !v.is_null()) {
+                Some(Value::String(text)) => Some(text.clone()),
+                Some(v) => Some(v.to_string().chars().take(200).collect()),
+                None => None,
+            };
             let why = match shown {
                 Some(text) => format!("the worker asked a question: {text}"),
                 None => "the worker asked a question".to_string(),
@@ -312,7 +320,11 @@ pub fn step(cx: &Ctx<'_>, token: &str) -> Result<Stepped> {
             }
             let identity = if identity.is_null() { s.reason.to_string() } else { identity.to_string() };
             let now = (cx.now)();
-            let since = cx.root.mutate(now, |tx| runner_status::asked(tx.conn(), &l.id, &identity, now))?;
+            // Most ticks see the question already recorded; only a new one pays a commit.
+            let since = match asking {
+                Some((recorded, since)) if recorded == identity => since,
+                _ => cx.root.mutate(now, |tx| runner_status::asked(tx.conn(), &l.id, &identity, now))?,
+            };
             if now - since <= chrono::Duration::minutes(QUESTION_BOUND_MINUTES) {
                 return Ok(Stepped::Waiting(why));
             }

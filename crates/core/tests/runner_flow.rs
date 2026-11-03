@@ -744,6 +744,8 @@ fn a_worker_waiting_on_a_prompt_past_ten_minutes_is_archived_and_its_launch_ends
     let (r, mut rf) = started_run();
     asking(&r, "read /tmp/a.json", 1);
     tick_at(&r, &mut rf, now());
+    let shown = launch_reasons(&r);
+    assert!(shown.len() == 1 && shown[0].contains("read /tmp/a.json"), "the page shows the prompt: {shown:?}");
     // The same question, observed again later: only its stamp differs.
     asking(&r, "read /tmp/a.json", 2);
     let t = tick_at(&r, &mut rf, now() + Duration::minutes(10) + Duration::seconds(1));
@@ -786,6 +788,24 @@ fn a_new_question_asked_between_two_ticks_starts_its_own_ten_minutes() {
     assert!(r.fake.calls_to("archive").is_empty());
     let t = tick_at(&r, &mut rf, now() + Duration::minutes(22));
     assert!(blocked(&t), "{t:?}");
+}
+
+/// A rollback re-queues the launch under the same id: its next worker starts with no question.
+#[test]
+fn a_rollback_forgets_the_question_the_lost_worker_was_asking() {
+    let (r, mut rf) = started_run();
+    asking(&r, "read /tmp/a.json", 1);
+    tick_at(&r, &mut rf, now());
+    let id = by_token_id(&r);
+    assert!(r.t.root.read(|l| runner_status::asking(l.conn(), &id)).unwrap().is_some());
+    r.fake.tokens.lock().unwrap().clear();
+    assert!(matches!(r.step(), Stepped::Rollback(_)));
+    assert_eq!(r.t.root.read(|l| runner_status::asking(l.conn(), &id)).unwrap(), None);
+}
+
+fn by_token_id(r: &Run) -> String {
+    let all = r.t.root.read(|l| launch::all(l.conn())).unwrap();
+    all.into_iter().find(|l| l.token.as_deref() == Some(r.token.as_str())).unwrap().id
 }
 
 /// Once the bound is past it stays past: a failed archive call, and AgentBridge still reporting

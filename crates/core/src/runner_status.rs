@@ -144,12 +144,16 @@ pub fn asked(conn: &Connection, launch: &str, question: &str, at: DateTime<Utc>)
     parse_time(&since)
 }
 
-/// Whether `launch`'s worker was last seen asking a question.
-pub fn asking(conn: &Connection, launch: &str) -> Result<bool> {
-    Ok(conn
-        .query_row("SELECT 1 FROM runner_questions WHERE launch = ?1", params![launch], |_| Ok(()))
-        .optional()?
-        .is_some())
+/// The question `launch`'s worker was last seen asking, and since when.
+pub fn asking(conn: &Connection, launch: &str) -> Result<Option<(String, DateTime<Utc>)>> {
+    let row: Option<(String, String)> = conn
+        .query_row(
+            "SELECT question, since FROM runner_questions WHERE launch = ?1",
+            params![launch],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()?;
+    row.map(|(q, since)| Ok((q, parse_time(&since)?))).transpose()
 }
 
 /// `launch`'s worker no longer asks (it moved on, or the launch ended).
