@@ -482,9 +482,10 @@ fn eval_step(cx: &Ctx<'_>, l: &Launch, token: &str, s: &Status) -> Result<Steppe
         }
         Some(next) => send_stage(cx, &config, l, token, next, 1, &[], None, Some(&event)),
         None => {
-            let message = json!(
-                "Every stage is answered and accepted. Finish now: reply with a launch_result, outcome `landed`."
-            );
+            // AgentBridge takes only an object; `text` is the field it reads a plain one by.
+            let message = json!({
+                "text": "Every stage is answered and accepted. Finish now: reply with a launch_result, outcome `landed`."
+            });
             bridge::send(cx.bridge, token, &format!("{token}-finish"), message)?;
             Ok(Stepped::Finish)
         }

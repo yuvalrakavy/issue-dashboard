@@ -452,6 +452,11 @@ pub mod fake {
                         Answer::Ok(body)
                     }
                     "wait" => Answer::Ok(json!([])),
+                    // AgentBridge's `enqueue` refuses anything but an object (`dashboard/store.rs`);
+                    // run A's finish, sent as a bare string, was refused there for 45 minutes.
+                    "send" if !params["message"].is_object() => {
+                        Answer::Err("request_failed", "message must be a structured object".into())
+                    }
                     // A prepared file is ready at once, its manifest naming its key.
                     "transfer" => match params["action"].as_str() {
                         Some("prepare") => {
