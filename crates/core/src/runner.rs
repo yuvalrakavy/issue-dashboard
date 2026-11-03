@@ -258,6 +258,9 @@ pub fn step(cx: &Ctx<'_>, token: &str) -> Result<Stepped> {
         }
         TokenStatus::Known(s) => s,
     };
+    if s.state != "waiting_user" && cx.root.read(|led| runner_status::asking(led.conn(), &l.id))? {
+        cx.root.mutate((cx.now)(), |tx| runner_status::not_asking(tx.conn(), &l.id))?;
+    }
     if s.result.is_some() {
         return finished(cx, &l, token, &s);
     }
@@ -294,21 +297,27 @@ pub fn step(cx: &Ctx<'_>, token: &str) -> Result<Stepped> {
             }
         }
         "waiting_user" => {
-            let why = match &s.reason {
-                Value::Null => "the worker asked a question".to_string(),
-                Value::String(q) => format!("the worker asked a question: {q}"),
-                q => format!("the worker asked a question: {q}"),
+            // AgentBridge leaves `reason` null here and puts the question in `question`.
+            let q = &s.body["question"];
+            let shown = [&s.reason, &q["question"], &q["detail"]].into_iter().find_map(Value::as_str);
+            let why = match shown {
+                Some(text) => format!("the worker asked a question: {text}"),
+                None => "the worker asked a question".to_string(),
             };
-            // The reason's `since` is when THIS question was first shown (`runner_status::hold`
-            // keeps it while the reason is unchanged), so an earlier question does not count.
-            let asked = cx.root.read(|led| runner_status::held(led.conn()))?.into_iter().find(|h| h.launch == l.id);
-            let blocked = match asked.filter(|h| h.reason == why) {
-                Some(h) => (cx.now)() - crate::root::parse_time(&h.since)? > chrono::Duration::minutes(QUESTION_BOUND_MINUTES),
-                None => false,
-            };
-            if !blocked {
+            // The bound runs from when THIS question was first seen: its identity is the question
+            // without the stamp of when it was observed, which changes on every observation.
+            let mut identity = q.clone();
+            if let Some(o) = identity.as_object_mut() {
+                o.remove("observed_at_ms");
+            }
+            let identity = if identity.is_null() { s.reason.to_string() } else { identity.to_string() };
+            let now = (cx.now)();
+            let since = cx.root.mutate(now, |tx| runner_status::asked(tx.conn(), &l.id, &identity, now))?;
+            if now - since <= chrono::Duration::minutes(QUESTION_BOUND_MINUTES) {
                 return Ok(Stepped::Waiting(why));
             }
+            // Retried each tick until AgentBridge reports the worker archived: the same id and
+            // payload, which AgentBridge accepts again.
             bridge::archive(cx.bridge, token, &format!("{token}-blocked"))?;
             Ok(Stepped::Blocked(format!(
                 "the worker was blocked on a prompt for over {QUESTION_BOUND_MINUTES} minutes and was archived ({why})"

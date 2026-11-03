@@ -329,6 +329,7 @@ fn forget_stale_reasons(root: &Root, all: &[launch::Launch], now: DateTime<Utc>)
     root.mutate(now, |tx| {
         for id in &stale {
             runner_status::unhold(tx.conn(), id)?;
+            runner_status::not_asking(tx.conn(), id)?;
         }
         Ok(())
     })

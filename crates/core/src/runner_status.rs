@@ -27,6 +27,11 @@ CREATE TABLE IF NOT EXISTS runner_reasons (
     reason TEXT NOT NULL,
     since  TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS runner_questions (
+    launch   TEXT PRIMARY KEY,
+    question TEXT NOT NULL,
+    since    TEXT NOT NULL
+);
 ";
 
 /// A tick older than this reads as "runner down" (1.3).
@@ -123,6 +128,33 @@ pub fn hold(conn: &Connection, launch: &str, reason: &str, at: DateTime<Utc>) ->
          ON CONFLICT (launch) DO UPDATE SET reason = ?2, since = ?3 WHERE reason <> ?2",
         params![launch, reason, format_time(at)],
     )?;
+    Ok(())
+}
+
+/// `launch`'s worker is asking `question` at `at`: when it was first seen asking it. Apart from
+/// the reason shown, so an error or an archive in flight never restarts the question's bound.
+pub fn asked(conn: &Connection, launch: &str, question: &str, at: DateTime<Utc>) -> Result<DateTime<Utc>> {
+    conn.execute(
+        "INSERT INTO runner_questions (launch, question, since) VALUES (?1, ?2, ?3)
+         ON CONFLICT (launch) DO UPDATE SET question = ?2, since = ?3 WHERE question <> ?2",
+        params![launch, question, format_time(at)],
+    )?;
+    let since: String =
+        conn.query_row("SELECT since FROM runner_questions WHERE launch = ?1", params![launch], |r| r.get(0))?;
+    parse_time(&since)
+}
+
+/// Whether `launch`'s worker was last seen asking a question.
+pub fn asking(conn: &Connection, launch: &str) -> Result<bool> {
+    Ok(conn
+        .query_row("SELECT 1 FROM runner_questions WHERE launch = ?1", params![launch], |_| Ok(()))
+        .optional()?
+        .is_some())
+}
+
+/// `launch`'s worker no longer asks (it moved on, or the launch ended).
+pub fn not_asking(conn: &Connection, launch: &str) -> Result<()> {
+    conn.execute("DELETE FROM runner_questions WHERE launch = ?1", params![launch])?;
     Ok(())
 }
 
