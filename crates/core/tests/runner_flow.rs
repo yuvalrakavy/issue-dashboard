@@ -896,6 +896,29 @@ fn a_worker_idle_past_ten_minutes_is_archived_and_its_launch_ends_failed() {
 }
 
 #[test]
+fn an_idle_worker_at_exactly_ten_minutes_is_still_stepped() {
+    let (r, mut rf) = started_run();
+    idle(&r, Value::Null);
+    tick_at(&r, &mut rf, now());
+    let t = tick_at(&r, &mut rf, now() + Duration::minutes(10));
+    assert!(!idle_blocked(&t), "{t:?}");
+    let t = tick_at(&r, &mut rf, now() + Duration::minutes(10) + Duration::seconds(1));
+    assert!(idle_blocked(&t), "{t:?}");
+}
+
+/// The bound runs from the first idle sighting even when that tick's send failed.
+#[test]
+fn a_failed_send_to_an_idle_worker_does_not_restart_its_bound() {
+    let (r, mut rf) = started_run();
+    idle(&r, Value::Null);
+    r.fake.push("send", Answer::Down);
+    let t = tick_at(&r, &mut rf, now());
+    assert!(matches!(&t.stepped[..], [(_, Err(_))]), "{t:?}");
+    let t = tick_at(&r, &mut rf, now() + Duration::minutes(10) + Duration::seconds(1));
+    assert!(idle_blocked(&t), "{t:?}");
+}
+
+#[test]
 fn a_worker_that_wakes_and_idles_again_starts_its_own_ten_minutes() {
     let (r, mut rf) = started_run();
     idle(&r, Value::Null);
@@ -952,6 +975,29 @@ fn a_rollback_forgets_the_idle_spell_of_the_lost_worker() {
     r.fake.tokens.lock().unwrap().clear();
     assert!(matches!(r.step(), Stepped::Rollback(_)));
     assert_eq!(r.t.root.read(|l| runner_status::asking(l.conn(), &id)).unwrap(), None);
+}
+
+/// A Reserved launch idle with no session yet, whose token AgentBridge then forgets: the
+/// restarted worker, first seen idle after the old deadline, gets ten minutes of its own.
+#[test]
+fn a_restarted_worker_does_not_inherit_the_lost_worker_s_idle_spell() {
+    let r = run();
+    let mut rf = refresher(Arc::new(Mutex::new(true)), Arc::new(Mutex::new(Vec::new())));
+    let mut no_session = idle_status(&r, IDLE, Value::Null, "medium");
+    no_session["native_session_id"] = Value::Null;
+    r.status(no_session);
+    tick_at(&r, &mut rf, now());
+    assert_eq!(r.state(), State::Reserved);
+    r.fake.tokens.lock().unwrap().clear();
+    // A Reserved eval restarts once its history refresh is done.
+    tick_at(&r, &mut rf, now() + Duration::minutes(11));
+    rf.settle(std::time::Duration::from_secs(10), now() + Duration::minutes(11));
+    let t = tick_at(&r, &mut rf, now() + Duration::minutes(11));
+    assert_eq!(t.stepped, vec![(r.token.clone(), Ok(Stepped::Started))]);
+    idle(&r, Value::Null);
+    let t = tick_at(&r, &mut rf, now() + Duration::minutes(12));
+    assert!(!idle_blocked(&t), "{t:?}");
+    assert!(r.fake.calls_to("archive").is_empty());
 }
 
 #[test]

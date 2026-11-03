@@ -262,10 +262,13 @@ pub fn step(cx: &Ctx<'_>, token: &str) -> Result<Stepped> {
         return Ok(Stepped::Waiting(format!("launch {} is {}", l.id, l.state)));
     }
     let s = match bridge::status(cx.bridge, token)? {
-        TokenStatus::Unknown if l.state == State::Reserved => return start(cx, &l, token),
         TokenStatus::Unknown => {
-            // A rolled-back launch's next worker must not inherit this one's question.
+            // No worker holds the token: whichever worker comes next, a restarted one or a
+            // rolled-back launch's, must not inherit this one's question or idle spell.
             cx.root.mutate((cx.now)(), |tx| runner_status::not_asking(tx.conn(), &l.id))?;
+            if l.state == State::Reserved {
+                return start(cx, &l, token);
+            }
             return Ok(Stepped::Rollback(format!(
                 "AgentBridge no longer knows token {token}, which launch {} recorded as {}",
                 l.id, l.state
@@ -304,12 +307,14 @@ pub fn step(cx: &Ctx<'_>, token: &str) -> Result<Stepped> {
         "queued" => Ok(Stepped::Waiting("queued: no native session yet".into())),
         "started" | "awaiting_caller" => running(cx, &l, token, &s),
         "unknown" if idle => {
-            let identity = format!("{IDLE_IDENTITY}{IDLE_REASON}");
             let now = (cx.now)();
+            // A record kept past the clear rule above is this idle spell's: one reason, one identity.
             // Recorded before the step, so a failed send never restarts the bound.
             let since = match asking {
-                Some((recorded, since)) if recorded == identity => since,
-                _ => cx.root.mutate(now, |tx| runner_status::asked(tx.conn(), &l.id, &identity, now))?,
+                Some((_, since)) => since,
+                None => cx.root.mutate(now, |tx| {
+                    runner_status::asked(tx.conn(), &l.id, &format!("{IDLE_IDENTITY}{IDLE_REASON}"), now)
+                })?,
             };
             if now - since <= chrono::Duration::minutes(IDLE_BOUND_MINUTES) {
                 return running(cx, &l, token, &s);
