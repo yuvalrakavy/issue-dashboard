@@ -252,3 +252,21 @@ Always-loaded bytes: +1374 (`CLAUDE.md`, new) and +~200 (the skill description),
 retired (the user-level skill's mutation red-flag row, a duplicate of its deep-gate text):
 net about +1.4 KB, over the ratchet. Accepted by the owner. Next retro: retire it by moving
 the harness traps to a hook message or the build-brief template.
+
+## 2026-11-03 runner phase 1 acceptance + idle-unknown fix (T1)
+- time: six live runs (A, A′, A″, A‴, A⁗, A⁵) over the day; the fix itself (memo, code, 12 tests,
+  gate) about 2 h; friction about 3 h in the environment (OpenCode port moved silently, the
+  membership crash-looped 781 times, shell prompts under `shell: ask`, sandboxed watches that
+  printed nothing).
+- catches: live run=3 (A″'s shell prompt, A‴/A⁗'s idle-unknown hold, A⁵'s eval input size)
+  gate=Codex 1 S2 (a Reserved restart inherited the old idle bound; the question bound shared it)
+  + 2 mutation gaps; round 2 (Sonnet medium) clean. post-merge=0.
+- DG=n/a IG=3 post-merge=0
+- tier-call: right (T1: one new state arm in an existing step function).
+- delegation: depth Codex adversarial-review (the codex-rescue subagent returned before its job
+  finished and orphaned it; the direct `--wait` call worked); confirming Sonnet medium.
+- unconsolidated: 1
+- improve: hazards §1 ("what ends X if nobody acts") also asks "can the far side report two
+  states the same way?" (AgentBridge reports an idle worker and a dead one both as `unknown`,
+  and only the reason text separates them); and an eval's stage inputs are sized for the
+  smallest routed model before a live run (A⁵ stopped on 940 KB of pretty-printed JSON).
