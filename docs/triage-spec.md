@@ -268,6 +268,11 @@ decisions start there.
 A reporter's own request is marked; every card carries one badge: **evaluated**, **unevaluated**,
 **uncalibrated** or **drifting** (ch. 3).
 
+The page shows the cards on its **Triage** tab (spec §5.2), one row per issue: the issue's
+first-time cards in one row, its second opinions in another under their own filter. A row shows
+each answer as current → suggested; its confidence is the lowest card's and its badge the worst;
+its main action accepts every card on it, one decision per part (4.2).
+
 ### 4.2 What accepting does
 
 - **Accept type or area:** the item's value, source `suggestion`; precedence override > accepted
@@ -284,7 +289,9 @@ A reporter's own request is marked; every card carries one badge: **evaluated**,
 
 Only type, area and priority cards for untriaged items, on keys that pass the **Bulk** bar and are
 not drifting; never second opinions or closures. One accept decision per card, recorded as
-`owner_bulk` (never truth, 3.1).
+`owner_bulk` (never truth, 3.1). The page's button is **Apply eligible**: of those cards, the ones
+at or above a confidence threshold the owner picks (85% by default), so the threshold only narrows
+the set. With none eligible, the bar says why and offers Evaluate….
 
 ### 4.4 Metrics
 
@@ -322,7 +329,7 @@ Phase-1 suggestion and launch documents keep parsing.
 |---|---|
 | `triage` | gains `scope` (`full` · `closures`); locks no items; runs in the `read-only` recipe pool (capacity 1); its request names the items 2.2 selects (or the owner named) |
 | `recommend_closures` | an alias of `triage` with scope `closures`; phase-1 documents and buttons keep working |
-| **Run triage…** (page) | an Inbox button opening the launch sheet: scope (`full` · `closures`), the routing, the "no evaluation" warning (5.3); disabled while a triage launch is live; records an owner launch request the dispatcher takes as today |
+| **Run triage…** (page) | a Triage-tab button opening the launch sheet: scope (`full` · `closures`), the routing, the "no evaluation" warning (5.3); disabled while a triage launch is live; records an owner launch request the dispatcher takes as today |
 | `stronger_look` | unchanged (2.5) |
 | `eval` (new) | read-only; answers one `eval prepare` file (3.2); from Trends "Evaluate…" or the CLI; its routing is the backend measured |
 

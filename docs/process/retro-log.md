@@ -290,3 +290,29 @@ the harness traps to a hook message or the build-brief template.
 - improve: `runner status` shows no waiting row between steps (seen 8 times in A⁶), so a watch
   must not read a blank reason as a stop; and a watch's terminal-state list comes from
   `launch.rs`'s `State` enum (`released` follows `ended` in one transaction), not from memory.
+
+## 2026-11-04 outbox pruning (T1)
+- time: about 40 min from noticing to live (found while staging data for a UX review).
+- catches: noticed in passing (3,031 outboxes, 2.1 GB, never removed); mutation=5/5 red;
+  gate=Codex adversarial approve, no findings. Live: 2.1 GB → 2.4 MB on the first sync.
+- DG=n/a IG=0 post-merge=0
+- tier-call: right (T1: one prune beside the existing atomic write).
+- delegation: depth Codex adversarial-review `--wait`.
+- unconsolidated: 3
+- improve: hazards §1 also asks "what removes each file this writes?" — spec 10.6 deleted old
+  page generations but never named the local file's end; every writer of a per-run file names
+  its remover in the same chapter.
+
+## 2026-11-04 Triage tab (T1, UX review proposals 1+2, shape B)
+- time: memo + mockups + build about 2 h; gate about 25 min (Codex depth, Sonnet confirming).
+- catches: self-review 1 (an empty current read "none → bug"; now "—"); controls 2 (a
+  duplicated site made "worst badge" ambiguous; a redundant `!c.second` left a mutant green, so
+  the term went); gate=Codex 2 medium: tile opens a subset of what it counts (fixed: All
+  filter); Triage ∩ Queue duplicates (pre-existing; ruled by spec: a suggestion does not move a
+  triaged issue). Round 2 (Sonnet medium) clean, 1 S1 folded into the spec.
+- DG=n/a IG=2 post-merge=0
+- tier-call: right (T1: regroups existing cards into a new tab).
+- delegation: depth Codex adversarial-review `--wait`; confirming Sonnet medium.
+- unconsolidated: 4
+- improve: a summary tile and its target list are one claim — when a tile counts a union, the
+  memo names the filter that shows that union, and a test opens the tile's filter and counts it.

@@ -192,13 +192,15 @@
 
   // The Inbox: everything that needs the owner, oldest first. Phase 1 has no suggestions or
   // plans yet, so an untriaged issue is a card of its own, its main action setting a priority.
-  function inbox(issues) {
+  // `triaged` holds the issues with a first-time row on the Triage tab: an untriaged one of
+  // them is there, not here (an item appears once).
+  function inbox(issues, triaged) {
     const cards = [];
     for (const i of issues.filter(isOpen)) {
       let why = null;
       if (i.status === "needs-decision") why = "decision";
       else if (i.status === "needs-review" && i.outside === true) why = "outside_pr";
-      else if (untriaged(i)) why = "untriaged";
+      else if (untriaged(i) && !(triaged && triaged.has(i.id))) why = "untriaged";
       if (why) cards.push({ why, issue: i });
     }
     return cards.sort((a, b) => cmp(a.issue.created_at, b.issue.created_at) || cmp(a.issue.alias, b.issue.alias));
@@ -754,7 +756,7 @@
     for (const c of groups.values()) {
       c.parts.sort((a, b) => LABEL_KINDS.indexOf(a.kind) - LABEL_KINDS.indexOf(b.kind));
       c.second = c.parts.some((s) => s.second_opinion && typeof s.second_opinion === "object");
-      c.badge = c.parts.map((s) => s.badge || "uncalibrated").sort((a, b) => BADGES.indexOf(b) - BADGES.indexOf(a))[0];
+      c.badge = worstBadge(c.parts.map((s) => s.badge || "uncalibrated"));
       c.bulk_ok = !c.second && c.parts.every((s) => s.bulk_ok === true);
       c.confidence = Math.min(...c.parts.map((s) => s.confidence));
       c.from_reporter = c.parts.some((s) => s.from_reporter === true);
@@ -771,6 +773,55 @@
       || (a.second ? (rank(a) - rank(b)) || (pCurrent(a) - pCurrent(b)) : 0)
       || cmp(a.made_at, b.made_at) || cmp(a.issue.alias, b.issue.alias));
     return { cards, applyAll: cards.filter((c) => c.bulk_ok) };
+  }
+
+  function worstBadge(badges) {
+    return badges.slice().sort((a, b) => BADGES.indexOf(b) - BADGES.indexOf(a))[0];
+  }
+
+  // The Triage tab (spec 5.2): an issue's first-time cards make one row, its second opinions
+  // another, kept apart (triage spec 4.1). The row's button names every answer it sets; its
+  // confidence is the lowest part's and its badge the worst.
+  function triageRows(suggestions, issues, decisions, acks, horizon) {
+    const r = triageCards(suggestions, issues, decisions, acks, horizon);
+    const rows = new Map();
+    for (const c of r.cards) {
+      const key = c.issue.id + (c.second ? ":second" : "");
+      if (!rows.has(key)) rows.set(key, { id: "row-" + key, issue: c.issue, second: c.second, cards: [] });
+      rows.get(key).cards.push(c);
+    }
+    const out = [...rows.values()].map((row) => {
+      const parts = row.cards.flatMap((c) => c.parts).sort((a, b) => LABEL_KINDS.indexOf(a.kind) - LABEL_KINDS.indexOf(b.kind));
+      return Object.assign(row, {
+        parts,
+        label: "Set " + parts.map((s) => answerText(s.answer)).join(" · "),
+        confidence: Math.min(...row.cards.map((c) => c.confidence)),
+        badge: worstBadge(row.cards.map((c) => c.badge)),
+        from_reporter: row.cards.some((c) => c.from_reporter),
+      });
+    });
+    return { rows: out.filter((x) => !x.second), seconds: out.filter((x) => x.second) };
+  }
+
+  // The issues the Triage tab holds, each once though it may have a row and a second opinion.
+  function triageCount(t) {
+    return new Set(t.rows.concat(t.seconds).map((x) => x.issue.id)).size;
+  }
+
+  // Apply eligible (triage spec 4.3): the threshold narrows the cards apply all may take, never
+  // widens them; second opinions are never in it.
+  function eligibleCards(t, threshold) {
+    return t.rows.flatMap((x) => x.cards).filter((c) => c.bulk_ok && c.confidence >= threshold);
+  }
+
+  // Why nothing is eligible, or null when something is (or there is nothing to apply).
+  function eligibleNote(t, threshold) {
+    const parts = t.rows.flatMap((x) => x.parts);
+    if (!parts.length || eligibleCards(t, threshold).length) return null;
+    const bulk = t.rows.flatMap((x) => x.cards).filter((c) => c.bulk_ok).length;
+    if (bulk) return bulk + " suggestion" + (bulk === 1 ? " passes Bulk but is" : "s pass Bulk but are") + " below " + Math.round(threshold * 100) + "%.";
+    const unc = parts.filter((s) => (s.badge || "uncalibrated") === "uncalibrated").length;
+    return "No triage question has passed the Bulk bar yet (" + unc + " of " + parts.length + " suggestions uncalibrated).";
   }
 
   // One part of a card accepted (4.2, 4.6): the decision names the card and the component.
@@ -1030,7 +1081,7 @@
     dismissedSuggestions, suggestionCards, dismissSuggestionFields, closePrefill, fixLaunchFields, recommendFields, READ_ONLY_RECIPE,
     triageLive, fixLaunchStates, triageLaunchFields, evalLaunchFields, noEvaluation,
     strongerLookList, strongerLookFields, metricsRows,
-    actedSuggestions, answerText, triageCards, acceptFields, acceptCardFields, editFields, applyAllFields, detailsEditFields, estimatesEditFields, shownEstimates, estimatesFormValues, rubricNote, secondOpinionNote,
+    actedSuggestions, answerText, triageCards, triageRows, triageCount, eligibleCards, eligibleNote,acceptFields, acceptCardFields, editFields, applyAllFields, detailsEditFields, estimatesEditFields, shownEstimates, estimatesFormValues, rubricNote, secondOpinionNote,
   };
   root.IssueDashboard = api;
   if (typeof module === "object" && module.exports) module.exports = api;
