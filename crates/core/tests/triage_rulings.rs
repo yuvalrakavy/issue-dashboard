@@ -437,3 +437,100 @@ fn the_page_schema_refuses_an_empty_or_malformed_estimates_edit() {
         );
     }
 }
+
+// --- Estimates edits the ingest refuses, and the layering of those it accepts (harness 1.7) ---
+
+/// A decision as the owner's client might send it, NOT checked against the page schema.
+fn raw_estimates_edit(id: &str, item: &str, estimates: Value, minutes: i64) -> Decision {
+    serde_json::from_value(json!({
+        "id": id, "project": "home", "author": OWNER, "created_at": format_time(at(minutes)),
+        "action": "edit_suggestion", "target": {"item": item}, "value": {"estimates": estimates},
+    }))
+    .unwrap()
+}
+
+fn phased(tier: &str, design: &str, implementation: &str, review: &str) -> Value {
+    json!({"sites": ["src/a.rs:10"], "read_at": "abc1234", "tier": tier, "blast": "quick",
+        "phases": {"design": {"size": design, "reason": "d"}, "implementation": {"size": implementation, "reason": "i"},
+            "review": {"size": review, "reason": "r"}}, "reason": "one call site"})
+}
+
+/// Records one launch's estimates: `(item index, estimate)` (the rest autofilled).
+fn recorded_estimates(tr: &Tracked, launch: &str, which: &[(usize, Value)]) {
+    launched_in(tr, launch, "home", LaunchKind::Triage, 10);
+    let p = prepare(&tr.t, launch, BACKEND, Stage::First, 11).unwrap();
+    let mut file = answer_all(&p);
+    file["estimates"] = json!(which
+        .iter()
+        .map(|(i, e)| {
+            let mut e = e.clone();
+            e["item"] = json!(tr.items[*i].1);
+            e
+        })
+        .collect::<Vec<_>>());
+    record(&tr.t, launch, file, 12).unwrap();
+}
+
+fn edited(tr: &Tracked, item: &str) -> Value {
+    triage_of(tr, item)["estimates"]["edited"].clone()
+}
+
+#[test]
+fn the_ingest_refuses_an_estimates_edit_that_is_stale_empty_or_inconsistent_and_changes_nothing() {
+    let tr = tracked();
+    let (a, _) = tr.items[0].clone();
+    let (b, _) = tr.items[1].clone();
+    let (c, _) = tr.items[2].clone();
+    recorded_estimates(
+        &tr,
+        "T1",
+        &[(0, phased("T3", "M", "S", "M")), (1, phased("T1", "M", "S", "M")), (2, phased("T0", "none", "S", "S"))],
+    );
+    let refusal = |d: Decision, minutes: i64| ingest(&tr, &d, minutes).expect("refused");
+
+    // (a) the old `effort`.
+    let m = refusal(raw_estimates_edit("d-a", &a, json!({"effort": "S"}), 20), 20);
+    assert!(m.contains("effort is replaced by per-phase sizes"), "{m}");
+    // (b) a phases edit that sets no size: the page schema refuses it, and so does the decided
+    // event's schema (it embeds the document), so the guard in `estimates_refusal` is shadowed:
+    // the ingest itself errors and records nothing.
+    let c_set = ConfigSet::load(tr.t.path()).unwrap();
+    let d = raw_estimates_edit("d-b", &a, json!({"phases": {}}), 21);
+    let err = tr.t.root.mutate(at(21), |tx| decision::ingest_checked(tx, &c_set, "home", OWNER, &d)).unwrap_err();
+    assert!(err.to_string().contains("less than 1 property"), "{err}");
+    // (c) T3 with a review of S.
+    let m = refusal(estimates_edit("d-c", &a, json!({"phases": {"review": "S"}}), 22), 22);
+    assert!(m.contains("the estimate would be inconsistent") && m.contains("a T3 issue's review is at least M"), "{m}");
+    // (d) T0 made T2 while its design is none.
+    let m = refusal(estimates_edit("d-d", &c, json!({"tier": "T2"}), 23), 23);
+    assert!(m.contains("the estimate would be inconsistent") && m.contains("design is S, M or L"), "{m}");
+    // None of them changed anything.
+    assert_eq!(edited(&tr, &a), Value::Null);
+    assert_eq!(edited(&tr, &c), Value::Null);
+
+    // (e) Layering: edit 1 (T1 to T3) is accepted; edit 2 sets review S, consistent with the
+    // RECORDED T1 and refused only because edit 1 is merged in.
+    assert_eq!(ingest(&tr, &estimates_edit("d-e1", &b, json!({"tier": "T3"}), 24), 24), None);
+    let m = refusal(estimates_edit("d-e2", &b, json!({"phases": {"review": "S"}}), 25), 25);
+    assert!(m.contains("a T3 issue's review is at least M"), "{m}");
+    assert_eq!(edited(&tr, &b), json!({"tier": "T3"}));
+
+    // Positive control: item a is recorded T3 (review S is refused above); edit 1 makes it T1,
+    // and only thanks to edit 1 is the same review S edit accepted.
+    assert_eq!(ingest(&tr, &estimates_edit("d-f1", &a, json!({"tier": "T1"}), 26), 26), None);
+    assert_eq!(ingest(&tr, &estimates_edit("d-f2", &a, json!({"phases": {"review": "S"}}), 27), 27), None);
+    assert_eq!(edited(&tr, &a), json!({"tier": "T1", "phases": {"review": "S"}}));
+}
+
+#[test]
+fn a_later_implementation_size_edit_is_kept_alone_and_beside_a_design_edit() {
+    let tr = tracked();
+    let (a, _) = tr.items[0].clone();
+    let (b, _) = tr.items[1].clone();
+    recorded_estimates(&tr, "T1", &[(0, phased("T1", "S", "S", "S")), (1, phased("T1", "S", "S", "S"))]);
+    assert_eq!(ingest(&tr, &estimates_edit("d-1", &a, json!({"phases": {"implementation": "L"}}), 20), 20), None);
+    assert_eq!(triage_of(&tr, &a)["estimates"]["edited"]["phases"]["implementation"], "L");
+    assert_eq!(ingest(&tr, &estimates_edit("d-2", &b, json!({"phases": {"design": "M"}}), 21), 21), None);
+    assert_eq!(ingest(&tr, &estimates_edit("d-3", &b, json!({"phases": {"implementation": "L"}}), 22), 22), None);
+    assert_eq!(edited(&tr, &b), json!({"phases": {"design": "M", "implementation": "L"}}));
+}

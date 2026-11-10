@@ -308,6 +308,7 @@ Phase 1 (`feat/harness-phase1`). Each row is overrulable.
 | 1.6 | "Issue changed" = GitHub's `updated_at` at record ≠ at prepare | the observation already carries it |
 | 1.6 | A launch answers each obligation once: a re-prepare of it does not ask an answered item again, and a retry of its record keeps the first answer's staleness, so the retry is an exact repeat | a stale estimate still answers its obligation; the next launch asks again |
 | 1.6 | The 7-day skip applies to estimate selection only; the item's label questions are still asked | a left-out says the item cannot be estimated yet, not that its labels are settled |
+| 1.7 | Ingest's empty-`phases` refusal is a second line: the decided event's schema refuses `phases: {}` first, so no test can reach it | kept against a schema relaxation |
 | 1.7 | Details stages the tier and phase sizes and saves them with one "Save sizes" | T0 ↔ T1 moves the tier and the design size together; either alone fails 1.3 |
 | 1.6 | Only a full triage's first stage owes estimates: closures runs, stronger looks and the priority stage never do | estimates need the code read a full triage does |
 | 1.7 | `EstimatesEdit.effort` stays as a read-only field; ingest refuses a new edit carrying it, an empty `phases` edit, and one whose merge fails `estimate::check` | old decisions were refused only at their own ingest, so they still load |

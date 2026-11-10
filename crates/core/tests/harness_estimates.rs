@@ -266,3 +266,176 @@ fn a_closures_run_and_a_stronger_look_owe_no_estimate() {
     let pr = prepare(&tr.t, "T1", BACKEND, Stage::Priority, 9).unwrap();
     assert_eq!(pr.report.obligations, 0);
 }
+
+// --- Gaps a mutation run found (each test names what it guards) ------------------------------
+
+/// Another launch records stage one, so this launch can prepare its priority stage while its
+/// own first-stage obligations are still unanswered. `record` must read the FIRST stage's
+/// obligations, not those of the latest prepare of any stage.
+#[test]
+fn a_later_priority_prepare_does_not_replace_the_first_stage_s_obligations() {
+    let tr = tracked();
+    launched(&tr.t, "A", LaunchKind::Triage, &tr.items, 2);
+    launched(&tr.t, "B", LaunchKind::Triage, &tr.items, 3);
+    let pb = prepare(&tr.t, "B", BACKEND, Stage::First, 4).unwrap();
+    assert_eq!(pb.report.obligations, 3);
+    let pa = prepare(&tr.t, "A", BACKEND, Stage::First, 5).unwrap();
+    let mut file = answer_all(&pa);
+    file["estimates"] = json!(tr.items.iter().map(|(_, a)| est(a, "T1", "S", "S", "S")).collect::<Vec<_>>());
+    record_as_is(&tr, "A", file, 6).unwrap();
+    // B's priority stage is askable (the project has stage one), and asks no estimate.
+    let pr = prepare(&tr.t, "B", BACKEND, Stage::Priority, 7).unwrap();
+    assert_eq!(pr.report.obligations, 0);
+    assert!(pr.report.questions > 0, "{}", pr.file);
+    // B answers its priority questions but still owes its first stage's estimates.
+    let m = refused(record_as_is(&tr, "B", answer_all(&pr), 8));
+    for (_, alias) in &tr.items {
+        assert!(m.contains(&format!("{alias} owes a phased estimate")), "{m}");
+    }
+}
+
+/// The prepare digest covers the obligations: same question ids, other obligations, is a new
+/// event; the same again is a repeat.
+#[test]
+fn a_prepare_with_other_obligations_is_not_a_repeat_of_one_with_the_same_questions() {
+    let tr = tracked();
+    launched(&tr.t, "T1", LaunchKind::Triage, &tr.items, 2);
+    let p1 = prepare(&tr.t, "T1", BACKEND, Stage::First, 3).unwrap();
+    assert_eq!(p1.report.obligations, 3);
+    assert!(!p1.report.repeat);
+    let again = prepare(&tr.t, "T1", BACKEND, Stage::First, 4).unwrap();
+    assert!(again.report.repeat, "identical questions and obligations are a repeat");
+    assert_eq!(again.report.seq, p1.report.seq);
+    // Estimates only: no question is answered, so the questions keep their ids.
+    let file = json!({"backend": BACKEND,
+        "estimates": tr.items.iter().map(|(_, a)| est(a, "T1", "S", "S", "S")).collect::<Vec<_>>()});
+    record_as_is(&tr, "T1", file, 5).unwrap();
+    let p2 = prepare(&tr.t, "T1", BACKEND, Stage::First, 6).unwrap();
+    assert_eq!(p2.report.obligations, 0);
+    let ids = |p: &issue_dashboard_core::triage::Prepared| -> Vec<Value> {
+        questions(p).iter().map(|q| q["id"].clone()).collect()
+    };
+    assert_eq!(ids(&p1), ids(&p2), "the fixture must keep the question ids equal");
+    assert!(!p2.report.repeat, "{:?}", p2.report);
+    assert_ne!(p2.report.seq, p1.report.seq);
+    let p3 = prepare(&tr.t, "T1", BACKEND, Stage::First, 7).unwrap();
+    assert!(p3.report.repeat);
+    assert_eq!(p3.report.seq, p2.report.seq);
+}
+
+/// Two prepares of one launch that both ask an item (the issue changed between them) are ONE
+/// obligation: one `left_out` of it is "left out once", not twice in a row.
+#[test]
+fn two_prepares_of_one_launch_are_one_obligation_for_the_left_out_skip() {
+    let tr = tracked();
+    let (id, alias) = tr.items[0].clone();
+    launched(&tr.t, "L1", LaunchKind::Triage, &tr.items, 2);
+    prepare(&tr.t, "L1", BACKEND, Stage::First, 3).unwrap();
+    edit(&tr.t, &id, 4, |v| v["body"] = json!("Edited between the prepares."));
+    let p = prepare(&tr.t, "L1", BACKEND, Stage::First, 5).unwrap();
+    assert!(!p.report.repeat, "the edit must make the second prepare a new event");
+    let prepared: Vec<_> = events(&tr.t, Kind::Prepared).into_iter().filter(|e| e.subject == "L1").collect();
+    assert_eq!(prepared.len(), 2);
+    let mut file = answer_all(&p);
+    file["left_out"] = json!(tr.items.iter().map(|(_, a)| left_out(a)).collect::<Vec<_>>());
+    record_as_is(&tr, "L1", file, 6).unwrap();
+    launched(&tr.t, "L2", LaunchKind::Triage, &tr.items, 10);
+    let p2 = prepare(&tr.t, "L2", BACKEND, Stage::First, 11).unwrap();
+    assert!(owed_aliases(&p2).contains(&alias), "left out once is still owed: {}", p2.file);
+}
+
+/// `Owing::due` at the end of a skip: due exactly then, not a moment before.
+#[test]
+fn a_skip_ends_exactly_seven_days_after_the_second_left_out() {
+    let tr = tracked();
+    let (_, alias) = tr.items[0].clone();
+    let items = &tr.items[..1];
+    let leave = |launch: &str, minutes: i64| {
+        launched(&tr.t, launch, LaunchKind::Triage, items, minutes);
+        let p = prepare(&tr.t, launch, BACKEND, Stage::First, minutes + 1).unwrap();
+        let mut file = answer_all(&p);
+        file["left_out"] = json!([left_out(&alias)]);
+        record_as_is(&tr, launch, file, minutes + 2).unwrap();
+    };
+    leave("L1", 2);
+    leave("L2", 10); // the second left_out is recorded at minute 12
+    let owes = |launch: &str, minutes: i64| {
+        launched(&tr.t, launch, LaunchKind::Triage, items, 13);
+        prepare(&tr.t, launch, BACKEND, Stage::First, minutes).unwrap().report.obligations
+    };
+    assert_eq!(owes("L3", 12 + WEEK - 1), 0, "a minute before the end");
+    assert_eq!(owes("L4", 12 + WEEK), 1, "at the end");
+}
+
+/// `select` orders untriaged, then estimate-due, then the rest.
+#[test]
+fn select_puts_an_estimate_due_item_before_a_triaged_one_that_is_not() {
+    use issue_dashboard_core::docs::TriageScope;
+    use issue_dashboard_core::root::format_time;
+    let tr = tracked();
+    let (a, a_alias) = tr.items[0].clone();
+    let (b, b_alias) = tr.items[1].clone();
+    let (c, c_alias) = tr.items[2].clone();
+    launched(&tr.t, "T1", LaunchKind::Triage, &tr.items, 2);
+    let p = prepare(&tr.t, "T1", BACKEND, Stage::First, 3).unwrap();
+    // A: its questions answered, its estimate left out once (so still owed, and triaged).
+    // B: an estimate and no answer (not estimate-due, never triaged, questions still due).
+    // C: its estimate left out, no answer (estimate-due, never triaged).
+    let mut file = answer_all(&p);
+    let mine: Vec<Value> = questions(&p)
+        .iter()
+        .zip(file["answers"].as_array().unwrap())
+        .filter(|(q, _)| q["item"] == a_alias.as_str())
+        .map(|(_, ans)| ans.clone())
+        .collect();
+    assert!(!mine.is_empty());
+    file["answers"] = json!(mine);
+    file["estimates"] = json!([est(&b_alias, "T1", "S", "S", "S")]);
+    file["left_out"] = json!([left_out(&a_alias), left_out(&c_alias)]);
+    record_as_is(&tr, "T1", file, 4).unwrap();
+    let config = ConfigSet::load(tr.t.path()).unwrap();
+    let now = format_time(at(20));
+    // The fixture's project tracks other issues too: only these three are compared.
+    let got: Vec<_> = tr
+        .t
+        .root
+        .read(|l| issue_dashboard_core::triage::select(l.conn(), &config, "home", TriageScope::Full, &now))
+        .unwrap()
+        .into_iter()
+        .filter(|x| [&a, &b, &c].contains(&&x.item))
+        .collect();
+    assert!(got.iter().all(|x| !x.untriaged), "{got:?}");
+    let by = |id: &str| got.iter().find(|x| x.item == id).unwrap_or_else(|| panic!("{id} not selected: {got:?}"));
+    assert!(by(&a).estimate_due && by(&a).last_triaged.is_some(), "{got:?}");
+    assert!(by(&c).estimate_due && by(&c).last_triaged.is_none(), "{got:?}");
+    assert!(!by(&b).estimate_due && by(&b).last_triaged.is_none(), "{got:?}");
+    let order: Vec<&str> = got.iter().map(|x| x.item.as_str()).collect();
+    assert_eq!(order, vec![c.as_str(), a.as_str(), b.as_str()], "{got:?}");
+}
+
+/// 1.7: the owner's edited size wins over the recorded one.
+#[test]
+fn an_edited_review_size_wins_over_the_recorded_one() {
+    use issue_dashboard_core::docs::EstimatesEdit;
+    use issue_dashboard_core::estimate::{Effective, PhasesEdit, Size};
+    let recorded = |review: &str| {
+        json!({"tier": "T3", "phases": {
+            "design": {"size": "M", "reason": "r"},
+            "implementation": {"size": "M", "reason": "r"},
+            "review": {"size": review, "reason": "r"}}})
+    };
+    let edit = |review: Size| EstimatesEdit {
+        phases: Some(PhasesEdit { review: Some(review), ..PhasesEdit::default() }),
+        ..EstimatesEdit::default()
+    };
+    // Recorded L, edited S: a T3 review of S is inconsistent.
+    let e = Effective::of(Some(&recorded("L")), Some(&edit(Size::S)));
+    assert_eq!(e.review, Some(Size::S));
+    assert_eq!(e.problems(), vec!["a T3 issue's review is at least M".to_string()]);
+    // Recorded S (inconsistent alone), edited M: the edit wins and the estimate is consistent.
+    let e = Effective::of(Some(&recorded("S")), Some(&edit(Size::M)));
+    assert_eq!(e.review, Some(Size::M));
+    assert!(e.problems().is_empty(), "{:?}", e.problems());
+    // The unedited phases stay the recorded ones.
+    assert_eq!(e.implementation, Some(Size::M));
+}
