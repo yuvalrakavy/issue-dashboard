@@ -316,3 +316,22 @@ the harness traps to a hook message or the build-brief template.
 - unconsolidated: 4
 - improve: a summary tile and its target list are one claim — when a tile counts a union, the
   memo names the filter that shows that union, and a test opens the tile's filter and counts it.
+
+## 2026-11-11 harness phase 1: per-phase estimates and obligations (T1)
+- time: build about 5 h; gate about 3 h wall clock (machine load 100+ from parallel lanes).
+- catches: red-first 8 mutants RED during the build; gate=Codex 2 real (F1 a stale-estimate
+  retry refused, its payload not reproducible; F2 Details could not move T0↔T1, each picker
+  saved alone) + 1 ruled as-is (F3 skip scope); mutation finder 24 mutants, 10 real gaps
+  (ingest refusals untested, merge/precedence, stage filter, digest, boundary), 1 shadowed by
+  the schema; round 2 (Sonnet medium) no S2+, 4 S1 (one folded: blast/sites save kept staged
+  sizes). post-merge=0 so far.
+- DG=n/a IG=12 post-merge=0
+- tier-call: right (T1 over an approved spec chapter), though the obligation ledger was the
+  novel half.
+- delegation: depth Codex; mutation + gap tests + confirming Sonnet medium.
+- unconsolidated: 5 → run `/process-retro`.
+- improve: (1) a retry/repeat must reproduce an IDENTICAL payload: any field computed from live
+  state at record time (staleness) is read from the first record, and the memo names each such
+  field. (2) every refusal a spec adds owes an ingest-level test, not only a schema test — four
+  refusals were unreached. (3) trap: restoring a file by `mv`/`git stash` keeps its old mtime
+  and cargo may skip the rebuild, so a mutant "passes" on stale code; `touch` after restore.

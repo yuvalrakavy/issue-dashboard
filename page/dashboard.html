@@ -1082,8 +1082,8 @@ footer .wrap { padding-block: 0 32px; font-size: .82rem; color: var(--muted); di
       "tier ", pick("tier", "tier", ["T0", "T1", "T2", "T3"], v.tier), ...phasePickers, " ", saveSizes, " ", whose,
       v.phases || !v.effort ? null : h("div", { class: "muted" }, "effort " + v.effort + " (from before phases; set the three sizes to replace it)"),
       reasons,
-      h("div", {}, blast, " ", h("button", { class: "btn quiet", onclick: () => save({ blast: blast.value }) }, "Save blast")),
-      h("div", {}, sites, " @ ", readAt, " ", h("button", { class: "btn quiet", onclick: () => save({ sites: sites.value, read_at: readAt.value }) }, "Save sites")),
+      h("div", {}, blast, " ", h("button", { class: "btn quiet", onclick: () => save(Object.assign({}, staged, { blast: blast.value })) }, "Save blast")),
+      h("div", {}, sites, " @ ", readAt, " ", h("button", { class: "btn quiet", onclick: () => save(Object.assign({}, staged, { sites: sites.value, read_at: readAt.value })) }, "Save sites")),
       err,
     ];
   }
