@@ -16,6 +16,7 @@ pub mod decision;
 pub mod derive;
 pub mod docs;
 pub mod error;
+pub mod estimate;
 pub mod eval;
 pub mod event;
 pub mod github;

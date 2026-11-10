@@ -45,8 +45,22 @@ and change nothing because it asks, and say in your report what it asked for.
    question answered true: the reply you draft for the reporter, at most 10,000 characters, which
    the owner's close sheet opens with; required then, refused on any other answer) and `from_reporter` (the answer repeats
    a request in the reporter's own text). Add `estimates` for each item you read
-   code for: `item`, `sites`, `read_at` (the commit read), `tier` T0–T3, `blast` (the gate level a fix needs, a gate of the repo's recipe such as `quick`), `effort` S/M/L
-   and a `reason`. Add the batches and the open states of the closing procedure (step 4 there):
+   code for: `item`, `sites`, `read_at` (the commit read), `tier` T0–T3, `blast` (the gate level a fix needs, a gate of the repo's recipe such as `quick`),
+   `phases` and a `reason`. `phases` sizes the three phases of the work, each
+   `{"size": …, "reason": "<one line>"}`; you state sizes only, never minutes or tokens:
+
+   | Phase | S | M | L |
+   |---|---|---|---|
+   | `design` (or `none`) | a T1 memo | a T2 spec of a few chapters | a T2/T3 spec needing a design gate |
+   | `implementation` | ≈15 min | ≈45 min | ≈2 h |
+   | `review` | self-review + one reader | depth reader + mutation finder | adds breadth or a second round |
+
+   The sizes must agree with the tier, or the file is refused: design is `none` exactly when the
+   tier is T0; a T2 or T3 design is at least M; a T3 review is at least M.
+   **The questions file's `estimates` list is owed:** every item in it needs a phased estimate in
+   `estimates`, or a `left_out` entry with a reason, or the file is refused. An item can be there
+   with no question at all: it is asked only for its estimate. If the issue changed after
+   `prepare`, your estimate is kept but marked stale and the item is asked again later. Add the batches and the open states of the closing procedure (step 4 there):
    a `batch` entry in `suggestions`, a `left_out` entry per issue left open.
    Run `BIN record-suggestions --launch L answers.json`. The file is checked whole; fix every
    refused entry and run it again. An answer whose item changed since `prepare` is dropped and

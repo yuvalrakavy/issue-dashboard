@@ -58,7 +58,7 @@
         },
         "questions": {
           "type": "array",
-          "minItems": 1,
+          "minItems": 0,
           "items": {
             "type": "object",
             "additionalProperties": false,
@@ -120,8 +120,47 @@
               }
             }
           }
+        },
+        "obligations": {
+          "description": "The items owing a phased estimate (harness spec 1.6), each with GitHub's updatedAt at prepare; record checks these and marks an estimate stale when the issue changed since.",
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "item",
+              "alias",
+              "updated_at"
+            ],
+            "properties": {
+              "item": {
+                "$ref": "common.schema.json#/$defs/nodeId"
+              },
+              "alias": {
+                "$ref": "common.schema.json#/$defs/alias"
+              },
+              "updated_at": {
+                "$ref": "common.schema.json#/$defs/timestamp"
+              }
+            }
+          }
         }
-      }
+      },
+      "anyOf": [
+        {
+          "properties": {
+            "questions": {
+              "minItems": 1
+            }
+          }
+        },
+        {
+          "required": [
+            "obligations"
+          ]
+        }
+      ]
     }
   },
   "$defs": {

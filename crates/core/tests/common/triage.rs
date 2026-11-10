@@ -146,7 +146,30 @@ pub fn record_via(t: &TempRoot, launch: &str, input: Value, minutes: i64, gh: &d
     record_with(t, launch, &input, minutes, &commits)
 }
 
+/// [`record_exact`], after answering every estimate obligation the file leaves open with
+/// [`OWED_ESTIMATE`]: the tests written before harness spec 1.6 are about their answers, not
+/// the estimates every item now owes. A test about obligations uses [`record_exact`].
 pub fn record_with(
+    t: &TempRoot,
+    launch: &str,
+    input: &suggest::Input,
+    minutes: i64,
+    commits: &suggest::Commits,
+) -> Result<suggest::Report> {
+    let mut input = input.clone();
+    for alias in owed(t, launch) {
+        let named = |item: &str| item == alias;
+        if !input.estimates.iter().any(|e| named(&e.item)) && !input.left_out.iter().any(|o| named(&o.item)) {
+            let mut e = OWED_ESTIMATE.clone();
+            e["item"] = json!(alias);
+            input.estimates.push(serde_json::from_value(e).unwrap());
+        }
+    }
+    record_exact(t, launch, &input, minutes, commits)
+}
+
+/// `record-suggestions` on exactly `input`.
+pub fn record_exact(
     t: &TempRoot,
     launch: &str,
     input: &suggest::Input,
@@ -156,6 +179,56 @@ pub fn record_with(
     let c = ConfigSet::load(t.path()).unwrap();
     t.root
         .mutate(at(minutes), |tx| suggest::record(tx, &c, launch, input, commits))
+}
+
+/// A consistent phased estimate (harness spec 1.1), without its `item`.
+pub static OWED_ESTIMATE: std::sync::LazyLock<Value> = std::sync::LazyLock::new(|| {
+    json!({
+        "sites": ["src/lib.rs:1"], "read_at": "abc1234", "tier": "T1", "blast": "quick",
+        "phases": {
+            "design": {"size": "S", "reason": "a T1 memo"},
+            "implementation": {"size": "S", "reason": "one function"},
+            "review": {"size": "S", "reason": "one reader"},
+        },
+        "reason": "the cited site"
+    })
+});
+
+/// The aliases `launch`'s latest first-stage prepare asked an estimate of that nothing of the
+/// launch has answered yet.
+pub fn owed(t: &TempRoot, launch: &str) -> Vec<String> {
+    let Some(p) = events(t, Kind::Prepared)
+        .into_iter()
+        .rev()
+        .find(|e| e.subject == launch && e.data["stage"] == "first")
+    else {
+        return Vec::new();
+    };
+    let done: Vec<String> = events(t, Kind::Suggested)
+        .into_iter()
+        .filter(|e| {
+            e.distinct["run_id"] == launch
+                && (e.distinct["decision"] == "estimates" || e.distinct["decision"] == "left_out")
+        })
+        .map(|e| e.subject)
+        .collect();
+    // A closed item owes nothing (record skips it), and an estimate of it would be refused.
+    let open = |item: &str| {
+        t.root
+            .read(|l| ledger::latest(l.conn(), item, Kind::Observed))
+            .unwrap()
+            .is_some_and(|e| e.data["content"]["state"] == "open")
+    };
+    p.data["obligations"]
+        .as_array()
+        .map(|list| {
+            list.iter()
+                .filter(|o| !done.iter().any(|d| o["item"] == d.as_str()))
+                .filter(|o| open(o["item"].as_str().unwrap()))
+                .map(|o| o["alias"].as_str().unwrap().to_string())
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 pub fn events(t: &TempRoot, kind: Kind) -> Vec<Event> {

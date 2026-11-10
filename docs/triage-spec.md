@@ -59,9 +59,11 @@ among its label decisions, so a comment like "bumped to p1" cannot reach its typ
 | `instructs_agent` | true · false | outside text only | both | no card: a warning on the item, in Details and in its briefs (spec §4.2) |
 
 **Recorded as unevaluated estimates, not seam questions:** sites (with the commit they were read
-at), tier, blast and effort S/M/L, which feed WSJF job size (spec §6.3), batches (§6.6) and
-routing (§7.4); each is prose judgement after reading code (§7.1's last paragraph). Effort gains
-ground truth from outcomes (§6.8) and becomes a seam question then. **Batch** is grouping, not a
+at), tier, blast and per-phase sizes (design, implementation, review, each with a reason and
+checked against the tier: harness spec §1.1-1.3), which feed WSJF job size (spec §6.3), batches
+(§6.6) and routing (§7.4); each is prose judgement after reading code (§7.1's last paragraph).
+An estimate from before phases carries `effort` S/M/L instead, read only. The sizes gain ground
+truth from outcomes (§6.8) and become seam questions then. **Batch** is grouping, not a
 typed answer; **routing** is the dispatcher's, from §7.4's table.
 
 ### 1.2 One question file per decision
@@ -303,7 +305,7 @@ of 44"), the evaluated accuracy and the drift flag, shown on Trends.
 Suggestion documents add `raw` and calibrated `probabilities`, `badge`, `second_opinion` with
 `current`, `rubric_level`, `from_reporter`. Issue documents add `triage`: severity, reach and
 detectability, each {answer, probabilities, backend, badge}, plus the estimates (sites with
-commit, tier, blast, effort).
+commit, tier, blast, phases; effort for an estimate from before phases).
 
 ### 4.6 Contract changes
 
@@ -496,7 +498,7 @@ expects" policy, and the last scoping item. Every row is overrulable.
 
 | § | As built | Why | PR |
 |---|---|---|---|
-| 4.1 | **Ruling (overrulable):** the estimates are editable in Details. `DecisionValue.estimates` holds any of `sites` + `read_at` (together), `tier` T0-T3, `blast`, `effort` S/M/L; an `edit_suggestion` carrying it may name only its item. Per item the edits merge, a later field over an earlier one, undo taking one back; the issue document's `triage.estimates` carries the recorded fields (null when none were recorded) and `edited`, the merged edit or null. The page shows the edit over the session's estimate | the table says editable; one field per estimate, so an edit is never a whole re-entry | rulings |
+| 4.1 | **Ruling (overrulable):** the estimates are editable in Details. `DecisionValue.estimates` holds any of `sites` + `read_at` (together), `tier` T0-T3, `blast`, `phases` (any of design, implementation, review; harness spec §1.7 — `effort` stays readable and a new edit carrying it is refused); an `edit_suggestion` carrying it may name only its item. Per item the edits merge, a later field over an earlier one, undo taking one back; the issue document's `triage.estimates` carries the recorded fields (null when none were recorded) and `edited`, the merged edit or null. The page shows the edit over the session's estimate | the table says editable; one field per estimate, so an edit is never a whole re-entry | rulings |
 | 4.1, 3.1 | An estimates edit records no truth: truth stays where severity, reach and detectability edits are | an estimate is never evaluated (1.1) | rulings |
 | 5.1 | **Ruling (overrulable):** the `recommend_closures` alias is on the triage brief with scope `closures`. Its answers go through `prepare` and calibration, its brief carries the instructs_agent warning, and the daily closures run does not ask them again until due (2.2). Each repo's closures are judged by its campaign skill, or by the closing procedure of the `issue-dashboard-triage-session` skill, which also carries the batching (close together, one gate) that the phase-1 procedure had. `docs/closing-recommendations.md` is removed | the user expects one triage, one calibration, one warning rule | rulings |
 | 5.1 | The alias still accepts phase-1 suggestion entries in a file (likely fixed, duplicate, obsolete without a question); the brief teaches only answers, estimates, batches and `left_out` | a session started on the old brief can still finish | rulings |

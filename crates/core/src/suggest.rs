@@ -83,14 +83,19 @@ pub enum Tier {
     T3,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, serde::Serialize)]
-pub enum Effort {
-    S,
-    M,
-    L,
+impl Tier {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Tier::T0 => "T0",
+            Tier::T1 => "T1",
+            Tier::T2 => "T2",
+            Tier::T3 => "T3",
+        }
+    }
 }
 
-/// The unevaluated estimates of one item (triage spec 1.1): recorded, never a question.
+/// The unevaluated estimates of one item (triage spec 1.1): recorded, never a question. The
+/// size is per phase (harness spec 1.1); a file still carrying the old `effort` is refused.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Estimate {
@@ -100,7 +105,7 @@ pub struct Estimate {
     pub read_at: String,
     pub tier: Tier,
     pub blast: String,
-    pub effort: Effort,
+    pub phases: crate::estimate::Phases,
     #[serde(default)]
     pub reason: String,
 }
@@ -417,6 +422,17 @@ pub fn record(
         &mut report.dropped,
         commits,
     )?;
+    // The estimate obligations of the launch's latest first-stage prepare (harness spec 1.6):
+    // each is answered with a phased estimate or left out with a reason.
+    // One already answered by an earlier file of this launch is not owed again.
+    let frozen = triage::obligations(c.conn, launch_id)?;
+    // GitHub's updatedAt when prepare asked, for every obligation, answered or not.
+    let asked_at: BTreeMap<String, String> =
+        frozen.iter().map(|o| (o.item.clone(), o.updated_at.clone())).collect();
+    let answered = crate::estimate::answered(c.conn, &project, launch_id)?;
+    let obligations = crate::estimate::unanswered(c.conn, &project, launch_id, frozen)?;
+    let mut owed: BTreeMap<String, &crate::estimate::Obligation> =
+        obligations.iter().map(|o| (o.item.clone(), o)).collect();
     for e in &input.estimates {
         let what = format!("{} (estimates)", e.item);
         c.common(&what, 1.0, &e.reason);
@@ -426,10 +442,36 @@ pub fn record(
         if e.blast.trim().is_empty() {
             c.fail(format!("{what}: blast names the gate level a fix needs"));
         }
+        for (phase, reason) in [
+            ("design", &e.phases.design.reason),
+            ("implementation", &e.phases.implementation.reason),
+            ("review", &e.phases.review.reason),
+        ] {
+            if reason.trim().is_empty() {
+                c.fail(format!("{what}: the {phase} size needs a reason"));
+            }
+        }
+        for p in crate::estimate::check(
+            Some(e.tier.as_str()),
+            Some(e.phases.design.size),
+            Some(e.phases.review.size),
+        ) {
+            c.fail(format!("{what}: {p}"));
+        }
         if let Some((id, current)) = c.open_item(&e.item)? {
             if !seen.insert((id.clone(), "estimates".into())) {
                 c.fail(format!("{} has two estimates entries", e.item));
             }
+            // An estimate about an issue that changed after it was asked for is about older
+            // facts: recorded, marked stale, and the item stays estimate-due. A retry of an
+            // estimate this launch already recorded keeps that record's staleness, so it is a
+            // repeat rather than a different answer.
+            owed.remove(&id);
+            let stale = match (answered.get(&id), asked_at.get(&id)) {
+                (Some(Some(was)), _) => *was,
+                (_, Some(asked)) => triage::updated_at(c.conn, &id)?.is_some_and(|u| &u != asked),
+                _ => false,
+            };
             pending.push(Pending {
                 subject: id.clone(),
                 decision: "estimates".into(),
@@ -442,8 +484,9 @@ pub fn record(
                         "read_at": e.read_at,
                         "tier": e.tier,
                         "blast": e.blast,
-                        "effort": e.effort,
+                        "phases": e.phases,
                     },
+                    "stale": stale,
                     "backend": backend,
                     "evaluated": false,
                     "reason": e.reason,
@@ -568,6 +611,7 @@ pub fn record(
             if !seen.insert((id.clone(), "left_out".into())) {
                 c.fail(format!("{} is left out twice", o.item));
             }
+            owed.remove(&id);
             pending.push(Pending {
                 subject: id.clone(),
                 decision: "left_out".into(),
@@ -584,6 +628,17 @@ pub fn record(
                 }),
             });
         }
+    }
+    // An item closed since prepare owes nothing: nothing will be launched for it.
+    for o in owed.values() {
+        let open = ledger::latest(c.conn, &o.item, Kind::Observed)?.is_some_and(|e| e.data["content"]["state"] == "open");
+        if !open {
+            continue;
+        }
+        c.fail(format!(
+            "{} owes a phased estimate: answer it in `estimates`, or list it in `left_out` with a reason",
+            o.alias
+        ));
     }
     if c.errors.is_empty() && pending.is_empty() && report.dropped.is_empty() {
         c.fail("the file has no answers, suggestions or estimates and nothing left out");
@@ -1350,7 +1405,10 @@ pub fn triage_details(conn: &Connection, project: &str, layers: &layers::Layers)
     let mut latest: BTreeMap<(String, String), crate::event::Event> = BTreeMap::new();
     for e in ledger::events_by_kind(conn, Kind::Suggested)? {
         let decision = e.distinct["decision"].as_str().unwrap_or_default().to_string();
+        // A stale estimate is about older facts and never the effective one (harness spec 1.7).
+        let stale_estimate = decision == "estimates" && e.data["suggestion"]["stale"] == true;
         if e.data["project"] == project
+            && !stale_estimate
             && (layers::DETAIL_DECISIONS.contains(&decision.as_str())
                 || decision == "estimates"
                 || decision == "instructs_agent")
@@ -1373,10 +1431,19 @@ pub fn triage_details(conn: &Connection, project: &str, layers: &layers::Layers)
         }
         let entry = out.entry(item.clone()).or_insert_with(|| json!({}));
         if decision == "estimates" {
-            let mut est = s["estimate"].clone();
-            est["backend"] = s["backend"].clone();
-            est["edited"] = estimates_edited(layers, item);
-            entry["estimates"] = est;
+            // One shape for every estimate the ledger holds: an old one has `effort` and no
+            // `phases`, a new one the reverse (harness spec 1.1).
+            let r = &s["estimate"];
+            entry["estimates"] = json!({
+                "sites": r["sites"],
+                "read_at": r["read_at"],
+                "tier": r["tier"],
+                "blast": r["blast"],
+                "phases": r["phases"],
+                "effort": r["effort"],
+                "backend": s["backend"],
+                "edited": estimates_edited(layers, item),
+            });
             continue;
         }
         let edited = layers.details.get(item).and_then(|d| d.get(decision)).cloned();
@@ -1414,6 +1481,7 @@ pub fn triage_details(conn: &Connection, project: &str, layers: &layers::Layers)
                 "read_at": null,
                 "tier": null,
                 "blast": null,
+                "phases": null,
                 "effort": null,
                 "backend": null,
                 "edited": estimates_edited(layers, item),

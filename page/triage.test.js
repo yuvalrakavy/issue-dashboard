@@ -107,39 +107,66 @@ test("a Details edit names the issue's suggestion for that decision, or only the
 });
 
 test("an estimates edit names only the item and carries the fields the owner set, cleaned", () => {
-  const i = issue(1, { triage: { estimates: { tier: "T1", effort: "S", blast: "quick", sites: ["a.rs:1"], read_at: "abc1234", backend: "m@e", edited: null } } });
-  assert.deepEqual(D.estimatesEditFields(i, { tier: "T2" }), {
-    fields: { action: "edit_suggestion", target: { item: "I_1", alias: STORE + "#1" }, value: { estimates: { tier: "T2" } } },
+  const ph = { design: { size: "S", reason: "a memo" }, implementation: { size: "S", reason: "one fn" }, review: { size: "S", reason: "one reader" } };
+  const i = issue(1, { triage: { estimates: { tier: "T1", phases: ph, effort: null, blast: "quick", sites: ["a.rs:1"], read_at: "abc1234", backend: "m@e", edited: null } } });
+  assert.deepEqual(D.estimatesEditFields(i, { tier: "T2", design: "M" }), {
+    fields: { action: "edit_suggestion", target: { item: "I_1", alias: STORE + "#1" }, value: { estimates: { tier: "T2", phases: { design: "M" } } } },
   });
+  assert.deepEqual(D.estimatesEditFields(i, { review: "L" }).fields.value, { estimates: { phases: { review: "L" } } });
   assert.deepEqual(D.estimatesEditFields(i, { blast: "  the loader " }).fields.value, { estimates: { blast: "the loader" } });
   assert.deepEqual(D.estimatesEditFields(i, { sites: " src/a.rs:1, src/b.rs:2\nsrc/c.rs:3 ,", read_at: " DEF5678 " }).fields.value, {
     estimates: { sites: ["src/a.rs:1", "src/b.rs:2", "src/c.rs:3"], read_at: "def5678" },
   });
-  assert.deepEqual(D.estimatesEditFields(issue(2), { effort: "L" }).fields.target, { item: "I_2", alias: STORE + "#2" });
+  assert.deepEqual(D.estimatesEditFields(issue(2), { implementation: "L" }).fields.target, { item: "I_2", alias: STORE + "#2" });
   for (const [form, error] of [
     [{}, "Nothing to save."],
     [{ tier: "T4" }, "Tier is one of T0, T1, T2, T3."],
-    [{ effort: "XL" }, "Effort is one of S, M, L."],
+    [{ design: "XL" }, "The design size is one of none, S, M, L."],
+    [{ review: "none" }, "The review size is one of S, M, L."],
     [{ blast: "  " }, "Blast is empty."],
     [{ sites: "a.rs:1", read_at: "" }, "Sites need the commit they were read at."],
     [{ sites: " , ", read_at: "abc1234" }, "Sites need the commit they were read at."],
     [{ sites: "a.rs:1", read_at: "main" }, "The commit is 7 to 40 hex digits."],
+    // Over the recorded T1 S/S/S, as ingest refuses it (harness spec 1.3).
+    [{ tier: "T2" }, "The estimate would be inconsistent: a T2 issue's design is at least M."],
+    [{ tier: "T0" }, "The estimate would be inconsistent: a T0 issue has no design: design is none."],
+    [{ design: "none" }, "The estimate would be inconsistent: a T1 issue has a design: design is S, M or L."],
+    [{ tier: "T3", design: "M" }, "The estimate would be inconsistent: a T3 issue's review is at least M."],
   ]) assert.deepEqual(D.estimatesEditFields(i, form), { error }, JSON.stringify(form));
+  assert.ok(D.estimatesEditFields(i, { tier: "T3", design: "M", review: "M" }).fields);
+  // An edit over the owner's earlier edit sees that edit, not only the recorded estimate.
+  const edited = issue(3, { triage: { estimates: Object.assign({}, i.triage.estimates, { edited: { tier: "T2", phases: { design: "M" } } }) } });
+  assert.deepEqual(D.estimatesEditFields(edited, { design: "S" }), { error: "The estimate would be inconsistent: a T2 issue's design is at least M." });
+});
+
+test("the page's consistency rules match the shared fixture the Rust check runs", () => {
+  const f = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "crates", "core", "tests", "fixtures", "estimate-check.json"), "utf8"));
+  assert.ok(f.cases.length >= 10);
+  for (const c of f.cases) assert.deepEqual(D.estimateProblems(c.tier, c.design, c.review), c.problems, JSON.stringify(c));
 });
 
 test("the estimates shown are the owner's edit over the recorded ones", () => {
+  const ph = { design: { size: "M", reason: "a spec" }, implementation: { size: "S", reason: "one fn" }, review: { size: "M", reason: "two readers" } };
   assert.equal(D.shownEstimates({}), null);
-  assert.deepEqual(D.shownEstimates({ estimates: { tier: "T1", effort: "S", blast: "b", sites: ["a"], read_at: "abc1234", backend: "m", edited: null } }),
-    { tier: "T1", effort: "S", blast: "b", sites: ["a"], read_at: "abc1234", edited: false });
-  assert.deepEqual(D.shownEstimates({ estimates: { tier: "T1", effort: "S", blast: "b", sites: ["a"], read_at: "abc1234", backend: "m", edited: { effort: "L" } } }),
-    { tier: "T1", effort: "L", blast: "b", sites: ["a"], read_at: "abc1234", edited: true });
-  assert.deepEqual(D.shownEstimates({ estimates: { tier: null, effort: null, blast: null, sites: null, read_at: null, backend: null, edited: { tier: "T0" } } }),
-    { tier: "T0", effort: null, blast: null, sites: null, read_at: null, edited: true });
+  assert.deepEqual(D.shownEstimates({ estimates: { tier: "T2", phases: ph, effort: null, blast: "b", sites: ["a"], read_at: "abc1234", backend: "m", edited: null } }), {
+    tier: "T2", effort: null, blast: "b", sites: ["a"], read_at: "abc1234", edited: false,
+    phases: { design: { size: "M", reason: "a spec", edited: false }, implementation: { size: "S", reason: "one fn", edited: false }, review: { size: "M", reason: "two readers", edited: false } },
+  });
+  // The owner's size replaces the session's, and with it the session's reason.
+  const shown = D.shownEstimates({ estimates: { tier: "T2", phases: ph, effort: null, blast: "b", sites: ["a"], read_at: "abc1234", backend: "m", edited: { phases: { design: "L" } } } });
+  assert.deepEqual(shown.phases.design, { size: "L", reason: null, edited: true });
+  assert.deepEqual(shown.phases.review, { size: "M", reason: "two readers", edited: false });
+  assert.equal(shown.edited, true);
+  // An estimate from before phases shows its effort and no phases.
+  assert.deepEqual(D.shownEstimates({ estimates: { tier: "T1", phases: null, effort: "S", blast: "b", sites: ["a"], read_at: "abc1234", backend: "m", edited: null } }),
+    { tier: "T1", effort: "S", blast: "b", sites: ["a"], read_at: "abc1234", phases: null, edited: false });
+  assert.deepEqual(D.shownEstimates({ estimates: { tier: null, phases: null, effort: null, blast: null, sites: null, read_at: null, backend: null, edited: { tier: "T0" } } }),
+    { tier: "T0", effort: null, blast: null, sites: null, read_at: null, phases: null, edited: true });
 });
 
 test("the estimates editor starts from the full commit, so saving the sites keeps it", () => {
   const full = "def5678901234567890123456789012345678901";
-  const f = D.estimatesFormValues({ tier: "T1", effort: "S", blast: "quick", sites: ["src/a.rs:1", "src/b.rs:2"], read_at: full, edited: false });
+  const f = D.estimatesFormValues({ tier: "T1", phases: null, effort: null, blast: "quick", sites: ["src/a.rs:1", "src/b.rs:2"], read_at: full, edited: false });
   assert.deepEqual(f, { blast: "quick", sites: "src/a.rs:1, src/b.rs:2", read_at: full });
   assert.equal(D.estimatesEditFields(issue(1), { sites: f.sites, read_at: f.read_at }).fields.value.estimates.read_at, full);
   assert.deepEqual(D.estimatesFormValues(null), { blast: "", sites: "", read_at: "" });
@@ -183,4 +210,18 @@ test("the Details estimates editor fills its inputs from estimatesFormValues, so
   assert.match(html, /"Estimate blast", placeholder: "blast", value: f\.blast \}/);
   assert.match(html, /"Estimate sites", placeholder: "file:line, file:line", value: f\.sites \}/);
   assert.match(html, /"Estimate commit", class: "mono", placeholder: "commit", size: "9", value: f\.read_at \}/);
+});
+
+// Gate F2: a T0 estimate moves to T1 only with a design size in the same edit (and back only
+// with design none), so the Details pickers stage their sizes and one button saves them together.
+test("the Details size pickers stage, and one Save sizes submits tier and phases together", () => {
+  const ph = { design: { size: "none", reason: "no design" }, implementation: { size: "S", reason: "one fn" }, review: { size: "S", reason: "one reader" } };
+  const i = issue(1, { triage: { estimates: { tier: "T0", phases: ph, edited: null } } });
+  assert.ok(D.estimatesEditFields(i, { tier: "T1" }).error, "T1 alone keeps design none");
+  assert.ok(D.estimatesEditFields(i, { design: "S" }).error, "design alone breaks T0");
+  assert.deepEqual(D.estimatesEditFields(i, { tier: "T1", design: "S" }).fields.value, { estimates: { tier: "T1", phases: { design: "S" } } });
+  const html = fs.readFileSync(path.join(__dirname, "dashboard.html"), "utf8");
+  const cell = html.slice(html.indexOf("function estimatesCell"), html.indexOf("function openDetails"));
+  assert.ok(!/onchange:[^\n]*save\(/.test(cell), "a picker change saves nothing on its own");
+  assert.match(cell, /Save sizes/);
 });
