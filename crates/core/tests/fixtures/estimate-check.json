@@ -1,0 +1,17 @@
+{
+  "description": "Harness spec 1.3's consistency rules over (tier, design, review), checked by estimate::check in Rust and estimateProblems in page/core.js. null: not set.",
+  "cases": [
+    {"tier": "T0", "design": "none", "review": "S", "problems": []},
+    {"tier": "T0", "design": "S", "review": "S", "problems": ["a T0 issue has no design: design is none"]},
+    {"tier": "T1", "design": "none", "review": "S", "problems": ["a T1 issue has a design: design is S, M or L"]},
+    {"tier": "T1", "design": "S", "review": "S", "problems": []},
+    {"tier": "T2", "design": "S", "review": "S", "problems": ["a T2 issue's design is at least M"]},
+    {"tier": "T2", "design": "M", "review": "S", "problems": []},
+    {"tier": "T2", "design": "none", "review": "S", "problems": ["a T2 issue has a design: design is S, M or L"]},
+    {"tier": "T3", "design": "L", "review": "S", "problems": ["a T3 issue's review is at least M"]},
+    {"tier": "T3", "design": "S", "review": "S", "problems": ["a T3 issue's design is at least M", "a T3 issue's review is at least M"]},
+    {"tier": "T3", "design": "M", "review": "M", "problems": []},
+    {"tier": null, "design": "S", "review": "S", "problems": []},
+    {"tier": "T3", "design": null, "review": null, "problems": []}
+  ]
+}

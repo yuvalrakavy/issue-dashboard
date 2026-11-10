@@ -484,7 +484,9 @@ const TRIAGE_EXAMPLE: &str = r#"{
     {"question": "q-0123456789abcdef0123", "probabilities": {"true": 0.85, "false": 0.15}, "reason": "abc1234 removed the cited call", "commit": "abc1234"}
   ],
   "estimates": [
-    {"item": "owner/repo#15", "sites": ["src/config.rs:120"], "read_at": "abc1234", "tier": "T1", "blast": "quick", "effort": "S", "reason": "one parser function in the config loader reads the key"}
+    {"item": "owner/repo#15", "sites": ["src/config.rs:120"], "read_at": "abc1234", "tier": "T1", "blast": "quick",
+     "phases": {"design": {"size": "S", "reason": "a short memo: the key's format is settled"}, "implementation": {"size": "S", "reason": "one parser function"}, "review": {"size": "S", "reason": "one reader over a small diff"}},
+     "reason": "one parser function in the config loader reads the key"}
   ],
   "suggestions": [
     {"kind": "batch", "members": ["owner/repo#15", "owner/repo#16"], "surface": "the config loader", "confidence": 0.7, "reason": "both are in config.rs"}
@@ -543,7 +545,11 @@ fn triage(
         format!(
             "4. In the same file, add where they apply: `estimates` for each issue you read code \
                  for (`blast` is the gate level a fix needs, a gate of the repo's recipe such as \
-                 `quick`); one `batch` entry in `suggestions` for two or more issues of one repo whose \
+                 `quick`; `phases` sizes design (none, S, M or L), implementation and review (S, M \
+                 or L), each with a one-line reason, by the {SESSION_SKILL} skill's table: design is \
+                 none exactly for T0, at least M for T2 and T3, and a T3 review is at least M). Every \
+                 issue in the questions file's `estimates` list owes one: a phased estimate, or a \
+                 `left_out` entry with a reason, or the file is refused. Add one `batch` entry in `suggestions` for two or more issues of one repo whose \
                  fixes touch the same code (`members`, the shared `surface`), to be fixed together \
                  with one gate, never across repos and never an issue in two batches; and a \
                  `left_out` entry for an issue you judge still open and in no batch, with `why`: \

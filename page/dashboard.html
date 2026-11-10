@@ -38,6 +38,7 @@ button, select, input, textarea { font: inherit; color: inherit; }
 h1, h2, h3 { text-wrap: balance; margin: 0; }
 .mono { font-family: var(--mono); font-size: .86em; }
 .muted { color: var(--muted); }
+ul.reasons { margin: 4px 0; padding-left: 18px; color: var(--muted); font-size: 0.92em; }
 
 /* status strip */
 .strip { background: var(--panel); border-bottom: 1px solid var(--line); }
@@ -1042,14 +1043,22 @@ footer .wrap { padding-block: 0 32px; font-size: .82rem; color: var(--muted); di
     return rows;
   }
 
-  // The estimates in Details (triage spec 4.1): the owner's edit over the recorded ones. The
-  // owner edits each field; sites are saved with the commit they were read at.
+  // The estimates in Details (triage spec 4.1, harness spec 1.1/1.7): the owner's edit over
+  // the recorded ones. Each phase shows its size and the session's reason; an estimate from
+  // before phases shows its effort, read only. The owner edits each field; sites are saved with
+  // the commit they were read at.
   function estimatesCell(i, e, backend) {
-    const v = e || { tier: null, effort: null, blast: null, sites: null, read_at: null, edited: false };
+    const v = e || { tier: null, phases: null, effort: null, blast: null, sites: null, read_at: null, edited: false };
     const whose = v.edited ? "(your edit)" : backend ? "(" + backend + ", not evaluated)" : "";
+    const sizes = v.phases
+      ? D.PHASES.map((p) => p + " " + (v.phases[p] ? v.phases[p].size : "—")).join(" · ")
+      : v.effort ? "effort " + v.effort + " (from before phases)" : "phases —";
+    const reasons = v.phases
+      ? h("ul", { class: "reasons" }, D.PHASES.filter((p) => v.phases[p] && v.phases[p].reason).map((p) => h("li", {}, p + ": " + v.phases[p].reason)))
+      : null;
     if (!S.owner) {
       if (!e) return ["—"];
-      return [(v.tier || "—") + " · effort " + (v.effort || "—") + " · " + (v.blast || "—") + (v.sites && v.sites.length ? " · " + v.sites.join(", ") : "") + (v.read_at ? " @ " + String(v.read_at).slice(0, 7) : ""), " ", whose];
+      return [(v.tier || "—") + " · " + sizes + " · " + (v.blast || "—") + (v.sites && v.sites.length ? " · " + v.sites.join(", ") : "") + (v.read_at ? " @ " + String(v.read_at).slice(0, 7) : ""), " ", whose, reasons];
     }
     const err = h("div", { class: "err", hidden: true, role: "alert" });
     const save = (form) => {
@@ -1057,15 +1066,19 @@ footer .wrap { padding-block: 0 32px; font-size: .82rem; color: var(--muted); di
       if (r.error) { err.textContent = r.error; err.hidden = false; return; }
       writeDecision(r.fields).then(() => dlg.close());
     };
-    const pick = (label, key, options) => h("select", { "aria-label": "Estimate " + label, onchange: (ev) => save({ [key]: ev.target.value }) },
-      v[key] ? null : h("option", { value: "", selected: "selected", disabled: "disabled" }, "—"),
-      options.map((o) => h("option", Object.assign({ value: o }, o === v[key] ? { selected: "selected" } : {}), o)));
+    const pick = (label, key, options, current) => h("select", { "aria-label": "Estimate " + label, onchange: (ev) => save({ [key]: ev.target.value }) },
+      current ? null : h("option", { value: "", selected: "selected", disabled: "disabled" }, "—"),
+      options.map((o) => h("option", Object.assign({ value: o }, o === current ? { selected: "selected" } : {}), o)));
     const f = D.estimatesFormValues(v);
     const blast = h("input", { "aria-label": "Estimate blast", placeholder: "blast", value: f.blast });
     const sites = h("input", { "aria-label": "Estimate sites", placeholder: "file:line, file:line", value: f.sites });
     const readAt = h("input", { "aria-label": "Estimate commit", class: "mono", placeholder: "commit", size: "9", value: f.read_at });
+    const phasePickers = [];
+    for (const p of D.PHASES) phasePickers.push(" · " + p + " ", pick(p, p, D.PHASE_SIZES[p], v.phases && v.phases[p] ? v.phases[p].size : null));
     return [
-      "tier ", pick("tier", "tier", ["T0", "T1", "T2", "T3"]), " · effort ", pick("effort", "effort", ["S", "M", "L"]), " ", whose,
+      "tier ", pick("tier", "tier", ["T0", "T1", "T2", "T3"], v.tier), ...phasePickers, " ", whose,
+      v.phases || !v.effort ? null : h("div", { class: "muted" }, "effort " + v.effort + " (from before phases; set the three sizes to replace it)"),
+      reasons,
       h("div", {}, blast, " ", h("button", { class: "btn quiet", onclick: () => save({ blast: blast.value }) }, "Save blast")),
       h("div", {}, sites, " @ ", readAt, " ", h("button", { class: "btn quiet", onclick: () => save({ sites: sites.value, read_at: readAt.value }) }, "Save sites")),
       err,

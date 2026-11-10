@@ -142,6 +142,38 @@ fn dismiss_refusal(conn: &Connection, doc: &Decision) -> Result<Option<String>> 
     Ok(None)
 }
 
+/// Why an estimates edit cannot take effect (harness spec 1.7): it still sets the old `effort`,
+/// sets no phase size where it names `phases`, or the item's effective estimate with it merged
+/// fails [`crate::estimate::check`].
+fn estimates_refusal(
+    conn: &Connection,
+    project: &str,
+    doc: &Decision,
+    value: &crate::docs::DecisionValue,
+) -> Result<Option<String>> {
+    let Some(edit) = &value.estimates else {
+        return Ok(None);
+    };
+    if edit.effort.is_some() {
+        return Ok(Some(
+            "effort is replaced by per-phase sizes: edit design, implementation and review instead".into(),
+        ));
+    }
+    if edit.phases.as_ref().is_some_and(crate::estimate::PhasesEdit::is_empty) {
+        return Ok(Some("the phases edit sets no size".into()));
+    }
+    let Some(item) = doc.target.item.as_deref() else {
+        return Ok(None);
+    };
+    let layers = crate::layers::layers(conn, project)?;
+    let mut merged = layers.estimates.get(item).cloned().unwrap_or_default();
+    merged.merge(edit);
+    let recorded = crate::estimate::recorded(conn, project)?;
+    let effective = crate::estimate::Effective::of(recorded.get(item).map(|s| &s["estimate"]), Some(&merged));
+    let problems = effective.problems();
+    Ok((!problems.is_empty()).then(|| format!("the estimate would be inconsistent: {}", problems.join("; "))))
+}
+
 /// Why an `accept_suggestion`, `edit_suggestion` or `dismiss_suggestion` cannot take effect
 /// (triage spec 4.2, 4.3):
 ///
@@ -163,6 +195,9 @@ fn suggestion_refusal(conn: &Connection, config: &ConfigSet, project: &str, doc:
     }
     let details =
         value.severity.is_some() || value.reach.is_some() || value.detectability.is_some() || value.estimates.is_some();
+    if let Some(why) = estimates_refusal(conn, project, doc, &value)? {
+        return Ok(Some(why));
+    }
     let found = match doc.target.suggestion.as_deref() {
         Some(id) => crate::truth::suggestions(conn, project)?.remove(id),
         None => None,

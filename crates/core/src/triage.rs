@@ -526,6 +526,9 @@ pub struct PreparedData {
     pub backend: String,
     pub stage: Stage,
     pub questions: Vec<Question>,
+    /// The items owing a phased estimate (harness spec 1.6); absent before phases existed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub obligations: Vec<crate::estimate::Obligation>,
 }
 
 /// What [`prepare`] wrote: the questions file for the session, and a report.
@@ -546,6 +549,8 @@ pub struct PrepareReport {
     pub repeat: bool,
     /// Items asked nothing, each with why.
     pub skipped: Vec<Value>,
+    /// Items owing a phased estimate (harness spec 1.6).
+    pub obligations: usize,
 }
 
 /// The scope a launch asks in (5.1): a triage launch's own scope (`full` when it names none),
@@ -628,6 +633,8 @@ pub(crate) fn asked(conn: &Connection, project: &str) -> Result<BTreeMap<(String
 /// An item as the latest observation shows it, ready to build inputs from.
 pub(crate) struct Observed {
     pub seq: i64,
+    /// GitHub's updatedAt of the observation (harness spec 1.6's "issue changed").
+    pub updated_at: String,
     pub open: bool,
     pub issue: bool,
     pub repo: String,
@@ -644,11 +651,30 @@ pub(crate) fn observed(conn: &Connection, config: &ConfigSet, project: &str, id:
     let content = &e.data["content"];
     Ok(Some(Observed {
         seq: e.seq,
+        updated_at: e.data["updated_at"].as_str().unwrap_or_default().to_string(),
         open: content["state"] == "open",
         issue: e.data["item"] == "issue",
         source: Source::observed(id, &alias, content, &maintainers),
         repo,
     }))
+}
+
+/// GitHub's updatedAt of `id`'s latest observation; `None` if never read.
+pub(crate) fn updated_at(conn: &Connection, id: &str) -> Result<Option<String>> {
+    Ok(ledger::latest(conn, id, Kind::Observed)?.and_then(|e| e.data["updated_at"].as_str().map(str::to_string)))
+}
+
+/// The estimate obligations of `launch`'s latest first-stage `prepared` event (harness spec
+/// 1.6): what `record` checks. Another prepare's obligations are not this one's.
+pub(crate) fn obligations(conn: &Connection, launch: &str) -> Result<Vec<crate::estimate::Obligation>> {
+    let Some(e) = ledger::events_of(conn, launch, Kind::Prepared)?
+        .into_iter()
+        .rev()
+        .find(|e| e.data["stage"] == "first")
+    else {
+        return Ok(Vec::new());
+    };
+    Ok(serde_json::from_value::<PreparedData>(e.data)?.obligations)
 }
 
 pub(crate) fn translation_of(config: &ConfigSet, repo: &str) -> Translation {
@@ -833,6 +859,8 @@ pub struct Candidate {
     pub untriaged: bool,
     /// When the item was last answered, any decision; `None` if never.
     pub last_triaged: Option<String>,
+    /// Owes a phased estimate (harness spec 1.6). These go after the untriaged.
+    pub estimate_due: bool,
 }
 
 /// The items a triage launch of `scope` would ask about now (2.2), in order: untriaged items
@@ -870,6 +898,7 @@ pub(crate) fn select_with(
     let asked = asked(conn, project)?;
     let by_owner = owner_asked(conn, project)?;
     let layers = crate::layers::layers(conn, project)?;
+    let owing = crate::estimate::Owing::load(conn, project, &layers.estimates)?;
     let mut out = Vec::new();
     for id in project_items(conn, config, project)? {
         let Some(o) = observed(conn, config, project, &id)? else {
@@ -903,7 +932,9 @@ pub(crate) fn select_with(
                 now,
             )?;
         }
-        if !any {
+        // Only a full triage asks for estimates (harness spec 1.6).
+        let estimate_due = scope == Scope::Full && owing.due(&id, now)?;
+        if !any && !estimate_due {
             continue;
         }
         let untriaged = crate::layers::effective_of(conn, config, &layers, &id)?
@@ -913,12 +944,15 @@ pub(crate) fn select_with(
             alias: o.source.alias.clone(),
             untriaged,
             last_triaged: last,
+            estimate_due,
         });
     }
-    // Untriaged first; then never triaged before the oldest last triage; then by alias.
+    // Untriaged first; then estimate-due; then never triaged before the oldest last triage;
+    // then by alias.
     out.sort_by(|a, b| {
         b.untriaged
             .cmp(&a.untriaged)
+            .then_with(|| b.estimate_due.cmp(&a.estimate_due))
             .then_with(|| a.last_triaged.is_some().cmp(&b.last_triaged.is_some()))
             .then_with(|| a.last_triaged.cmp(&b.last_triaged))
             .then_with(|| a.alias.cmp(&b.alias))
@@ -988,8 +1022,17 @@ pub fn prepare_with(
         BTreeMap::new()
     };
     let by_owner = owner_asked(tx.conn(), &project)?;
+    // A full triage's first stage asks for the estimates its items owe (harness spec 1.6);
+    // a closures run, a stronger look and the priority stage never do.
+    let owing = if !stronger && scope == Scope::Full && stage == Stage::First {
+        let layers = crate::layers::layers(tx.conn(), &project)?;
+        Some(crate::estimate::Owing::load(tx.conn(), &project, &layers.estimates)?)
+    } else {
+        None
+    };
 
     let mut questions = Vec::new();
+    let mut obligations = Vec::new();
     let mut entries = Vec::new();
     let mut skipped = Vec::new();
     let mut waiting = Vec::new();
@@ -1012,6 +1055,16 @@ pub fn prepare_with(
         let t = translation_of(config, &o.repo);
         let areas = areas_of(&t);
         let mut asked_here = 0;
+        if let Some(owing) = &owing
+            && owing.due(id, &now)?
+        {
+            obligations.push(crate::estimate::Obligation {
+                item: id.clone(),
+                alias: o.source.alias.clone(),
+                updated_at: o.updated_at.clone(),
+            });
+            asked_here += 1;
+        }
         for f in cat.decisions() {
             let last = asked.get(&(id.clone(), f.decision.clone()));
             let wanted = if stronger {
@@ -1092,21 +1145,34 @@ pub fn prepare_with(
         )));
     }
 
-    let (seq, repeat) = if questions.is_empty() {
+    let owed: Vec<Value> = obligations
+        .iter()
+        .map(|o| json!({"item": o.alias, "updated_at": o.updated_at}))
+        .collect();
+    let n_owed = obligations.len();
+    let (seq, repeat) = if questions.is_empty() && obligations.is_empty() {
         (None, false)
     } else {
         let ids: Vec<String> = questions.iter().map(|q| q.id.clone()).collect();
+        // The digest covers the obligations only when there are any, so a prepare without
+        // them keeps the identity it always had.
+        let digest = if obligations.is_empty() {
+            hash_value(&json!(ids))
+        } else {
+            hash_value(&json!({"questions": ids, "obligations": obligations}))
+        };
         let data = PreparedData {
             project: project.clone(),
             launch: launch_id.to_string(),
             backend: backend.clone(),
             stage,
             questions,
+            obligations,
         };
         let r = tx.record_valid(
             Kind::Prepared,
             launch_id,
-            json!({"stage": stage, "questions": hash_value(&json!(ids))}),
+            json!({"stage": stage, "questions": digest}),
             serde_json::to_value(&data)?,
             Dedupe::Any,
         )?;
@@ -1119,6 +1185,7 @@ pub fn prepare_with(
             "backend": backend,
             "stage": stage,
             "questions": entries,
+            "estimates": owed,
         }),
         report: PrepareReport {
             launch: launch_id.to_string(),
@@ -1128,6 +1195,7 @@ pub fn prepare_with(
             seq,
             repeat,
             skipped,
+            obligations: n_owed,
         },
     })
 }

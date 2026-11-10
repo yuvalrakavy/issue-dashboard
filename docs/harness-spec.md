@@ -298,4 +298,14 @@ the group for item ownership.
 
 ## As built
 
-(empty)
+Phase 1 (`feat/harness-phase1`). Each row is overrulable.
+
+| § | As built | Why |
+|---|---|---|
+| 1.6 | The obligations live in the `prepared` event (`data.obligations`: item, alias, `updated_at`); "prepare id" = the launch's latest first-stage `prepared` event, the one `record` checks. A prepare with obligations and no question is recorded (`questions` may then be empty) | the event already freezes what `record` checks; no second store |
+| 1.6 | An item closed after prepare owes nothing; an obligation is answered only by an `estimates` or `left_out` entry of the same launch | a closed item cannot be estimated; another launch's answer is to its own prepare |
+| 1.6 | "Left out twice in a row" = the item's last two answered obligations were both `left_out`; the 7 days run from the second | the obligations give the sequence; "answered" excludes a launch that never recorded |
+| 1.6 | "Issue changed" = GitHub's `updated_at` at record ≠ at prepare | the observation already carries it |
+| 1.6 | Only a full triage's first stage owes estimates: closures runs, stronger looks and the priority stage never do | estimates need the code read a full triage does |
+| 1.7 | `EstimatesEdit.effort` stays as a read-only field; ingest refuses a new edit carrying it, an empty `phases` edit, and one whose merge fails `estimate::check` | old decisions were refused only at their own ingest, so they still load |
+| 1.3 | The page mirrors `estimate::check` (`estimateProblems` in `page/core.js`) for immediate feedback; `crates/core/tests/fixtures/estimate-check.json` holds both to one set of cases. The offer-side check waits for phase 4 | two copies, one fixture, so they cannot drift silently |

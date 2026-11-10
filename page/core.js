@@ -856,20 +856,40 @@
     return { action: "edit_suggestion", target, value: { [decision]: answer } };
   }
 
-  // A Details edit of the estimates (triage spec 4.1): the fields in `form` the owner set
-  // (tier, effort, blast, and sites as text with the commit they were read at), cleaned, as
-  // { fields } naming only the item, or { error }. Never a label and never truth.
+  // A Details edit of the estimates (triage spec 4.1, harness spec 1.7): the fields in `form`
+  // the owner set (tier, a phase's size, blast, and sites as text with the commit they were
+  // read at), cleaned, as { fields } naming only the item, or { error }. An edit that would
+  // leave the shown estimate inconsistent (harness spec 1.3) is refused here as ingest refuses
+  // it. Never a label and never truth.
   const TIERS = ["T0", "T1", "T2", "T3"];
-  const EFFORTS = ["S", "M", "L"];
+  const PHASES = ["design", "implementation", "review"];
+  const PHASE_SIZES = { design: ["none", "S", "M", "L"], implementation: ["S", "M", "L"], review: ["S", "M", "L"] };
+  const SIZE_RANK = { none: 0, S: 1, M: 2, L: 3 };
+
+  // Harness spec 1.3's rules over an estimate's tier, design and review, each null when not
+  // set: the problems, worded as `estimate::check` words them (a shared fixture holds both to
+  // the same cases).
+  function estimateProblems(tier, design, review) {
+    const out = [];
+    if (tier && design) {
+      if (tier === "T0" && design !== "none") out.push("a T0 issue has no design: design is none");
+      if (tier !== "T0" && design === "none") out.push("a " + tier + " issue has a design: design is S, M or L");
+      if ((tier === "T2" || tier === "T3") && design === "S") out.push("a " + tier + " issue's design is at least M");
+    }
+    if (tier === "T3" && review && SIZE_RANK[review] < SIZE_RANK.M) out.push("a T3 issue's review is at least M");
+    return out;
+  }
+
   function estimatesEditFields(issue, form) {
     const e = {};
     if (form.tier !== undefined) {
       if (!TIERS.includes(form.tier)) return { error: "Tier is one of " + TIERS.join(", ") + "." };
       e.tier = form.tier;
     }
-    if (form.effort !== undefined) {
-      if (!EFFORTS.includes(form.effort)) return { error: "Effort is one of " + EFFORTS.join(", ") + "." };
-      e.effort = form.effort;
+    for (const p of PHASES) {
+      if (form[p] === undefined) continue;
+      if (!PHASE_SIZES[p].includes(form[p])) return { error: "The " + p + " size is one of " + PHASE_SIZES[p].join(", ") + "." };
+      (e.phases = e.phases || {})[p] = form[p];
     }
     if (form.blast !== undefined) {
       const b = String(form.blast).trim();
@@ -885,11 +905,17 @@
       e.read_at = at;
     }
     if (!Object.keys(e).length) return { error: "Nothing to save." };
+    const shown = shownEstimates(issue.triage) || { tier: null, phases: null };
+    const size = (p) => (e.phases && e.phases[p]) || (shown.phases && shown.phases[p] ? shown.phases[p].size : null);
+    const problems = estimateProblems(e.tier || shown.tier, size("design"), size("review"));
+    if (problems.length) return { error: "The estimate would be inconsistent: " + problems.join("; ") + "." };
     return { fields: { action: "edit_suggestion", target: { item: issue.id, alias: issue.alias }, value: { estimates: e } } };
   }
 
   // The estimates Details shows: the owner's edit over the recorded fields, and whether there
-  // is an edit; null when there are neither.
+  // is an edit; null when there are neither. `phases` maps each phase with a size to { size,
+  // reason, edited } (reason null where the owner's size replaced the session's); null when no
+  // phase has one. `effort` is an estimate's from before phases, read only.
   function shownEstimates(triage) {
     const e = triage && triage.estimates;
     if (!e) return null;
@@ -897,6 +923,14 @@
     for (const k of ["tier", "effort", "blast", "sites", "read_at"]) {
       out[k] = e.edited && e.edited[k] !== undefined ? e.edited[k] : e[k] === undefined ? null : e[k];
     }
+    const edits = (e.edited && e.edited.phases) || {};
+    let phases = null;
+    for (const p of PHASES) {
+      const rec = e.phases && e.phases[p];
+      if (edits[p] !== undefined) (phases = phases || {})[p] = { size: edits[p], reason: rec && rec.size === edits[p] ? rec.reason : null, edited: true };
+      else if (rec) (phases = phases || {})[p] = { size: rec.size, reason: rec.reason, edited: false };
+    }
+    out.phases = phases;
     out.edited = !!e.edited;
     return out;
   }
@@ -1081,7 +1115,7 @@
     dismissedSuggestions, suggestionCards, dismissSuggestionFields, closePrefill, fixLaunchFields, recommendFields, READ_ONLY_RECIPE,
     triageLive, fixLaunchStates, triageLaunchFields, evalLaunchFields, noEvaluation,
     strongerLookList, strongerLookFields, metricsRows,
-    actedSuggestions, answerText, triageCards, triageRows, triageCount, eligibleCards, eligibleNote,acceptFields, acceptCardFields, editFields, applyAllFields, detailsEditFields, estimatesEditFields, shownEstimates, estimatesFormValues, rubricNote, secondOpinionNote,
+    actedSuggestions, answerText, triageCards, triageRows, triageCount, eligibleCards, eligibleNote,acceptFields, acceptCardFields, editFields, applyAllFields, detailsEditFields, estimatesEditFields, estimateProblems, PHASES, PHASE_SIZES, shownEstimates, estimatesFormValues, rubricNote, secondOpinionNote,
   };
   root.IssueDashboard = api;
   if (typeof module === "object" && module.exports) module.exports = api;

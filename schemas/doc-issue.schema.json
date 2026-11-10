@@ -829,6 +829,7 @@
             "read_at",
             "tier",
             "blast",
+            "phases",
             "effort",
             "backend",
             "edited"
@@ -884,6 +885,16 @@
                 }
               ]
             },
+            "phases": {
+              "anyOf": [
+                {
+                  "$ref": "common.schema.json#/$defs/phases"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "effort": {
               "anyOf": [
                 {
@@ -896,7 +907,8 @@
                 {
                   "type": "null"
                 }
-              ]
+              ],
+              "description": "Read only: an estimate from before per-phase sizes (harness spec 1.1). Never written now."
             },
             "backend": {
               "anyOf": [
@@ -920,7 +932,7 @@
               ]
             }
           },
-          "description": "The latest recorded estimates (null fields: none recorded) and `edited`, the owner's Details edit merged (null: none; triage spec 4.1)."
+          "description": "The latest recorded estimates that are not stale (null fields: none recorded; phases null for an estimate from before phases, effort null for every newer one) and `edited`, the owner's Details edit merged (null: none; triage spec 4.1, harness spec 1.7)."
         },
         "stronger_look": {
           "description": "The latest answers about the item that need a stronger look (triage spec 2.5), while the item is open and the owner has not accepted, edited or dismissed them.",

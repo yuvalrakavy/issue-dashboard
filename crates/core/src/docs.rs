@@ -209,8 +209,13 @@ pub struct EstimatesEdit {
     pub tier: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub blast: Option<String>,
+    /// Read only: an edit from before phases (harness spec 1.7). It still parses, so the
+    /// ledger keeps loading, and means nothing; a new edit carrying it is refused at ingest.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effort: Option<String>,
+    /// The phase sizes the owner set (harness spec 1.7).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub phases: Option<crate::estimate::PhasesEdit>,
 }
 
 impl EstimatesEdit {
@@ -230,6 +235,9 @@ impl EstimatesEdit {
         }
         if later.effort.is_some() {
             self.effort = later.effort.clone();
+        }
+        if let Some(p) = &later.phases {
+            self.phases.get_or_insert_with(Default::default).merge(p);
         }
     }
 }

@@ -548,7 +548,8 @@ fn recorded_answers_carry_raw_and_identity_calibrated_probabilities() {
     launched(&tr.t, "T1", LaunchKind::Triage, &tr.items[..1], 2);
     let p = prepare(&tr.t, "T1", BACKEND, Stage::First, 3).unwrap();
     let rep = record(&tr.t, "T1", answer_all(&p), 4).unwrap();
-    assert_eq!((rep.recorded, rep.repeats), (8, 0));
+    // Seven answers and the estimate the item owes (harness spec 1.6).
+    assert_eq!((rep.recorded, rep.repeats), (8 + 1, 0));
     assert!(rep.dropped.is_empty());
     let evs = events(&tr.t, Kind::Suggested);
     let ty = suggestion_of(&evs, &id, "type");
@@ -585,8 +586,13 @@ fn an_answer_whose_item_changed_or_closed_is_dropped_and_the_rest_recorded() {
     edit(&tr.t, &b, 4, |v| v["body"] = json!("Edited after prepare."));
     edit(&tr.t, &c, 4, |v| v["state"] = json!("closed"));
     let rep = record(&tr.t, "T1", answer_all(&p), 5).unwrap();
-    assert_eq!(rep.recorded, 8);
+    // Eight answers, and the estimates a and b owe; closed c owes none (harness spec 1.6).
+    assert_eq!(rep.recorded, 8 + 2);
     assert_eq!(rep.dropped.len(), 16);
+    // b changed after prepare: its estimate is kept but stale, so b stays estimate-due.
+    let evs = events(&tr.t, Kind::Suggested);
+    assert_eq!(suggestion_of(&evs, &b, "estimates")["stale"], true);
+    assert_eq!(suggestion_of(&evs, &tr.items[0].0, "estimates")["stale"], false);
     let why: BTreeSet<(String, String)> = rep.dropped.iter().map(|d| (d.item.clone(), d.why.clone())).collect();
     assert_eq!(
         why,
@@ -595,10 +601,10 @@ fn an_answer_whose_item_changed_or_closed_is_dropped_and_the_rest_recorded() {
             (c_alias, "the issue closed since prepare".to_string()),
         ])
     );
-    let evs = events(&tr.t, Kind::Suggested);
     assert!(
-        evs.iter().all(|e| e.subject == tr.items[0].0),
-        "only the unchanged item is recorded"
+        evs.iter()
+            .all(|e| e.subject == tr.items[0].0 || (e.subject == b && e.distinct["decision"] == "estimates")),
+        "only the unchanged item's answers are recorded, and b's stale estimate"
     );
     let _ = c;
 }
@@ -612,7 +618,8 @@ fn an_observation_that_leaves_the_input_unchanged_drops_nothing() {
     // An assignee is no part of any input.
     edit(&tr.t, &id, 4, |v| v["assignees"] = json!(["yuvalrakavy"]));
     let rep = record(&tr.t, "T1", answer_all(&p), 5).unwrap();
-    assert_eq!((rep.recorded, rep.dropped.len()), (8, 0));
+    // Seven answers and the owed estimate (harness spec 1.6).
+    assert_eq!((rep.recorded, rep.dropped.len()), (8 + 1, 0));
 }
 
 #[test]
@@ -802,7 +809,7 @@ fn estimates_are_recorded_as_a_record_without_probabilities() {
     let (id, alias) = tr.items[0].clone();
     launched(&tr.t, "T1", LaunchKind::Triage, &tr.items[..1], 2);
     let est = json!({"item": alias, "sites": ["store_server/src/command/delete.rs:212"], "read_at": "95c2531bb",
-        "tier": "T1", "blast": "quick", "effort": "S", "reason": "one guarded path"});
+        "tier": "T1", "blast": "quick", "phases": {"design": {"size": "S", "reason": "a T1 memo"}, "implementation": {"size": "S", "reason": "one function"}, "review": {"size": "S", "reason": "one reader"}}, "reason": "one guarded path"});
     let mut bad = est.clone();
     bad["read_at"] = json!("main");
     let m = refused(record(&tr.t, "T1", json!({"backend": BACKEND, "estimates": [bad]}), 3));
@@ -813,7 +820,7 @@ fn estimates_are_recorded_as_a_record_without_probabilities() {
     let s = suggestion_of(&evs, &id, "estimates");
     assert_eq!(
         s["estimate"],
-        json!({"sites": ["store_server/src/command/delete.rs:212"], "read_at": "95c2531bb", "tier": "T1", "blast": "quick", "effort": "S"})
+        json!({"sites": ["store_server/src/command/delete.rs:212"], "read_at": "95c2531bb", "tier": "T1", "blast": "quick", "phases": {"design": {"size": "S", "reason": "a T1 memo"}, "implementation": {"size": "S", "reason": "one function"}, "review": {"size": "S", "reason": "one reader"}}})
     );
     assert_eq!(s.get("probabilities"), None);
     assert_eq!(s["backend"], BACKEND);
@@ -1193,7 +1200,7 @@ fn an_estimate_needs_a_reason_a_blast_level_and_one_entry_per_item() {
     let alias = tr.items[0].1.clone();
     launched(&tr.t, "T1", LaunchKind::Triage, &tr.items[..1], 2);
     let est = json!({"item": alias, "sites": ["src/a.rs:1"], "read_at": "95c2531bb",
-        "tier": "T1", "blast": "quick", "effort": "S", "reason": "one guarded path"});
+        "tier": "T1", "blast": "quick", "phases": {"design": {"size": "S", "reason": "a T1 memo"}, "implementation": {"size": "S", "reason": "one function"}, "review": {"size": "S", "reason": "one reader"}}, "reason": "one guarded path"});
     let with = |field: &str, v: Value| {
         let mut e = est.clone();
         e[field] = v;
@@ -1335,7 +1342,8 @@ fn an_area_answer_whose_area_list_changed_is_dropped_and_the_rest_recorded() {
     )
     .unwrap();
     let rep = record(&tr.t, "T1", answer_all(&p), 4).unwrap();
-    assert_eq!(rep.recorded, 7);
+    // The answers left after the drop, and the owed estimate (harness spec 1.6).
+    assert_eq!(rep.recorded, 7 + 1);
     let dropped: Vec<(&str, &str)> = rep
         .dropped
         .iter()
