@@ -1025,8 +1025,13 @@ pub fn prepare_with(
     // A full triage's first stage asks for the estimates its items owe (harness spec 1.6);
     // a closures run, a stronger look and the priority stage never do.
     let owing = if !stronger && scope == Scope::Full && stage == Stage::First {
+        // An item this launch already answered is not asked again: a launch records each
+        // answer once (a re-prepare after a stale estimate leaves the item to the next launch).
         let layers = crate::layers::layers(tx.conn(), &project)?;
-        Some(crate::estimate::Owing::load(tx.conn(), &project, &layers.estimates)?)
+        Some((
+            crate::estimate::Owing::load(tx.conn(), &project, &layers.estimates)?,
+            crate::estimate::answered(tx.conn(), &project, launch_id)?,
+        ))
     } else {
         None
     };
@@ -1055,7 +1060,8 @@ pub fn prepare_with(
         let t = translation_of(config, &o.repo);
         let areas = areas_of(&t);
         let mut asked_here = 0;
-        if let Some(owing) = &owing
+        if let Some((owing, answered)) = &owing
+            && !answered.contains_key(id)
             && owing.due(id, &now)?
         {
             obligations.push(crate::estimate::Obligation {

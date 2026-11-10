@@ -1066,7 +1066,10 @@ footer .wrap { padding-block: 0 32px; font-size: .82rem; color: var(--muted); di
       if (r.error) { err.textContent = r.error; err.hidden = false; return; }
       writeDecision(r.fields).then(() => dlg.close());
     };
-    const pick = (label, key, options, current) => h("select", { "aria-label": "Estimate " + label, onchange: (ev) => save({ [key]: ev.target.value }) },
+    // The sizes stage here and save together: T0 to T1 needs a design size in the same edit.
+    const staged = {};
+    const saveSizes = h("button", { class: "btn quiet", disabled: "disabled", onclick: () => save(staged) }, "Save sizes");
+    const pick = (label, key, options, current) => h("select", { "aria-label": "Estimate " + label, onchange: (ev) => { staged[key] = ev.target.value; saveSizes.disabled = false; err.hidden = true; } },
       current ? null : h("option", { value: "", selected: "selected", disabled: "disabled" }, "—"),
       options.map((o) => h("option", Object.assign({ value: o }, o === current ? { selected: "selected" } : {}), o)));
     const f = D.estimatesFormValues(v);
@@ -1076,7 +1079,7 @@ footer .wrap { padding-block: 0 32px; font-size: .82rem; color: var(--muted); di
     const phasePickers = [];
     for (const p of D.PHASES) phasePickers.push(" · " + p + " ", pick(p, p, D.PHASE_SIZES[p], v.phases && v.phases[p] ? v.phases[p].size : null));
     return [
-      "tier ", pick("tier", "tier", ["T0", "T1", "T2", "T3"], v.tier), ...phasePickers, " ", whose,
+      "tier ", pick("tier", "tier", ["T0", "T1", "T2", "T3"], v.tier), ...phasePickers, " ", saveSizes, " ", whose,
       v.phases || !v.effort ? null : h("div", { class: "muted" }, "effort " + v.effort + " (from before phases; set the three sizes to replace it)"),
       reasons,
       h("div", {}, blast, " ", h("button", { class: "btn quiet", onclick: () => save({ blast: blast.value }) }, "Save blast")),

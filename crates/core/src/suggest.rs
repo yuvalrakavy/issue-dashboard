@@ -425,7 +425,12 @@ pub fn record(
     // The estimate obligations of the launch's latest first-stage prepare (harness spec 1.6):
     // each is answered with a phased estimate or left out with a reason.
     // One already answered by an earlier file of this launch is not owed again.
-    let obligations = crate::estimate::unanswered(c.conn, &project, launch_id, triage::obligations(c.conn, launch_id)?)?;
+    let frozen = triage::obligations(c.conn, launch_id)?;
+    // GitHub's updatedAt when prepare asked, for every obligation, answered or not.
+    let asked_at: BTreeMap<String, String> =
+        frozen.iter().map(|o| (o.item.clone(), o.updated_at.clone())).collect();
+    let answered = crate::estimate::answered(c.conn, &project, launch_id)?;
+    let obligations = crate::estimate::unanswered(c.conn, &project, launch_id, frozen)?;
     let mut owed: BTreeMap<String, &crate::estimate::Obligation> =
         obligations.iter().map(|o| (o.item.clone(), o)).collect();
     for e in &input.estimates {
@@ -458,10 +463,14 @@ pub fn record(
                 c.fail(format!("{} has two estimates entries", e.item));
             }
             // An estimate about an issue that changed after it was asked for is about older
-            // facts: recorded, marked stale, and the item stays estimate-due.
-            let stale = match owed.remove(&id) {
-                Some(o) => triage::updated_at(c.conn, &id)?.is_some_and(|u| u != o.updated_at),
-                None => false,
+            // facts: recorded, marked stale, and the item stays estimate-due. A retry of an
+            // estimate this launch already recorded keeps that record's staleness, so it is a
+            // repeat rather than a different answer.
+            owed.remove(&id);
+            let stale = match (answered.get(&id), asked_at.get(&id)) {
+                (Some(Some(was)), _) => *was,
+                (_, Some(asked)) => triage::updated_at(c.conn, &id)?.is_some_and(|u| &u != asked),
+                _ => false,
             };
             pending.push(Pending {
                 subject: id.clone(),

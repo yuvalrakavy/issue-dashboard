@@ -211,3 +211,17 @@ test("the Details estimates editor fills its inputs from estimatesFormValues, so
   assert.match(html, /"Estimate sites", placeholder: "file:line, file:line", value: f\.sites \}/);
   assert.match(html, /"Estimate commit", class: "mono", placeholder: "commit", size: "9", value: f\.read_at \}/);
 });
+
+// Gate F2: a T0 estimate moves to T1 only with a design size in the same edit (and back only
+// with design none), so the Details pickers stage their sizes and one button saves them together.
+test("the Details size pickers stage, and one Save sizes submits tier and phases together", () => {
+  const ph = { design: { size: "none", reason: "no design" }, implementation: { size: "S", reason: "one fn" }, review: { size: "S", reason: "one reader" } };
+  const i = issue(1, { triage: { estimates: { tier: "T0", phases: ph, edited: null } } });
+  assert.ok(D.estimatesEditFields(i, { tier: "T1" }).error, "T1 alone keeps design none");
+  assert.ok(D.estimatesEditFields(i, { design: "S" }).error, "design alone breaks T0");
+  assert.deepEqual(D.estimatesEditFields(i, { tier: "T1", design: "S" }).fields.value, { estimates: { tier: "T1", phases: { design: "S" } } });
+  const html = fs.readFileSync(path.join(__dirname, "dashboard.html"), "utf8");
+  const cell = html.slice(html.indexOf("function estimatesCell"), html.indexOf("function openDetails"));
+  assert.ok(!/onchange:[^\n]*save\(/.test(cell), "a picker change saves nothing on its own");
+  assert.match(cell, /Save sizes/);
+});

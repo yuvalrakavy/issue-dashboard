@@ -188,16 +188,26 @@ pub struct Obligation {
 /// The obligations of `launch` that no recorded `estimates` or `left_out` of that launch
 /// answers yet.
 pub fn unanswered(conn: &Connection, project: &str, launch: &str, obligations: Vec<Obligation>) -> Result<Vec<Obligation>> {
-    let mut done = std::collections::BTreeSet::new();
+    let done = answered(conn, project, launch)?;
+    Ok(obligations.into_iter().filter(|o| !done.contains_key(&o.item)).collect())
+}
+
+/// The items `launch` has already answered an estimate obligation of, each with the staleness
+/// of the estimate it recorded (`None` for a `left_out`). A launch records each answer once, so
+/// a later prepare of the launch does not ask these again and a retry keeps the first record's
+/// staleness.
+pub fn answered(conn: &Connection, project: &str, launch: &str) -> Result<BTreeMap<String, Option<bool>>> {
+    let mut done = BTreeMap::new();
     for e in ledger::events_by_kind(conn, Kind::Suggested)? {
-        if e.data["project"] == project
-            && e.distinct["run_id"] == launch
-            && (e.distinct["decision"] == "estimates" || e.distinct["decision"] == "left_out")
-        {
-            done.insert(e.subject.clone());
+        if e.data["project"] == project && e.distinct["run_id"] == launch {
+            if e.distinct["decision"] == "estimates" {
+                done.insert(e.subject.clone(), Some(e.data["suggestion"]["stale"] == true));
+            } else if e.distinct["decision"] == "left_out" {
+                done.entry(e.subject.clone()).or_insert(None);
+            }
         }
     }
-    Ok(obligations.into_iter().filter(|o| !done.contains(&o.item)).collect())
+    Ok(done)
 }
 
 /// What `project`'s estimate selection reads (1.6): the effective estimates and the items

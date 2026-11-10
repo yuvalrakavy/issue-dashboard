@@ -154,10 +154,18 @@ fn a_changed_issue_s_estimate_is_stale_hidden_and_its_item_still_owes_one() {
     edit(&tr.t, &b, 4, |v| v["body"] = json!("Edited after prepare."));
     let mut file = answer_all(&p);
     file["estimates"] = json!([est(&tr.items[0].1, "T1", "S", "S", "S"), est(&b_alias, "T1", "S", "S", "S")]);
-    record_as_is(&tr, "T1", file, 5).unwrap();
+    record_as_is(&tr, "T1", file.clone(), 5).unwrap();
     let evs = events(&tr.t, Kind::Suggested);
     assert_eq!(suggestion_of(&evs, &b, "estimates")["stale"], true);
     assert_eq!(suggestion_of(&evs, &tr.items[0].0, "estimates")["stale"], false);
+    // A retry of the same file is a repeat, its stale estimate included.
+    let rep = record_as_is(&tr, "T1", file.clone(), 6).unwrap();
+    assert_eq!(rep.recorded, 0, "{rep:?}");
+    assert!(rep.repeats >= 2, "{rep:?}");
+    // A re-prepare of the launch does not ask b again: the launch recorded its answer, and
+    // the next launch asks it.
+    let again = prepare(&tr.t, "T1", BACKEND, Stage::First, 7).unwrap();
+    assert_eq!(again.report.obligations, 0, "{}", again.file);
     // The stale estimate is never the effective one.
     assert_eq!(triage_of(&tr, &b, 6).get("estimates"), None);
     assert_eq!(triage_of(&tr, &tr.items[0].0, 6)["estimates"]["tier"], "T1");
