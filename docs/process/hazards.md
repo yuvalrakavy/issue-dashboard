@@ -10,6 +10,12 @@ Most first-round S3s were here.
 
 - A recovery or retry path: what state does it leave, and is that state healthy for the next
   command? (2026-10-23 phase 1: a lost ledger made the next command move the good backup aside.)
+- A retry or repeat of a write: does it reproduce the IDENTICAL payload? Name each field
+  computed from live state at write time (a staleness, a time, a current read) and say where
+  the retry reads it from. (2026-11-11 harness: a stale estimate's retry was refused.)
+- A state the far side reports: can two different states arrive looking the same?
+  (2026-11-03 runner: an idle worker and a dead one were both `unknown`.)
+- Every file a path writes: what removes it? (2026-11-04: 3,031 outboxes, 2.1 GB, never pruned.)
 - A state that blocks something while it is live ("refused while X is requested"): what ends X
   if nobody acts? (2026-10-29 launch: a request no dispatcher would take stopped triage for good.)
 - Optimistic state on the page: once the tracker has consumed it, does the page defer to the
@@ -47,4 +53,10 @@ Most first-round S3s were here.
 - A fixture used for "every X" populates every X, and a control that stays green is a finding
   about the fixture. (2026-10-24 skip-unchanged, 2026-10-29 eval.)
 - A negative-control harness runs the unmutated copy first and must see it GREEN.
-  (2026-10-24 slice 4; `scripts/mutate.py` enforces it.)
+  (2026-10-24 slice 4; `scripts/mutate.py` enforces it.) A mutant restored by hand (`mv`,
+  `git stash`) keeps its old mtime and cargo may not rebuild: `touch` the sources after.
+  (2026-11-11.)
+- Every refusal the spec adds has a test that drives it through ingest, not only a schema
+  test. (2026-11-11 harness: four refusals were never reached.)
+- A summary tile and the list it opens are one claim: a test opens the tile's filter and
+  counts it. (2026-11-04 Triage tab: the tile counted a union, opened a subset.)

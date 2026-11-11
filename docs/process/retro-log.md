@@ -325,7 +325,7 @@ the harness traps to a hook message or the build-brief template.
   (ingest refusals untested, merge/precedence, stage filter, digest, boundary), 1 shadowed by
   the schema; round 2 (Sonnet medium) no S2+, 4 S1 (one folded: blast/sites save kept staged
   sizes). post-merge=0 so far.
-- DG=n/a IG=12 post-merge=0
+- DG=n/a IG=10 (2 S2 + 4 S1, weighted) post-merge=0
 - tier-call: right (T1 over an approved spec chapter), though the obligation ledger was the
   novel half.
 - delegation: depth Codex; mutation + gap tests + confirming Sonnet medium.
@@ -335,3 +335,14 @@ the harness traps to a hook message or the build-brief template.
   field. (2) every refusal a spec adds owes an ingest-level test, not only a schema test — four
   refusals were unreached. (3) trap: restoring a file by `mv`/`git stash` keeps its old mtime
   and cargo may skip the rebuild, so a mutant "passes" on stale code; `touch` after restore.
+
+## Consolidated through 2026-11-11
+Five entries (2026-11-03 → 11-11). Added `scripts/mutant-sites.py` (lists the guard sites a
+diff adds; `--check` fails on a site no mutant or reasoned skip covers; over harness phase 1 it
+lists 8 of the 9 testable gaps the author's own mutants missed). `hazards.md` gained the
+window's five improve lines, and its retry row is sharpened to "reproduce the identical
+payload". `CLAUDE.md` dropped four traps already enforced by hooks or the `issues-dashboard`
+skill. The gate record is now the retro entry's weighted `IG=` line alone; `gate-kpi.md` got the
+five missing rows. Kept: the round-2 confirming reader (no S2+ in this window, three S2s on
+10-29). Always-loaded bytes: `CLAUDE.md` 1,425 → 862 (−563), nothing added elsewhere. That
+retires about 40% of the last retro's +1.4 KB over the ratchet.
